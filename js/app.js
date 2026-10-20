@@ -115,6 +115,8 @@
       { section: 'Requirement' },
       { key: 'name', label: 'Deal name', required: true, wide: true },
       { key: 'companyId', label: 'Client', type: 'ref', ref: 'companies', required: true },
+      { key: 'partnerBrokers', label: 'Partner broker(s) I\'m working it with', list: () => distinct('deals', 'partnerBrokers') },
+      { key: 'otherBrokers', label: 'Other brokers involved (other offices, outside brokers)', wide: true },
       { key: 'dealType', label: 'Deal type', type: 'select', options: L.DEAL_TYPES },
       { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES, required: true },
       { key: 'stage', label: 'Stage', type: 'select', options: L.DEAL_STAGES.map((s) => s.name) },
@@ -148,6 +150,15 @@
       { key: 'repAgreementSigned', label: 'Rep agreement signed', type: 'checkbox' },
       { key: 'repAgreementExpires', label: 'Rep agreement expires', type: 'date' },
       { key: 'lostReason', label: 'Lost reason', wide: true },
+      { section: 'Final lease terms (from the signed lease or final LOI)' },
+      { key: 'finalRate', label: 'Starting rent ($/SF)', type: 'number', step: '0.01' },
+      { key: 'finalRateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
+      { key: 'finalTermMonths', label: 'Term (months)', type: 'number' },
+      { key: 'finalEscalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
+      { key: 'finalFreeRentMonths', label: 'Free rent (months)', type: 'number' },
+      { key: 'finalTiAllowance', label: 'TI allowance ($/SF)', type: 'number', step: '0.01' },
+      { key: 'finalOptions', label: 'Renewal / termination / expansion options', wide: true },
+      { key: 'finalOtherTerms', label: 'Other key terms (security deposit, parking, signage…)', type: 'textarea', wide: true },
       { section: 'Closed deal results (for your portfolio metrics)' },
       { key: 'actualSF', label: 'Final SF', type: 'number' },
       { key: 'totalLeaseValue', label: 'Total rent $ (total consideration)', type: 'number' },
@@ -165,7 +176,7 @@
       { key: 'building', label: 'Building' },
       { key: 'address', label: 'Address' },
       { key: 'leaseCommencement', label: 'Lease commencement', type: 'date' },
-      { key: 'newLeaseExpiration', label: 'New lease expiration', type: 'date' },
+      { key: 'newLeaseExpiration', label: 'Lease expiration (LXD) – blank = commencement + term', type: 'date' },
       { key: 'renewalNoticeDate', label: 'Renewal option notice deadline', type: 'date' },
       { key: 'terminationOptionDate', label: 'Termination option deadline', type: 'date' },
       { key: 'otherCriticalDate', label: 'Other critical date', type: 'date' },
@@ -255,7 +266,18 @@
     { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
   ];
 
-  const LABELS = { comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
+  FIELDS.documents = [
+    { key: 'name', label: 'Document name', required: true, wide: true },
+    { key: 'kind', label: 'Type', type: 'select', options: ['LOI', 'Lease', 'Amendment', 'Proposal', 'Survey', 'Floor plan', 'Abstract', 'Other'] },
+    { key: 'date', label: 'Date', type: 'date' },
+    { key: 'url', label: 'Link (OneDrive, SharePoint, Google Drive or DocuSign)', type: 'url', wide: true, required: true },
+    { key: 'companyId', label: 'Company', type: 'ref', ref: 'companies' },
+    { key: 'dealId', label: 'Deal', type: 'ref', ref: 'deals', filterBy: 'companyId' },
+    { key: 'shareable', label: 'OK to share with the client', type: 'checkbox' },
+    { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
+  ];
+
+  const LABELS = { documents: 'Document', comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
 
   // ---------- derived data helpers ----------
 
@@ -554,6 +576,15 @@
       .join('')}</tbody></table>`;
   }
 
+  function researchMailLink(quarter) {
+    const s = S.settings();
+    const to = String(s.researchTeam || '').split(/[;,\s]+/).filter((x) => x.includes('@'));
+    if (!to.length) return '<a class="btn small" href="#/data" title="Add the research team in Import / Settings">Add research emails</a>';
+    const first = String(s.brokerName || '').split(' ')[0];
+    const mail = L.researchRequestEmail(quarter, S.all('marketing'), { to, signature: first });
+    return `<a class="btn small" href="mailto:${to.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(mail.subject)}&body=${encodeURIComponent(mail.body)}">✉ Draft email</a>`;
+  }
+
   function followUpList(list) {
     const today = L.todayISO();
     return `<ul class="followups">${list
@@ -568,6 +599,7 @@
             <div class="sub">${linkCompany(a.companyId)}${contact ? ' · ' + esc(contactName(contact)) : ''}</div>
           </div>
           ${badge(due < today ? 'Overdue · ' + L.fmtDate(due) : due === today ? 'Today' : L.fmtDate(due), cls)}
+          ${/^q-research-/.test(a.id) ? researchMailLink(a.id.replace('q-research-', '')) : ''}
           <button class="icon-btn" data-action="edit" data-col="activities" data-id="${esc(a.id)}" title="Edit">✎</button>
         </li>`;
       })
@@ -1191,10 +1223,51 @@
         </section>
       </div>
 
+      ${documentsCard(S.all('documents').filter((x) => x.companyId === id), { company: id })}
       <section class="card">
         <h2>Activity <button class="link more" data-action="new" data-col="activities" data-company="${esc(id)}">+ Log</button></h2>
         ${acts.length ? activityTimeline(acts) : emptyState('No activity logged yet.')}
       </section>`;
+  }
+
+  function dealTermsCard(d) {
+    const rate = d.finalRate ? '$' + Number(d.finalRate).toFixed(2) + ' ' + String(d.finalRateBasis || d.rateBasis || '').replace(/\s*\(.*\)/, '') : '';
+    const rows = [
+      ['Lease executed', L.fmtDate(d.closedDate)],
+      ['Commencement', L.fmtDate(d.leaseCommencement)],
+      ['Lease expiration (LXD)', L.fmtDate(L.dealLXD(d)) + (d.newLeaseExpiration || !L.dealLXD(d) ? '' : ' (calculated)')],
+      ['Size', L.dealSizeLabel(d)],
+      ['Starting rent', rate],
+      ['Term', d.finalTermMonths ? d.finalTermMonths + ' months' : ''],
+      ['Escalations', d.finalEscalationPct ? d.finalEscalationPct + '% / yr' : ''],
+      ['Free rent', d.finalFreeRentMonths ? d.finalFreeRentMonths + ' months' : ''],
+      ['TI allowance', d.finalTiAllowance ? '$' + d.finalTiAllowance + '/SF' : ''],
+      ['Options', d.finalOptions],
+      ['Renewal notice deadline', L.fmtDate(d.renewalNoticeDate)],
+      ['Termination option', L.fmtDate(d.terminationOptionDate)],
+      ['Other', d.finalOtherTerms],
+    ].filter((r) => r[1]);
+    if (d.stage !== 'Closed Won' && rows.length <= 1) return '';
+    return `<section class="card"><h2>Final lease terms <button class="link more" data-action="edit" data-col="deals" data-id="${esc(d.id)}">Edit</button></h2>
+      ${rows.length ? `<dl class="info">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${!L.dealLXD(d) ? '<p class="hint">Add the commencement date and term (or the LXD) so renewal planning and check-ins land on your calendar. Or send me the final LOI or lease and I\'ll fill this in.</p>' : ''}</section>`;
+  }
+
+  function documentsCard(docs, ctx) {
+    const attrs = `data-col="documents"${ctx.deal ? ` data-deal="${esc(ctx.deal)}"` : ''}${ctx.company ? ` data-company="${esc(ctx.company)}"` : ''}`;
+    return `<section class="card"><h2>Documents <button class="link more" data-action="new" ${attrs}>+ Add link</button></h2>
+      ${
+        docs.length
+          ? `<table class="tbl compact"><tbody>${docs
+              .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+              .map(
+                (x) => `<tr><td><a href="${esc(x.url)}" target="_blank" rel="noopener"><strong>${esc(x.name)}</strong> ↗</a> ${badge(x.kind, 'gray')} ${x.shareable ? badge('Shareable', 'green') : ''}${x.notes ? `<div class="sub">${esc(x.notes)}</div>` : ''}</td>
+                <td class="nowrap">${esc(L.fmtDate(x.date))}</td>
+                <td class="right nowrap"><button class="icon-btn" data-action="copy-link" data-url="${esc(x.url)}" title="Copy link to share">⧉</button><button class="icon-btn" data-action="edit" data-col="documents" data-id="${esc(x.id)}" title="Edit">✎</button><button class="icon-btn" data-action="delete" data-col="documents" data-id="${esc(x.id)}" title="Delete">✕</button></td></tr>`
+              )
+              .join('')}</tbody></table>`
+          : emptyState('No documents yet. Save the LOI, lease and amendments to OneDrive or SharePoint and add the link here.')
+      }</section>`;
   }
 
   function dealMiniTable(deals) {
@@ -1298,7 +1371,7 @@
                 const est = L.estimatedCommission(d);
                 return `<a class="deal-card" draggable="true" data-deal="${esc(d.id)}" href="#/deal/${esc(d.id)}">
                   <div class="dc-title">${esc(d.name)}</div>
-                  <div class="sub">${esc(companyName(d.companyId))}</div>
+                  <div class="sub">${esc(companyName(d.companyId))}${d.partnerBrokers ? ' · with ' + esc(d.partnerBrokers) : ''}</div>
                   <div class="dc-meta">${assetBadge(d.assetClass)} ${L.dealSizeLabel(d) ? `<span>${esc(L.dealSizeLabel(d))}</span>` : badge('Add RSF', 'amber')}</div>
                   <div class="dc-meta"><strong>${L.fmtMoney(est.myShare, true)}</strong><span class="muted">${L.dealProbability(d)}%</span>${d.targetClose ? `<span class="muted">${esc(L.fmtDate(d.targetClose))}</span>` : ''}</div>
                 </a>`;
@@ -1378,7 +1451,8 @@
     return `
       <div class="crumbs"><a href="#/pipeline">Pipeline</a> / ${linkCompany(d.companyId)} /</div>
       <div class="page-head">
-        <div><h1>${esc(d.name)}</h1><div class="head-badges">${assetBadge(d.assetClass)} ${badge(d.dealType, 'gray')} ${badge(d.stage, 'blue')}</div></div>
+        <div><h1>${esc(d.name)}</h1><div class="head-badges">${assetBadge(d.assetClass)} ${badge(d.dealType, 'gray')} ${badge(d.stage, 'blue')} ${L.dealLXD(d) ? badge('LXD ' + L.fmtDate(L.dealLXD(d)), 'amber') : d.stage === 'Closed Won' ? badge('Add LXD', 'red') : ''}</div>
+          ${d.partnerBrokers || d.otherBrokers ? `<div class="sub">With ${esc([d.partnerBrokers, d.otherBrokers].filter(Boolean).join(' · also '))}</div>` : ''}</div>
         <div class="actions">
           <button class="btn" data-action="new" data-col="activities" data-company="${esc(d.companyId)}" data-deal="${esc(id)}">Log activity</button>
           ${d.stage === 'Closed Won' ? `<button class="btn" data-action="deal-to-comp" data-id="${esc(id)}">Save as comp</button>` : ''}
@@ -1432,6 +1506,9 @@
           ${d.hubspotUrl ? `<p><a href="${esc(d.hubspotUrl)}" target="_blank" rel="noopener">Open in HubSpot ↗</a></p>` : ''}
         </section>
       </div>
+
+      ${dealTermsCard(d)}
+      ${documentsCard(S.all('documents').filter((x) => x.dealId === id), { deal: id, company: d.companyId })}
 
       <section class="card">
         <h2>Market survey & tours <button class="link more" data-action="new" data-col="properties" data-deal="${esc(id)}">+ Add property</button></h2>
@@ -1738,8 +1815,20 @@
             <label>House split % (firm keeps)<input name="houseSplitPct" type="number" step="0.1" value="${esc(s.houseSplitPct)}" /></label>
             <label>Daily outreach goal (Today list)<input name="outreachGoal" type="number" min="1" value="${esc(s.outreachGoal)}" /></label>
             <label>Social posts per week goal<input name="postsPerWeek" type="number" min="0" value="${esc(s.postsPerWeek)}" /></label>
+            <label class="wide">Research team emails (for the quarterly stats request)<input name="researchTeam" value="${esc(s.researchTeam)}" placeholder="name@company.com, name@company.com" /></label>
             <div class="wide"><button class="btn primary" type="submit">Save settings</button></div>
           </form>
+        </section>
+        <section class="card">
+          <h2>HubSpot live sync</h2>
+          <p>Brings in the emails (with opens and replies), meetings and calls HubSpot logs from Outlook, every few minutes while the CRM is open.
+          Set it up once with the <a href="integrations/hubspot-bridge.gs" target="_blank" rel="noopener">bridge script</a> (instructions at the top), then paste its web-app URL and sync key here. Your HubSpot key stays in your Google account, never in this browser.</p>
+          <form id="settings-form-hubspot" class="form-grid">
+            <label class="wide">Web app URL<input name="hubspotBridgeUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(s.hubspotBridgeUrl)}" /></label>
+            <label class="wide">Sync key<input name="hubspotBridgeKey" type="password" autocomplete="off" value="${esc(s.hubspotBridgeKey)}" /></label>
+            <div class="wide actions"><button class="btn primary" type="submit">Save</button>${s.hubspotBridgeUrl ? '<button class="btn" type="button" data-action="sync-hubspot">Sync now</button>' : ''}</div>
+          </form>
+          <p class="hint">${s.hubspotLastSync ? 'Last synced ' + esc(new Date(s.hubspotLastSync).toLocaleString()) + (hubspotStatus ? ' · ' + esc(hubspotStatus) : '') : hubspotStatus ? esc(hubspotStatus) : 'Not connected yet.'}</p>
         </section>
         <section class="card">
           <h2>Google Sheet sync (portfolio)</h2>
@@ -1845,6 +1934,10 @@
         return { status: 'Target', priority: 'B', growthSignal: 'Unknown', assetClass: state.companies.asset !== 'All' ? state.companies.asset : '' };
       case 'contacts':
         return { companyId: ctx.company || '' };
+      case 'documents': {
+        const d = S.get('deals', ctx.deal);
+        return { kind: 'LOI', date: today, dealId: ctx.deal || '', companyId: ctx.company || (d ? d.companyId : '') };
+      }
       case 'marketing':
         return { kind: state.marketing.tab === 'social' ? 'Social post' : 'One-pager / flyer', status: 'Drafting', channel: state.marketing.tab === 'social' ? 'LinkedIn' : '', dataQuarter: L.latestDataQuarter(today) };
       case 'deals': {
@@ -2427,6 +2520,12 @@
           S.upsert('companies', patch);
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
         }
+        case 'sync-hubspot':
+          return syncHubSpot(true);
+        case 'copy-link':
+          e.preventDefault();
+          navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
+          return;
         case 'toggle-coach':
           state.coach.open = !state.coach.open;
           saveUIState();
@@ -2446,12 +2545,12 @@
           set('sf', deal.actualSF || deal.estSF || deal.sfMax || '');
           set('signedDate', deal.closedDate);
           set('commencement', deal.leaseCommencement);
-          set('termMonths', deal.termMonths);
-          set('startingRent', deal.budgetRate);
-          set('rateBasis', deal.rateBasis);
-          set('escalationPct', deal.escalationPct);
-          set('freeRentMonths', deal.freeRentMonths);
-          set('tiAllowance', deal.tiAllowance);
+          set('termMonths', deal.finalTermMonths || deal.termMonths);
+          set('startingRent', deal.finalRate || '');
+          set('rateBasis', deal.finalRateBasis || deal.rateBasis);
+          set('escalationPct', deal.finalEscalationPct || deal.escalationPct);
+          set('freeRentMonths', deal.finalFreeRentMonths || deal.freeRentMonths);
+          set('tiAllowance', deal.finalTiAllowance || deal.tiAllowance);
           set('source', 'My deal');
           return;
         }
@@ -2613,13 +2712,14 @@
     if (e.target.id === 'record-form') {
       e.preventDefault();
       saveForm(e.target);
-    } else if (e.target.id === 'settings-form' || e.target.id === 'settings-form-sync') {
+    } else if (e.target.id === 'settings-form' || e.target.id === 'settings-form-sync' || e.target.id === 'settings-form-hubspot') {
       e.preventDefault();
       const fd = new FormData(e.target);
       const patch = {};
-      fd.forEach((v, k) => (patch[k] = ['brokerName', 'homeMarket', 'sheetSyncUrl', 'sheetSyncKey'].includes(k) ? String(v).trim() : Number(v)));
+      fd.forEach((v, k) => (patch[k] = ['brokerName', 'homeMarket', 'sheetSyncUrl', 'sheetSyncKey', 'researchTeam', 'hubspotBridgeUrl', 'hubspotBridgeKey'].includes(k) ? String(v).trim() : Number(v)));
       S.saveSettings(patch);
       toast('Settings saved.');
+      if (e.target.id === 'settings-form-hubspot' && patch.hubspotBridgeUrl) syncHubSpot(true);
     } else if (e.target.id === 'import-form') {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -2701,7 +2801,10 @@
     L.moveInPostIdeas(S.all('deals'), companies, today).forEach((m) => {
       if (!made.has(m.id) && !S.get('marketing', m.id)) fresh.push(['marketing', m]);
     });
-    if (!fresh.length) return;
+    // Retire untouched move-in ideas for deals that turned out to be coworking memberships.
+    const stale = S.all('marketing').filter((m) => /^mk-movein-/.test(m.id) && m.status === 'Idea' && S.get('deals', m.dealId) && L.isCoworking(S.get('deals', m.dealId)));
+    stale.forEach((m) => S.remove('marketing', m.id, true));
+    if (!fresh.length && !stale.length) return;
     fresh.forEach(([col, rec]) => {
       S.upsert(col, rec, { silent: true });
       made.add(rec.id);
@@ -2709,11 +2812,49 @@
     S.saveSettings({ generatedIds: Array.from(made) });
   }
 
+  // ---------- HubSpot live sync ----------
+
+  let hubspotSyncing = false;
+  let hubspotStatus = '';
+  async function syncHubSpot(manual) {
+    const st = S.settings();
+    if (!st.hubspotBridgeUrl || !st.hubspotBridgeKey || hubspotSyncing) return;
+    hubspotSyncing = true;
+    try {
+      // Overlap by 10 minutes so nothing modified mid-sync is missed; re-applying is harmless.
+      const since = st.hubspotLastSync ? st.hubspotLastSync - 600000 : Date.now() - 7 * 864e5;
+      const url = st.hubspotBridgeUrl + (st.hubspotBridgeUrl.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(st.hubspotBridgeKey) + '&since=' + since;
+      const data = await (await fetch(url)).json();
+      if (!data.ok) throw new Error(data.error || 'Sync failed');
+      const plan = L.planHubSpotSync(data, { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') });
+      const before = S.all('activities').length;
+      plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
+      plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
+      const added = S.all('activities').length - before;
+      hubspotStatus = `${added} new, ${plan.activities.length - added} updated` + (plan.skipped ? `, ${plan.skipped} not matched to a company` : '');
+      S.saveSettings({ hubspotLastSync: data.now || Date.now() });
+      if (manual) toast('HubSpot synced: ' + hubspotStatus + '.');
+    } catch (err) {
+      hubspotStatus = 'Last attempt failed: ' + err.message;
+      if (manual) toast('HubSpot sync failed: ' + err.message);
+      render();
+    } finally {
+      hubspotSyncing = false;
+    }
+  }
+  setInterval(() => {
+    if (!document.hidden) syncHubSpot(false);
+  }, 5 * 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Date.now() - (S.settings().hubspotLastSync || 0) > 5 * 60000) syncHubSpot(false);
+  });
+
   S.onChange(() => {
     ensureGenerated();
     render();
   });
   ensureGenerated();
   render();
+  syncHubSpot(false);
   if (parseRoute().name === 'portfolio') maybeAutoSync();
 })();

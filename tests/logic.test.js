@@ -422,3 +422,49 @@ test('coach tips re-check themselves against the data', () => {
   data.deals[0].estSF = 5000;
   assert.equal(rsf().done, true);
 });
+
+test('planHubSpotSync logs new emails, updates opens and marks replies', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Acme' }, { id: 'c2', name: 'Beta', hubspotId: 2 }],
+    contacts: [{ id: 'hs-ct-9', companyId: 'hs-co-1', email: 'ann@acme.com' }],
+    deals: [],
+    activities: [{ id: 'hs-em-5', type: 'Email', companyId: 'hs-co-1', date: '2026-10-10', subject: 'Hi', opens: 1, outcome: 'No response' }],
+  };
+  const payload = {
+    emails: [
+      { id: '5', properties: { hs_email_direction: 'EMAIL', hs_email_open_count: '4', hs_timestamp: '2026-10-10T15:00:00Z' }, companies: ['1'] },
+      { id: '6', properties: { hs_email_direction: 'EMAIL', hs_email_subject: 'Beta | Tower Place – Atlanta Office', hs_email_to_email: 'x@beta.com', hs_timestamp: '2026-10-19T15:00:00Z' }, companies: ['2'] },
+      { id: '7', properties: { hs_email_direction: 'INCOMING_EMAIL', hs_email_subject: 'RE: Hi', hs_email_from_email: 'ann@acme.com', hs_timestamp: '2026-10-12T15:00:00Z' }, companies: [], contacts: [] },
+      { id: '8', properties: { hs_email_direction: 'EMAIL', hs_email_to_email: 'nobody@nowhere.com' }, companies: [] },
+    ],
+    calls: [{ id: '3', properties: { hs_call_disposition: 'f240bbac-87c9-4f6e-bf70-924b57d47db7', hs_timestamp: '2026-10-18T15:00:00Z' }, contacts: ['9'] }],
+  };
+  const plan = L.planHubSpotSync(payload, data);
+  const byId = Object.fromEntries(plan.activities.map((a) => [a.id, a]));
+  assert.equal(byId['hs-em-5'].opens, 4);
+  assert.equal(byId['hs-em-5'].outcome, 'Replied', 'the inbound reply answers the earlier email');
+  assert.equal(byId['hs-em-6'].companyId, 'c2');
+  assert.equal(byId['hs-em-6'].template, 'Building intro');
+  assert.equal(byId['hs-em-7'].inbound, true);
+  assert.equal(byId['hs-cl-3'].outcome, 'Connected');
+  assert.equal(plan.skipped, 1);
+  assert.deepEqual(plan.companies.map((c) => c.id).sort(), ['c2', 'hs-co-1']);
+});
+
+test('dealLXD calculates the expiration from commencement and term', () => {
+  assert.equal(L.dealLXD({ newLeaseExpiration: '2031-12-31' }), '2031-12-31');
+  assert.equal(L.dealLXD({ leaseCommencement: '2026-11-01', finalTermMonths: 63 }), '2032-01-31');
+  assert.equal(L.dealLXD({ leaseCommencement: '2026-11-01' }), '');
+  assert.ok(L.isCoworking({ name: 'Acme', outsideBrokerCompany: 'Regus - Coworking' }));
+  assert.equal(L.moveInPostIdeas([{ id: 'm', stage: 'Closed Won', leaseCommencement: '2026-10-15', notes: 'Coworking Deal - REGUS' }], {}, '2026-10-20').length, 0);
+});
+
+test('researchRequestEmail greets the team and lists each one-pager submarket', () => {
+  const mail = L.researchRequestEmail('3Q26', [
+    { kind: 'One-pager / flyer', submarket: 'Northeast', assetClass: 'Office' },
+    { kind: 'One-pager / flyer', submarket: 'Northeast / I-85 Corridor', assetClass: 'Industrial' },
+  ], { to: ['ann.lee@x.com', 'bo.kim@x.com', 'cy.ng@x.com'], signature: 'Sam' });
+  assert.equal(mail.subject, '3Q26 submarket stats for tenant one-pagers');
+  assert.match(mail.body, /^Hi Ann, Bo and Cy,/);
+  assert.match(mail.body, /• Northeast – Office\n• Northeast \/ I-85 Corridor – Flex\/Industrial/);
+});

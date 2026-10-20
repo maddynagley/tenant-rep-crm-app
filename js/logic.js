@@ -308,7 +308,7 @@
   function outreachStats(activities, keyFn) {
     const groups = {};
     activities
-      .filter((a) => OUTREACH_TYPES.includes(a.type))
+      .filter((a) => OUTREACH_TYPES.includes(a.type) && !a.inbound && !(a.dealThread && !a.template))
       .forEach((a) => {
         const key = keyFn(a) || '(none)';
         const g = (groups[key] = groups[key] || { key, sent: 0, opened: 0, responded: 0, meetings: 0 });
@@ -413,13 +413,14 @@
           add(addDays(start, 182), 'check-in', '6-month check-in with the client', true);
           for (let y = 1; y <= 10; y++) {
             const anniv = toISODate(new Date(parseISODate(start).getFullYear() + y, parseISODate(start).getMonth(), parseISODate(start).getDate()));
-            if (d.newLeaseExpiration && anniv >= d.newLeaseExpiration) break;
+            if (dealLXD(d) && anniv >= dealLXD(d)) break;
             add(anniv, 'check-in', `${y}-year anniversary check-in`, true);
           }
         }
-        if (d.newLeaseExpiration) {
-          add(addDays(d.newLeaseExpiration, -548), 'planning', 'Start renewal / relocation planning (18 months out)');
-          add(d.newLeaseExpiration, 'expiration', 'Lease expiration');
+        const lxd = dealLXD(d);
+        if (lxd) {
+          add(addDays(lxd, -548), 'planning', 'Start renewal / relocation planning (18 months out)');
+          add(lxd, 'expiration', 'Lease expiration');
         }
         if (d.renewalNoticeDate) {
           add(addDays(d.renewalNoticeDate, -90), 'notice', 'Renewal option notice due in 90 days');
@@ -444,11 +445,49 @@
     };
   }
 
+  // Coworking memberships aren't a space delivery, so they get no move-in post.
+  function isCoworking(d) {
+    return /cowork|regus|wework|industrious|spaces\b/i.test([d.name, d.notes, d.outsideBrokerCompany, d.dealType, d.building].join(' '));
+  }
+
+  // Lease expiration: as recorded, or commencement + term.
+  function dealLXD(d) {
+    if (d.newLeaseExpiration) return d.newLeaseExpiration;
+    const start = parseISODate(d.leaseCommencement);
+    const term = parseNumber(d.finalTermMonths) || (d.stage === 'Closed Won' ? parseNumber(d.termMonths) : null);
+    if (!start || !term) return '';
+    return addDays(toISODate(new Date(start.getFullYear(), start.getMonth() + term, start.getDate())), -1);
+  }
+
+  // Research request for a quarter's one-pager stats, listing every piece that needs numbers.
+  function researchRequestEmail(quarter, marketing, opts) {
+    opts = opts || {};
+    const pieces = (marketing || []).filter((m) => m.kind === 'One-pager / flyer' && m.status !== 'Retired');
+    const lines = Array.from(new Set(pieces.map((m) => [m.submarket || 'Submarket', m.assetClass === 'Industrial' ? 'Flex/Industrial' : m.assetClass || 'Office'].join(' – ')))).map((x) => '• ' + x);
+    const names = (opts.to || []).map((a) => a.split('@')[0].split('.')[0]).map((n) => n.charAt(0).toUpperCase() + n.slice(1));
+    const hello = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0] || 'team';
+    return {
+      subject: `${quarter} submarket stats for tenant one-pagers`,
+      body: [
+        `Hi ${hello},`,
+        '',
+        `I'm refreshing my tenant one-pagers with ${quarter} numbers and would appreciate the latest stats for these submarkets when they're ready:`,
+        '',
+        ...(lines.length ? lines : ['• (list the submarkets)']),
+        '',
+        'For each: total vacancy, average asking rent (full service for office, NNN for flex/industrial), quarterly and YTD net absorption, deliveries and SF under construction, sublease availability, and notable lease transactions and sales. Annual history back to 2020 for the charts would be great too.',
+        '',
+        'Thank you!',
+        opts.signature || '',
+      ].join('\n'),
+    };
+  }
+
   // A LinkedIn post idea for every deal you closed, timed a week after the space delivers.
   function moveInPostIdeas(deals, companiesById, today) {
     today = today || todayISO();
     return deals
-      .filter((d) => d.stage === 'Closed Won' && !d.partnerDeal && d.leaseCommencement && d.leaseCommencement >= addDays(today, -60))
+      .filter((d) => d.stage === 'Closed Won' && !d.partnerDeal && !isCoworking(d) && d.leaseCommencement && d.leaseCommencement >= addDays(today, -60))
       .map((d) => {
         const c = companiesById[d.companyId] || {};
         return {
@@ -464,6 +503,165 @@
           notes: `Space delivers ${fmtDate(d.leaseCommencement)}. A fun move-in post: photo of the team in the space, size and submarket, what they needed and how you found it. Get the client's OK (and firm marketing approval) first.`,
         };
       });
+  }
+
+  // ---------- HubSpot live sync ----------
+
+  // Subject-line patterns of your outreach templates.
+  function guessTemplate(subject) {
+    const s = String(subject || '');
+    if (/^(re|fw|fwd):/i.test(s)) return '';
+    if (/quick insight/i.test(s)) return 'Quick insight';
+    if (/lease expiration/i.test(s)) return 'Lease expiration';
+    if (/^(following up|follow up|office lease follow up)/i.test(s)) return 'Following up';
+    if (/atlanta office introduction/i.test(s)) return 'Office introduction';
+    if (/\|.+–\s*atlanta office/i.test(s)) return 'Building intro';
+    if (/neighbor|next door|activity in your building|lease activity/i.test(s)) return 'Building activity';
+    if (/market (update|report|snapshot)|moving on rent/i.test(s)) return 'Market data';
+    return '';
+  }
+
+  // HubSpot's default call outcomes.
+  const CALL_DISPOSITIONS = {
+    'f240bbac-87c9-4f6e-bf70-924b57d47db7': 'Connected',
+    'a4c4c377-d246-4b32-a13b-75a56a4cd0ff': 'Connected',
+    'b2cf5968-551e-4856-9783-52b3da59a7d0': 'Left voicemail',
+    '73a0d17f-1163-4015-bdd5-ec830791da20': 'No response',
+    '9d9162e7-6cf3-4944-bf63-4dff82258764': 'No response',
+    '17b47fee-58de-441e-a44c-c6300d46f273': 'Wrong contact',
+  };
+
+  function hsDate(v) {
+    if (!v) return '';
+    const d = new Date(/^\d+$/.test(String(v)) ? Number(v) : v);
+    return isNaN(d) ? '' : toISODate(d);
+  }
+  const stripHtml = (s) => String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+
+  // Turns a bridge payload into CRM changes: activities to add or update, and last-contacted dates.
+  function planHubSpotSync(payload, data) {
+    const companies = {};
+    const byHubspotId = {};
+    data.companies.forEach((c) => {
+      companies[c.id] = c;
+      if (c.hubspotId) byHubspotId[String(c.hubspotId)] = c.id;
+    });
+    const contactsById = {};
+    const byEmail = {};
+    const byDomain = {};
+    data.contacts.forEach((p) => {
+      contactsById[p.id] = p;
+      const email = String(p.email || '').toLowerCase();
+      if (email) {
+        byEmail[email] = p;
+        const dom = email.split('@')[1];
+        if (dom && !byDomain[dom]) byDomain[dom] = p.companyId;
+      }
+    });
+    const existing = {};
+    data.activities.forEach((a) => (existing[a.id] = a));
+    const inPlay = new Set(data.deals.filter((d) => d.stage !== 'Closed Lost').map((d) => d.companyId));
+    const emails = (s) => String(s || '').toLowerCase().split(/[;,\s]+/).filter((x) => x.includes('@'));
+
+    const resolve = (rec, addrs) => {
+      for (const id of rec.companies || []) {
+        const cid = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[String(id)];
+        if (cid) return cid;
+      }
+      for (const id of rec.contacts || []) if (contactsById['hs-ct-' + id]) return contactsById['hs-ct-' + id].companyId;
+      for (const a of addrs) if (byEmail[a]) return byEmail[a].companyId;
+      for (const a of addrs) if (byDomain[a.split('@')[1]]) return byDomain[a.split('@')[1]];
+      return '';
+    };
+    const contactFor = (rec, addrs) => {
+      for (const id of rec.contacts || []) if (contactsById['hs-ct-' + id]) return 'hs-ct-' + id;
+      for (const a of addrs) if (byEmail[a]) return byEmail[a].id;
+      return '';
+    };
+
+    const upserts = [];
+    const lastTouch = {};
+    const touch = (cid, date) => {
+      if (date && (!lastTouch[cid] || date > lastTouch[cid])) lastTouch[cid] = date;
+    };
+    let skipped = 0;
+    const replies = [];
+
+    (payload.emails || []).forEach((rec) => {
+      const p = rec.properties || {};
+      const inbound = p.hs_email_direction === 'INCOMING_EMAIL';
+      const addrs = emails(inbound ? p.hs_email_from_email : p.hs_email_to_email);
+      const companyId = resolve(rec, addrs);
+      if (!companyId) return skipped++;
+      const id = 'hs-em-' + rec.id;
+      const date = hsDate(p.hs_timestamp);
+      const opens = parseNumber(p.hs_email_open_count) || 0;
+      const replied = (parseNumber(p.hs_email_reply_count) || 0) > 0;
+      if (existing[id]) {
+        const patch = { id, opens };
+        if (replied && !RESPONDED.includes(existing[id].outcome)) patch.outcome = 'Replied';
+        upserts.push(patch);
+      } else {
+        upserts.push({
+          id,
+          type: 'Email',
+          date,
+          companyId,
+          contactId: contactFor(rec, addrs),
+          subject: (inbound ? 'Reply: ' : '') + (p.hs_email_subject || '(no subject)'),
+          template: inbound ? '' : guessTemplate(p.hs_email_subject),
+          opens: inbound ? '' : opens,
+          outcome: inbound ? '' : replied ? 'Replied' : 'No response',
+          inbound: inbound || undefined,
+          dealThread: inPlay.has(companyId) || undefined,
+          notes: stripHtml(p.hs_email_text).slice(0, 400),
+          source: 'HubSpot',
+          done: true,
+        });
+      }
+      if (inbound) replies.push({ companyId, date });
+      else touch(companyId, date);
+    });
+
+    // A reply from a company marks your latest unanswered email to them as answered.
+    replies.forEach((r) => {
+      const sent = data.activities
+        .concat(upserts.filter((u) => u.type))
+        .filter((a) => a.companyId === r.companyId && a.type === 'Email' && !a.inbound && a.date && a.date <= r.date && a.date >= addDays(r.date, -45))
+        .sort((a, b) => b.date.localeCompare(a.date))[0];
+      if (sent && !RESPONDED.includes(sent.outcome)) {
+        const u = upserts.find((x) => x.id === sent.id);
+        if (u) u.outcome = 'Replied';
+        else upserts.push({ id: sent.id, outcome: 'Replied' });
+      }
+    });
+
+    (payload.meetings || []).forEach((rec) => {
+      const p = rec.properties || {};
+      const companyId = resolve(rec, []);
+      if (!companyId) return skipped++;
+      const date = hsDate(p.hs_meeting_start_time || p.hs_timestamp);
+      const id = 'hs-mt-' + rec.id;
+      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, contactId: contactFor(rec, []), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
+      if (date <= todayISO()) touch(companyId, date);
+    });
+
+    (payload.calls || []).forEach((rec) => {
+      const p = rec.properties || {};
+      const companyId = resolve(rec, []);
+      if (!companyId) return skipped++;
+      const date = hsDate(p.hs_timestamp);
+      const id = 'hs-cl-' + rec.id;
+      const outcome = CALL_DISPOSITIONS[p.hs_call_disposition] || '';
+      if (existing[id]) upserts.push({ id, outcome: existing[id].outcome || outcome });
+      else upserts.push({ id, type: 'Call', date, companyId, contactId: contactFor(rec, []), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
+      touch(companyId, date);
+    });
+
+    const companyPatches = Object.keys(lastTouch)
+      .filter((cid) => !companies[cid].lastContacted || lastTouch[cid] > companies[cid].lastContacted)
+      .map((cid) => ({ id: cid, lastContacted: lastTouch[cid] }));
+    return { activities: upserts, companies: companyPatches, skipped };
   }
 
   // ---------- coach ----------
@@ -1286,7 +1484,12 @@
     quarterlyTasks,
     clientTouchpoints,
     moveInPostIdeas,
+    isCoworking,
+    dealLXD,
+    researchRequestEmail,
     coachTips,
+    guessTemplate,
+    planHubSpotSync,
     COLLATERAL_UPGRADES,
     OUTCOMES,
     responded,

@@ -6,7 +6,7 @@
   'use strict';
   const L = root.CRMLogic;
   const KEY = 'tenant-rep-crm.v1';
-  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps'];
+  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps', 'documents'];
 
   const DEFAULT_SETTINGS = {
     brokerName: '',
@@ -23,6 +23,10 @@
     outreachGoal: 10,
     postsPerWeek: 2,
     generatedIds: [],
+    researchTeam: '',
+    hubspotBridgeUrl: '',
+    hubspotBridgeKey: '',
+    hubspotLastSync: 0,
   };
 
   function emptyDb() {
@@ -123,7 +127,7 @@
   }
 
   // A merged record that doesn't exist yet must be whole; partial updates for missing records are dropped.
-  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'] };
+  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'], documents: ['name'] };
   function isComplete(col, rec) {
     return REQUIRED[col].every((k) => rec[k]);
   }
@@ -138,7 +142,7 @@
   }
 
   // The Google Sheet connection (web app URL + sync key) never leaves this browser, so backups can't leak it.
-  const DEVICE_ONLY_SETTINGS = ['sheetSyncUrl', 'sheetSyncKey'];
+  const DEVICE_ONLY_SETTINGS = ['sheetSyncUrl', 'sheetSyncKey', 'hubspotBridgeUrl', 'hubspotBridgeKey'];
 
   function exportJSON() {
     const copy = Object.assign({}, db, { settings: Object.assign({}, db.settings) });
@@ -162,6 +166,10 @@
           if (existing) Object.assign(existing, rec);
           else if (!incoming.patchOnly && isComplete(c, rec)) db[c].push(rec);
         });
+      });
+      // Shared settings an update file may set (never the device-only connection details).
+      Object.keys(incoming.settingsPatch || {}).forEach((k) => {
+        if (!DEVICE_ONLY_SETTINGS.includes(k)) db.settings[k] = incoming.settingsPatch[k];
       });
       // An update file can also retire records (e.g. a duplicate deal merged into another).
       COLLECTIONS.forEach((c) => ((incoming.remove && incoming.remove[c]) || []).forEach((id) => get(c, id) && remove(c, id, true)));
