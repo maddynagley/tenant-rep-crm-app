@@ -149,6 +149,8 @@
       { key: 'submarket', label: 'Submarket (deal)' },
       { key: 'trxId', label: 'TRX # (transaction ID)' },
       { key: 'inPortfolioSheet', label: 'Track on my portfolio Google Sheet', type: 'checkbox' },
+      { key: 'partnerDeal', label: "Partner's deal (keep the record, leave out of my production)", type: 'checkbox' },
+      { key: 'leadBroker', label: 'Lead broker' },
       { key: 'building', label: 'Building' },
       { key: 'address', label: 'Address' },
       { key: 'leaseCommencement', label: 'Lease commencement', type: 'date' },
@@ -351,7 +353,7 @@
     const weighted = open.reduce((t, d) => t + L.weightedCommission(d), 0);
     const year = today.slice(0, 4);
     const wonYTD = deals
-      .filter((d) => d.stage === 'Closed Won' && (d.closedDate || d.targetClose || '').slice(0, 4) === year)
+      .filter((d) => d.stage === 'Closed Won' && !d.partnerDeal && (d.closedDate || d.targetClose || '').slice(0, 4) === year)
       .reduce((t, d) => t + L.dealResults(d).commission, 0);
     const followUps = openFollowUps();
     const overdue = followUps.filter((a) => activityDue(a) < today);
@@ -1086,6 +1088,7 @@
     return S.all('deals').filter(
       (d) =>
         d.stage === 'Closed Won' &&
+        !d.partnerDeal &&
         matchesAsset(d.assetClass, f.asset) &&
         (f.year === 'All' || L.dealCloseDate(d).slice(0, 4) === String(f.year))
     );
@@ -1104,14 +1107,17 @@
 
   function viewPortfolio() {
     const f = state.portfolio;
-    const all = S.all('deals').filter((d) => d.stage === 'Closed Won');
+    const all = S.all('deals').filter((d) => d.stage === 'Closed Won' && !d.partnerDeal);
     const years = Array.from(new Set(all.map((d) => L.dealCloseDate(d).slice(0, 4)).filter(Boolean))).sort().reverse();
     const deals = closedDeals(f).sort((a, b) => L.dealCloseDate(b).localeCompare(L.dealCloseDate(a)));
     const t = L.summarizeDeals(deals);
     const estimated = deals.filter((d) => !L.dealResults(d).hasActuals).length;
     const firm = deals.reduce((s, d) => s + (L.parseNumber(d.firmCommission) || 0), 0);
     const split = L.parseNumber(S.settings().houseSplitPct) === null ? 50 : L.parseNumber(S.settings().houseSplitPct);
-    const rescinded = S.all('deals').filter((d) => d.stage === 'Closed Lost' && d.inPortfolioSheet && L.isRescinded(d) && (f.year === 'All' || L.dealCloseDate(d).slice(0, 4) === String(f.year)));
+    const inYear = (d) => f.year === 'All' || L.dealCloseDate(d).slice(0, 4) === String(f.year);
+    const rescinded = S.all('deals').filter((d) => d.stage === 'Closed Lost' && d.inPortfolioSheet && L.isRescinded(d) && inYear(d));
+    // Recorded for reference but not part of my production.
+    const excluded = S.all('deals').filter((d) => d.partnerDeal && d.stage === 'Closed Won' && inYear(d));
 
     const head = `
       <div class="page-head"><div><h1>Portfolio & Production</h1>${sheetSyncStatus()}</div>
@@ -1162,7 +1168,14 @@
         <div class="kpi"><span class="kpi-label">Commission per SF</span><span class="kpi-value">$${t.commissionPerSF.toFixed(2)}</span><span class="kpi-sub">${t.effectiveRate.toFixed(2)}% of total rent</span></div>
       </div>
       ${estimated ? `<p class="hint">${estimated} of ${deals.length} deals have no recorded results, so their figures are estimates from the deal economics. Add the final SF, total rent and commission on those deals to make these numbers exact.</p>` : ''}
-      ${rescinded.length ? `<p class="hint">Not counted: ${rescinded.map((d) => `<a href="#/deal/${esc(d.id)}">${esc(companyName(d.companyId))}</a> (rescinded)`).join(', ')}.</p>` : ''}
+      ${
+        rescinded.length + excluded.length
+          ? `<p class="hint">Not counted: ${rescinded
+              .map((d) => `<a href="#/deal/${esc(d.id)}">${esc(companyName(d.companyId))}</a> (rescinded${d.partnerDeal ? ', partner deal' : ''})`)
+              .concat(excluded.map((d) => `<a href="#/deal/${esc(d.id)}">${esc(companyName(d.companyId))}</a> (partner deal${d.leadBroker ? ' – ' + esc(d.leadBroker) : ''})`))
+              .join(', ')}.</p>`
+          : ''
+      }
       <section class="card"><h2>By year</h2>${breakdownTable(byYear, 'Year', maxOf(byYear))}</section>
       <div class="grid2">
         <section class="card"><h2>By asset class</h2>${breakdownTable(byAsset, 'Asset class', maxOf(byAsset))}</section>
