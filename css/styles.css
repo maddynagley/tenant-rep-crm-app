@@ -289,3 +289,23 @@ dialog .form-grid { padding: 16px 18px; overflow-y: auto; }
   .nag #backup-nag-text { display: none; }
   .timeline li { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* coach sidebar */
+.coach-btn { margin-left: auto; }
+.coach-btn .pill { margin-left: 4px; }
+.coach-btn + .nag { margin-left: 8px; }
+.coach { position: fixed; top: 52px; right: 0; bottom: 0; width: 340px; background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--shadow); padding: 14px 16px 40px; overflow-y: auto; z-index: 30; }
+.coach header { display: flex; align-items: center; justify-content: space-between; }
+.coach h2 { margin: 0; }
+.coach-list { list-style: none; margin: 0; padding: 0; }
+.coach-list li { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.coach-list li:last-child { border-bottom: 0; }
+.coach-mark { width: 20px; flex: none; font-weight: 700; color: var(--muted); }
+.coach-list li.done .coach-mark { color: var(--green); }
+.coach-list li.todo .coach-mark { color: var(--amber); }
+.coach-list li.done strong { color: var(--muted); }
+.coach-status { font-size: 12px; margin-top: 4px; font-weight: 600; }
+.coach-list li.todo .coach-status { color: var(--amber); }
+.coach-list li.done .coach-status { color: var(--green); }
+@media (min-width: 1200px) { body.coach-open main { margin-right: 340px; } }
+@media (max-width: 860px) { .coach { width: auto; left: 0; } .coach-btn { padding: 0 8px; } }

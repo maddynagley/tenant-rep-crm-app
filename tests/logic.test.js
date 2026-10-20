@@ -323,7 +323,7 @@ test('dailyPlan prioritizes due follow-ups, skips Do-Not-Call numbers and finds 
       { id: 'p2', companyId: 'd', firstName: 'Dan', phone: '777', role: 'Decision Maker' },
     ],
     deals: [
-      { id: 'x', companyId: 'g', name: 'Golf renewal', stage: 'Touring', targetClose: '2026-09-30' },
+      { id: 'x', companyId: 'g', name: 'Golf renewal', stage: 'Touring', targetClose: '2026-09-30', sfMin: 3000, sfMax: 4000 },
       { id: 'y', companyId: 'g', name: 'Golf HQ', stage: 'Closed Won', actualSF: 5000 },
     ],
     activities: [{ id: 't1', companyId: 'g', date: '2026-10-19', followUpDate: '2026-10-19', subject: 'Send survey', done: false }],
@@ -384,4 +384,41 @@ test('dailyPlan surfaces opened-but-unanswered emails ahead of routine follow-up
   assert.match(plan.opened[0].why, /4 times/);
   assert.equal(plan.opened[0].linkedin, 'https://linkedin.com/in/ann');
   assert.ok(!plan.outreach.some((o) => o.companyId === 'a'), 'not listed twice');
+});
+
+test('sizes and budgets show as ranges when the tenant gave one', () => {
+  assert.equal(L.dealSizeLabel({ sfMin: 3500, sfMax: 4000, estSF: 3800 }), '3,500–4,000 RSF');
+  assert.equal(L.dealSizeLabel({ estSF: 20000 }), '20,000 RSF');
+  assert.equal(L.dealSizeLabel({}), '');
+  assert.equal(L.dealBudgetLabel({ budgetRate: 25, budgetRateMax: 29, rateBasis: 'Full Service ($/SF/yr)' }), '$25–$29/SF Full Service');
+});
+
+test('quarterly reminders land 15 and 30 days after each quarter closes', () => {
+  const t = L.quarterlyTasks('2026-10-20');
+  assert.deepEqual(t.map((x) => [x.id, x.date]), [
+    ['q-research-3Q26', '2026-10-15'],
+    ['q-flyers-3Q26', '2026-10-30'],
+    ['q-research-4Q26', '2027-01-15'],
+    ['q-flyers-4Q26', '2027-01-30'],
+  ]);
+});
+
+test('clientTouchpoints schedules check-ins for your own closed deals only', () => {
+  const deals = [
+    { id: 'a', companyId: 'ca', stage: 'Closed Won', leaseCommencement: '2026-09-01', newLeaseExpiration: '2031-08-31', renewalNoticeDate: '2031-02-28' },
+    { id: 'b', companyId: 'cb', stage: 'Closed Won', partnerDeal: true, leaseCommencement: '2026-09-01' },
+  ];
+  const tp = L.clientTouchpoints(deals, { today: '2026-10-20', touches: {} });
+  assert.deepEqual(tp.due.map((p) => [p.companyId, p.date]), [['ca', '2026-10-01']]);
+  assert.equal(L.clientTouchpoints(deals, { today: '2026-10-20', touches: { ca: '2026-10-05' } }).due.length, 0, 'a touch clears it');
+  assert.ok(tp.all.some((p) => p.label === 'Renewal option notice due in 90 days' && p.date === '2030-11-30'));
+  assert.equal(L.moveInPostIdeas(deals, { ca: { name: 'Acme' } }, '2026-10-20')[0].date, '2026-09-08');
+});
+
+test('coach tips re-check themselves against the data', () => {
+  const data = { companies: [], contacts: [], deals: [{ id: 'd', stage: 'Touring', name: 'X', companyId: 'c' }], activities: [], marketing: [] };
+  const rsf = () => L.coachTips(data, { today: '2026-10-20' }).find((t) => t.id === 'rsf');
+  assert.equal(rsf().done, false);
+  data.deals[0].estSF = 5000;
+  assert.equal(rsf().done, true);
 });

@@ -24,6 +24,8 @@
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', limit: 100 },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
+      comps: { tab: 'dates', q: '', asset: 'All' },
+      coach: { open: false },
       pipeline: { view: 'board', asset: 'All', showClosed: false },
       activities: { tab: 'open', q: '' },
       expirations: { asset: 'All', horizon: 36, includeClients: true },
@@ -129,7 +131,8 @@
       { key: 'power', label: 'Power (amps / volts)', asset: 'Industrial' },
       { key: 'requirements', label: 'Other requirements', type: 'textarea', wide: true },
       { section: 'Economics' },
-      { key: 'budgetRate', label: 'Target rent ($/SF)', type: 'number', step: '0.01' },
+      { key: 'budgetRate', label: 'Target rent ($/SF) – low end, or the single number', type: 'number', step: '0.01' },
+      { key: 'budgetRateMax', label: 'Target rent ($/SF) – high end (if a range)', type: 'number', step: '0.01' },
       { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
       { key: 'termMonths', label: 'Term (months)', type: 'number' },
       { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
@@ -163,6 +166,10 @@
       { key: 'address', label: 'Address' },
       { key: 'leaseCommencement', label: 'Lease commencement', type: 'date' },
       { key: 'newLeaseExpiration', label: 'New lease expiration', type: 'date' },
+      { key: 'renewalNoticeDate', label: 'Renewal option notice deadline', type: 'date' },
+      { key: 'terminationOptionDate', label: 'Termination option deadline', type: 'date' },
+      { key: 'otherCriticalDate', label: 'Other critical date', type: 'date' },
+      { key: 'otherCriticalDateLabel', label: 'What the other date is (e.g. expansion right, ROFO)' },
       { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
     ],
     activities: [
@@ -220,12 +227,35 @@
     { key: 'impressions', label: 'Impressions (social)', type: 'number' },
     { key: 'reactions', label: 'Reactions (social)', type: 'number' },
     { key: 'comments', label: 'Comments (social)', type: 'number' },
+    { section: 'Upgrades (one-pagers)' },
+  ].concat(L.COLLATERAL_UPGRADES.map((u) => ({ key: u.key, label: u.label, type: 'checkbox' })), [
     { section: 'Notes' },
     { key: 'ideas', label: 'Ideas to improve it', type: 'textarea', wide: true },
     { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
+  ]);
+
+  FIELDS.comps = [
+    { key: 'building', label: 'Building', required: true },
+    { key: 'address', label: 'Address' },
+    { key: 'submarket', label: 'Submarket', list: () => distinct('companies', 'submarket').concat(distinct('comps', 'submarket')) },
+    { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES },
+    { key: 'tenant', label: 'Tenant' },
+    { key: 'dealType', label: 'Deal type', type: 'select', options: L.DEAL_TYPES },
+    { key: 'sf', label: 'RSF', type: 'number' },
+    { key: 'signedDate', label: 'Lease signed', type: 'date' },
+    { key: 'commencement', label: 'Commencement', type: 'date' },
+    { key: 'termMonths', label: 'Term (months)', type: 'number' },
+    { key: 'startingRent', label: 'Starting rent ($/SF)', type: 'number', step: '0.01' },
+    { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
+    { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
+    { key: 'freeRentMonths', label: 'Free rent (months)', type: 'number' },
+    { key: 'tiAllowance', label: 'TI allowance ($/SF)', type: 'number', step: '0.01' },
+    { key: 'source', label: 'Source', type: 'select', options: ['My deal', 'Firm deal', 'Outside broker', 'CoStar', 'Research'] },
+    { key: 'confidential', label: 'Confidential (internal use only)', type: 'checkbox' },
+    { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
   ];
 
-  const LABELS = { marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
+  const LABELS = { comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
 
   // ---------- derived data helpers ----------
 
@@ -614,6 +644,13 @@
           ${touchButtons(c.id, item.contactId)}</div>
       </li>`;
     });
+    const careItems = plan.care.map((p) => {
+      const c = S.get('companies', p.companyId);
+      const d = S.get('deals', p.dealId);
+      return `<li><div class="fu-body"><div><a href="#/company/${esc(p.companyId)}"><strong>${esc(c ? c.name : '')}</strong></a> ${badge(p.kind.replace('-', ' '), KIND_BADGE[p.kind])}</div>
+        <div class="sub">${esc(p.label)} · due ${esc(L.fmtDate(p.date))}${d ? ' · ' + esc(d.name) : ''}</div></div>
+        <div class="todo-actions">${touchButtons(p.companyId, '')}</div></li>`;
+    });
     const posts = S.all('marketing').filter((m) => m.kind === 'Social post');
     const postGoal = Number(s.postsPerWeek) || 0;
     const postedThisWeek = posts.filter((m) => m.status === 'Sent / Posted' && m.date && m.date >= weekStart(today) && m.date <= today).length;
@@ -681,6 +718,7 @@
         'No one to reach out to today. Add leads or check back tomorrow.',
         `<p class="hint">Follow-ups come first (hot, then soonest expiration), then the best brand-new leads. Tap ✓ when done; it logs the touch and drops off the list. New leads move to Initial Outreach automatically.</p>`
       )}
+      ${careItems.length ? section('Client care & critical dates', careItems, '', '<p class="hint">Clients you closed: see how the space is working, and stay ahead of their lease deadlines.</p>') : ''}
       ${dealItems.length ? section('Deals to move forward', dealItems, '', plan.deals.length > dealItems.length ? `<p class="hint">Top ${dealItems.length} of ${plan.deals.length} by probability. Log an update on each and the next ones appear.</p>` : '') : ''}
       ${marketingItems.length ? section('Marketing', marketingItems, '') : ''}
       ${updateItems.length ? section('Records to update', updateItems, '', plan.remaining.updates > updateItems.length ? `<p class="hint">Showing ${updateItems.length} of ${plan.remaining.updates}.</p>` : '') : ''}
@@ -764,7 +802,7 @@
         </div>
         <div class="grid2">
           <section class="card"><h2>By day sent</h2>${statsTable(L.outreachStats(acts, weekday), 'Day')}</section>
-          <section class="card"><h2>By lead stage at the time</h2>${statsTable(L.outreachStats(acts, (a) => a.leadStageAtSend), 'Stage')}</section>
+          <section class="card"><h2>By lead stage at the time</h2>${acts.some((a) => a.leadStageAtSend) ? statsTable(L.outreachStats(acts.filter((a) => a.leadStageAtSend), (a) => a.leadStageAtSend), 'Stage') : emptyState('Builds up as you log touches from Today.')}</section>
         </div>`;
     }
 
@@ -782,6 +820,87 @@
         ${f.tab === 'outreach' ? '' : `<input type="search" placeholder="Search title, submarket, partner…" value="${esc(f.q)}" data-filter="marketing.q" id="f-marketing-q" />`}
       </div>
       ${body}`;
+  }
+
+  // ----- comps & critical dates -----
+
+  const KIND_BADGE = { 'check-in': 'blue', commencement: 'green', planning: 'amber', notice: 'red', expiration: 'red', other: 'gray' };
+
+  function touchpointRow(p, actions) {
+    const d = S.get('deals', p.dealId);
+    return `<tr>
+      <td class="nowrap">${esc(L.fmtDate(p.date))}</td>
+      <td>${badge(p.kind.replace('-', ' '), KIND_BADGE[p.kind])} ${esc(p.label)}</td>
+      <td>${linkCompany(p.companyId)}<div class="sub"><a href="#/deal/${esc(p.dealId)}">${esc(d ? d.name : '')}</a></div></td>
+      <td class="right nowrap">${actions ? touchButtons(p.companyId, '') : ''}</td></tr>`;
+  }
+
+  function viewComps() {
+    const f = state.comps;
+    const today = L.todayISO();
+    const tp = L.clientTouchpoints(S.all('deals'), { today, touches: lastTouchMap(), horizonDays: 730 });
+    const q = f.q.trim().toLowerCase();
+    const comps = S.all('comps')
+      .filter((c) => !q || [c.building, c.address, c.submarket, c.tenant, c.notes].join(' ').toLowerCase().includes(q))
+      .filter((c) => matchesAsset(c.assetClass, f.asset))
+      .sort((a, b) => (b.signedDate || b.commencement || '').localeCompare(a.signedDate || a.commencement || ''));
+    const head = '<thead><tr><th>Date</th><th>What</th><th>Client</th><th></th></tr></thead>';
+    const dates = `
+      <section class="card"><h2>Due now</h2><p class="hint">Check-ins with clients you closed (30 days after move-in, 6 months, then every year) and lease deadlines coming up. Logging a touch with the client clears a check-in.</p>
+        ${tp.due.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${tp.due.map((p) => touchpointRow(p, true)).join('')}</tbody></table></div>` : emptyState('Nothing due.')}</section>
+      <section class="card"><h2>Coming up (next 2 years)</h2>
+        ${tp.upcoming.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${tp.upcoming.map((p) => touchpointRow(p, false)).join('')}</tbody></table></div>` : emptyState('Add lease commencement, expiration and option dates to your closed deals to build this tracker.')}</section>`;
+    const compTable = comps.length
+      ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th><th>Source</th></tr></thead><tbody>${comps
+          .map(
+            (c) => `<tr class="clickable" data-action="edit" data-col="comps" data-id="${esc(c.id)}">
+            <td><strong>${esc(c.building)}</strong>${c.confidential ? ' ' + badge('Confidential', 'red') : ''}<div class="sub">${esc([c.address, c.submarket].filter(Boolean).join(' · '))}</div></td>
+            <td>${esc(c.tenant)}</td><td>${assetBadge(c.assetClass)}</td><td>${esc(c.dealType)}</td>
+            <td class="right">${esc(L.fmtNumber(c.sf))}</td><td class="nowrap">${esc(L.fmtDate(c.signedDate))}</td>
+            <td class="right">${c.termMonths ? esc(c.termMonths) + ' mo' : ''}</td>
+            <td class="right nowrap">${c.startingRent ? '$' + esc(Number(c.startingRent).toFixed(2)) + ' <span class="muted">' + esc(String(c.rateBasis || '').replace(/\s*\(.*\)/, '')) + '</span>' : ''}</td>
+            <td class="right">${c.escalationPct ? esc(c.escalationPct) + '%' : ''}</td><td class="right">${c.freeRentMonths ? esc(c.freeRentMonths) + ' mo' : ''}</td>
+            <td class="right">${c.tiAllowance ? '$' + esc(c.tiAllowance) : ''}</td><td>${esc(c.source)}</td></tr>`
+          )
+          .join('')}</tbody></table></div>`
+      : emptyState('No comps yet. Open a closed deal and tap "Save as comp", or add one by hand.', '<button class="btn primary" data-action="new" data-col="comps">+ Comp</button>');
+    return `
+      <div class="page-head"><h1>Comps & Critical Dates</h1>
+        <div class="actions"><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
+      </div>
+      <div class="toolbar">
+        <div class="seg">
+          <button class="${f.tab === 'dates' ? 'on' : ''}" data-action="set-filter" data-scope="comps" data-key="tab" data-value="dates">Critical dates (${tp.due.length} due)</button>
+          <button class="${f.tab === 'comps' ? 'on' : ''}" data-action="set-filter" data-scope="comps" data-key="tab" data-value="comps">Comps (${S.all('comps').length})</button>
+        </div>
+        ${f.tab === 'comps' ? assetTabs(f.asset, 'comps') + `<input type="search" placeholder="Search building, tenant, submarket…" value="${esc(f.q)}" data-filter="comps.q" id="f-comps-q" />` : ''}
+      </div>
+      ${f.tab === 'comps' ? compTable : dates}`;
+  }
+
+  // ----- coach sidebar -----
+
+  function renderCoach() {
+    const panel = $('#coach');
+    if (!panel) return;
+    const tips = L.coachTips(
+      { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), marketing: S.all('marketing') },
+      { today: L.todayISO(), postsPerWeek: S.settings().postsPerWeek }
+    );
+    const open = tips.filter((t) => t.done === false).length;
+    $('#coach-count').textContent = open || '';
+    panel.hidden = !state.coach.open;
+    document.body.classList.toggle('coach-open', Boolean(state.coach.open));
+    if (!state.coach.open) return;
+    panel.innerHTML = `<header><h2>Coach</h2><button class="icon-btn" data-action="toggle-coach" aria-label="Close">✕</button></header>
+      <p class="hint">What's worked in your own outreach, and whether you're doing it. Each item re-checks itself as you update the CRM.</p>
+      <ul class="coach-list">${tips
+        .map(
+          (t) => `<li class="${t.done === true ? 'done' : t.done === false ? 'todo' : 'info'}">
+          <span class="coach-mark">${t.done === true ? '✓' : t.done === false ? '○' : '•'}</span>
+          <div><strong>${esc(t.title)}</strong><div class="sub">${esc(t.detail)}</div><div class="coach-status">${esc(t.status)}</div></div></li>`
+        )
+        .join('')}</ul>`;
   }
 
   // ----- leads -----
@@ -848,7 +967,7 @@
       ${
         rows.length
           ? `<div class="table-wrap"><table class="tbl">
-          <thead><tr><th>Company</th><th>Stage</th><th>Temp.</th><th>Lease expiration</th><th>Last touch</th><th>Best contact</th></tr></thead>
+          <thead><tr><th>Company</th><th>Stage</th><th>Temp.</th><th class="right">RSF</th><th>Lease expiration</th><th>Last touch</th><th>Best contact</th></tr></thead>
           <tbody>${shown
             .map(({ c, last }) => {
               const p = (contactsBy[c.id] || []).slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker') || Boolean(b.email) - Boolean(a.email))[0];
@@ -856,6 +975,7 @@
               <td><strong>${esc(c.name)}</strong> ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
               <td><select class="inline" data-lead-stage="${esc(c.id)}">${options(L.LEAD_STAGES, L.leadStage(c))}</select></td>
               <td><select class="inline" data-lead-temp="${esc(c.id)}">${options(L.LEAD_TEMPS, c.leadTemp, '—')}</select></td>
+              <td class="right">${c.sfOccupied ? esc(L.fmtNumber(c.sfOccupied)) : '<span class="muted">—</span>'}</td>
               <td>${expirationBadge(c.leaseExpiration)}</td>
               <td>${last ? esc(L.fmtDate(last)) : '<span class="muted">Never</span>'}</td>
               <td>${p ? `${esc(contactName(p))}<div class="sub">${esc(p.title)}</div>` : '<span class="muted">None yet</span>'}</td></tr>`;
@@ -1179,7 +1299,7 @@
                 return `<a class="deal-card" draggable="true" data-deal="${esc(d.id)}" href="#/deal/${esc(d.id)}">
                   <div class="dc-title">${esc(d.name)}</div>
                   <div class="sub">${esc(companyName(d.companyId))}</div>
-                  <div class="dc-meta">${assetBadge(d.assetClass)} ${d.estSF ? `<span>${L.fmtNumber(d.estSF)} SF</span>` : ''}</div>
+                  <div class="dc-meta">${assetBadge(d.assetClass)} ${L.dealSizeLabel(d) ? `<span>${esc(L.dealSizeLabel(d))}</span>` : badge('Add RSF', 'amber')}</div>
                   <div class="dc-meta"><strong>${L.fmtMoney(est.myShare, true)}</strong><span class="muted">${L.dealProbability(d)}%</span>${d.targetClose ? `<span class="muted">${esc(L.fmtDate(d.targetClose))}</span>` : ''}</div>
                 </a>`;
               })
@@ -1196,7 +1316,7 @@
             const est = L.estimatedCommission(d);
             return `<tr data-href="#/deal/${esc(d.id)}"><td><strong>${esc(d.name)}</strong><div class="sub">${esc(companyName(d.companyId))}</div></td>
               <td>${esc(d.dealType)}</td><td>${assetBadge(d.assetClass)}</td><td>${esc(d.stage)}</td>
-              <td class="right">${esc(L.fmtNumber(d.estSF || d.sfMax || d.sfMin))}</td>
+              <td class="right nowrap">${esc(L.dealSizeLabel(d)) || badge('Add RSF', 'amber')}</td>
               <td class="right">${L.fmtMoney(est.aggregateValue, true)}</td>
               <td class="right">${L.fmtMoney(est.myShare)}</td>
               <td class="right">${L.dealProbability(d)}%</td>
@@ -1235,11 +1355,11 @@
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const isInd = d.assetClass !== 'Office';
     const isOff = d.assetClass !== 'Industrial';
-    const sizeRange = [d.sfMin, d.sfMax].filter(Boolean).map(L.fmtNumber).join(' – ');
 
     const reqs = [
       ['Deal type', d.dealType],
-      ['Size range', sizeRange ? sizeRange + ' SF' : ''],
+      ['Size', L.dealSizeLabel(d) || 'RSF not set yet'],
+      ['Budget', L.dealBudgetLabel(d)],
       ['Est. deal SF', L.fmtNumber(d.estSF)],
       ['Target submarkets', d.targetSubmarkets],
       ['Target occupancy', L.fmtDate(d.targetOccupancy)],
@@ -1261,6 +1381,7 @@
         <div><h1>${esc(d.name)}</h1><div class="head-badges">${assetBadge(d.assetClass)} ${badge(d.dealType, 'gray')} ${badge(d.stage, 'blue')}</div></div>
         <div class="actions">
           <button class="btn" data-action="new" data-col="activities" data-company="${esc(d.companyId)}" data-deal="${esc(id)}">Log activity</button>
+          ${d.stage === 'Closed Won' ? `<button class="btn" data-action="deal-to-comp" data-id="${esc(id)}">Save as comp</button>` : ''}
           <button class="btn" data-action="edit" data-col="deals" data-id="${esc(id)}">Edit</button>
           <button class="btn danger" data-action="delete" data-col="deals" data-id="${esc(id)}">Delete</button>
         </div>
@@ -2183,6 +2304,7 @@
     dashboard: viewDashboard,
     leads: viewLeads,
     marketing: viewMarketing,
+    comps: viewComps,
     companies: viewCompanies,
     company: viewCompany,
     contacts: viewContacts,
@@ -2211,6 +2333,7 @@
     const openCount = openFollowUps().filter((a) => activityDue(a) <= L.todayISO()).length;
     $('#nav-due').textContent = openCount || '';
     renderBackupNag();
+    renderCoach();
 
     if (focusId && $('#' + focusId)) {
       const el = $('#' + focusId);
@@ -2303,6 +2426,34 @@
           if (L.leadStage(c) === 'New') patch.leadStage = 'Initial Outreach';
           S.upsert('companies', patch);
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
+        }
+        case 'toggle-coach':
+          state.coach.open = !state.coach.open;
+          saveUIState();
+          return renderCoach();
+        case 'deal-to-comp': {
+          const deal = S.get('deals', d.id);
+          const c = S.get('companies', deal.companyId) || {};
+          openForm('comps', null, {});
+          const f = $('#record-form');
+          const set = (k, v) => f.elements[k] && v !== undefined && v !== null && (f.elements[k].value = v);
+          set('building', deal.building || c.building || '');
+          set('address', deal.address || c.address || '');
+          set('submarket', deal.submarket || c.submarket || '');
+          set('assetClass', deal.assetClass);
+          set('tenant', c.name);
+          set('dealType', deal.dealType);
+          set('sf', deal.actualSF || deal.estSF || deal.sfMax || '');
+          set('signedDate', deal.closedDate);
+          set('commencement', deal.leaseCommencement);
+          set('termMonths', deal.termMonths);
+          set('startingRent', deal.budgetRate);
+          set('rateBasis', deal.rateBasis);
+          set('escalationPct', deal.escalationPct);
+          set('freeRentMonths', deal.freeRentMonths);
+          set('tiAllowance', deal.tiAllowance);
+          set('source', 'My deal');
+          return;
         }
         case 'li-connected': {
           S.upsert('contacts', { id: d.contact, linkedinConnected: true });
@@ -2535,7 +2686,34 @@
     if (parseRoute().name === 'portfolio') maybeAutoSync();
     window.scrollTo(0, 0);
   });
-  S.onChange(render);
+  // Reminders and post ideas the CRM creates on its own: quarterly research/one-pager tasks and
+  // move-in posts for deals you closed. Each is created once; deleting it won't bring it back.
+  function ensureGenerated() {
+    const s = S.settings();
+    const made = new Set(s.generatedIds || []);
+    const today = L.todayISO();
+    const companies = {};
+    S.all('companies').forEach((c) => (companies[c.id] = c));
+    const fresh = [];
+    L.quarterlyTasks(today).forEach((t) => {
+      if (!made.has(t.id) && !S.get('activities', t.id)) fresh.push(['activities', Object.assign({ done: false }, t)]);
+    });
+    L.moveInPostIdeas(S.all('deals'), companies, today).forEach((m) => {
+      if (!made.has(m.id) && !S.get('marketing', m.id)) fresh.push(['marketing', m]);
+    });
+    if (!fresh.length) return;
+    fresh.forEach(([col, rec]) => {
+      S.upsert(col, rec, { silent: true });
+      made.add(rec.id);
+    });
+    S.saveSettings({ generatedIds: Array.from(made) });
+  }
+
+  S.onChange(() => {
+    ensureGenerated();
+    render();
+  });
+  ensureGenerated();
   render();
   if (parseRoute().name === 'portfolio') maybeAutoSync();
 })();

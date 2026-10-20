@@ -11,6 +11,7 @@
     <header class="topbar">
       <button class="icon-btn menu" data-action="toggle-nav" aria-label="Menu">☰</button>
       <a class="brand" href="#/today"><span class="logo">TR</span> Tenant Rep CRM</a>
+      <button class="btn small coach-btn" data-action="toggle-coach" title="Coach: what's working and what to improve">💡 Coach <em id="coach-count" class="pill"></em></button>
       <div id="backup-nag" class="nag" hidden>
         <span id="backup-nag-text"></span>
         <button class="link" data-action="export-json">Export backup</button>
@@ -25,12 +26,14 @@
       <a href="#/expirations" data-route="expirations"><span>◷</span> Lease Expirations</a>
       <a href="#/portfolio" data-route="portfolio"><span>$</span> Portfolio</a>
       <a href="#/marketing" data-route="marketing"><span>✎</span> Marketing</a>
+      <a href="#/comps" data-route="comps"><span>⚑</span> Comps & Dates</a>
       <a href="#/activities" data-route="activities"><span>✓</span> Follow-ups <em id="nav-due" class="pill"></em></a>
       <a href="#/contacts" data-route="contacts"><span>☺</span> Contacts</a>
       <a href="#/data" data-route="data"><span>⇅</span> Import / Settings</a>
       <p class="nav-foot">Data is stored in this browser. Back up from Import / Settings.</p>
     </nav>
     <main id="view"></main>
+    <aside id="coach" class="coach" hidden></aside>
     <dialog id="modal"></dialog>
     <input type="file" id="file-input" hidden />
     <div id="toast" role="status" aria-live="polite"></div>

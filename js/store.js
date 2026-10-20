@@ -6,7 +6,7 @@
   'use strict';
   const L = root.CRMLogic;
   const KEY = 'tenant-rep-crm.v1';
-  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing'];
+  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps'];
 
   const DEFAULT_SETTINGS = {
     brokerName: '',
@@ -22,6 +22,7 @@
     sheetLastSync: '',
     outreachGoal: 10,
     postsPerWeek: 2,
+    generatedIds: [],
   };
 
   function emptyDb() {
@@ -122,7 +123,7 @@
   }
 
   // A merged record that doesn't exist yet must be whole; partial updates for missing records are dropped.
-  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'] };
+  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'] };
   function isComplete(col, rec) {
     return REQUIRED[col].every((k) => rec[k]);
   }

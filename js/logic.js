@@ -342,6 +342,245 @@
     return k !== null && k < quarterKey(latestDataQuarter(today)) && item.status !== 'Retired';
   }
 
+  // ---------- ranges, recurring reminders, client care ----------
+
+  // "3,500–4,000 RSF", "20,000 RSF" or '' — a range when the tenant gave one.
+  function rangeLabel(min, max, fmt) {
+    const a = parseNumber(min);
+    const b = parseNumber(max);
+    if (a !== null && b !== null && a !== b) return fmt(Math.min(a, b)) + '–' + fmt(Math.max(a, b));
+    const one = a !== null ? a : b;
+    return one !== null ? fmt(one) : '';
+  }
+  function dealSizeLabel(d) {
+    const r = rangeLabel(d.sfMin, d.sfMax, fmtNumber) || (parseNumber(d.estSF) !== null ? fmtNumber(d.estSF) : '') || (parseNumber(d.actualSF) !== null ? fmtNumber(d.actualSF) : '');
+    return r ? r + ' RSF' : '';
+  }
+  function dealBudgetLabel(d) {
+    const r = rangeLabel(d.budgetRate, d.budgetRateMax, (n) => '$' + Number(n).toFixed(2).replace(/\.00$/, ''));
+    return r ? r + '/SF' + (d.rateBasis ? ' ' + String(d.rateBasis).replace(/\s*\(.*\)/, '') : '') : '';
+  }
+
+  function quarterEndOf(iso) {
+    const d = parseISODate(iso);
+    return toISODate(new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3 + 3, 0));
+  }
+
+  // Each quarter: ask Research for numbers ~15 days after it closes, then refresh and send the submarket one-pagers at ~1 month.
+  function quarterlyTasks(today) {
+    today = today || todayISO();
+    const t = parseISODate(today);
+    const quarterStart = toISODate(new Date(t.getFullYear(), Math.floor(t.getMonth() / 3) * 3, 1));
+    const lastClose = quarterEndOf(today) === today ? today : addDays(quarterStart, -1);
+    const nextClose = quarterEndOf(addDays(lastClose, 1));
+    const out = [];
+    [lastClose, nextClose].forEach((close) => {
+      const q = quarterOf(close);
+      out.push({
+        id: 'q-research-' + q,
+        type: 'Task',
+        date: addDays(close, 15),
+        followUpDate: addDays(close, 15),
+        subject: `Ping Research for ${q} submarket stats`,
+        notes: `Ask the research team for ${q} vacancy, asking rent, absorption, construction and notable deals for each submarket one-pager.`,
+      });
+      out.push({
+        id: 'q-flyers-' + q,
+        type: 'Task',
+        date: addDays(close, 30),
+        followUpDate: addDays(close, 30),
+        subject: `Update the submarket one-pagers with ${q} data and send them to prospects`,
+        notes: 'Refresh every one-pager in Marketing, then send each to the prospects in its submarket and asset class.',
+      });
+    });
+    return out;
+  }
+
+  // For deals you closed yourself: check in after move-in, then keep up with the lease's critical dates.
+  function clientTouchpoints(deals, opts) {
+    opts = opts || {};
+    const today = opts.today || todayISO();
+    const touches = opts.touches || {};
+    const points = [];
+    deals
+      .filter((d) => d.stage === 'Closed Won' && !d.partnerDeal)
+      .forEach((d) => {
+        const add = (date, kind, label, checkIn) => date && points.push({ dealId: d.id, companyId: d.companyId, date, kind, label, checkIn: Boolean(checkIn) });
+        const start = d.leaseCommencement;
+        if (start) {
+          add(start, 'commencement', 'Lease commencement / move-in');
+          add(addDays(start, 30), 'check-in', 'Check in: how is the new space working out?', true);
+          add(addDays(start, 182), 'check-in', '6-month check-in with the client', true);
+          for (let y = 1; y <= 10; y++) {
+            const anniv = toISODate(new Date(parseISODate(start).getFullYear() + y, parseISODate(start).getMonth(), parseISODate(start).getDate()));
+            if (d.newLeaseExpiration && anniv >= d.newLeaseExpiration) break;
+            add(anniv, 'check-in', `${y}-year anniversary check-in`, true);
+          }
+        }
+        if (d.newLeaseExpiration) {
+          add(addDays(d.newLeaseExpiration, -548), 'planning', 'Start renewal / relocation planning (18 months out)');
+          add(d.newLeaseExpiration, 'expiration', 'Lease expiration');
+        }
+        if (d.renewalNoticeDate) {
+          add(addDays(d.renewalNoticeDate, -90), 'notice', 'Renewal option notice due in 90 days');
+          add(d.renewalNoticeDate, 'notice', 'Renewal option notice deadline');
+        }
+        if (d.terminationOptionDate) {
+          add(addDays(d.terminationOptionDate, -90), 'notice', 'Termination option notice due in 90 days');
+          add(d.terminationOptionDate, 'notice', 'Termination option deadline');
+        }
+        if (d.otherCriticalDate) add(d.otherCriticalDate, 'other', d.otherCriticalDateLabel || 'Critical date');
+      });
+    // A check-in counts as done once you've touched the client since two weeks before it was due.
+    points.forEach((p) => {
+      const last = touches[p.companyId];
+      p.done = p.checkIn ? Boolean(last && last >= addDays(p.date, -14)) : p.date < today;
+    });
+    points.sort((a, b) => a.date.localeCompare(b.date));
+    return {
+      due: points.filter((p) => !p.done && p.date <= today && p.date >= addDays(today, -120) && (p.checkIn || p.kind === 'notice' || p.kind === 'planning')),
+      upcoming: points.filter((p) => p.date > today && p.date <= addDays(today, opts.horizonDays || 365)),
+      all: points,
+    };
+  }
+
+  // A LinkedIn post idea for every deal you closed, timed a week after the space delivers.
+  function moveInPostIdeas(deals, companiesById, today) {
+    today = today || todayISO();
+    return deals
+      .filter((d) => d.stage === 'Closed Won' && !d.partnerDeal && d.leaseCommencement && d.leaseCommencement >= addDays(today, -60))
+      .map((d) => {
+        const c = companiesById[d.companyId] || {};
+        return {
+          id: 'mk-movein-' + d.id,
+          title: `LinkedIn: welcome ${c.name || d.name} to their new space`,
+          kind: 'Social post',
+          status: 'Idea',
+          channel: 'LinkedIn',
+          date: addDays(d.leaseCommencement, 7),
+          dealId: d.id,
+          submarket: d.submarket || c.submarket || '',
+          assetClass: d.assetClass || '',
+          notes: `Space delivers ${fmtDate(d.leaseCommencement)}. A fun move-in post: photo of the team in the space, size and submarket, what they needed and how you found it. Get the client's OK (and firm marketing approval) first.`,
+        };
+      });
+  }
+
+  // ---------- coach ----------
+
+  // Templates that earned replies in your own outreach history (Apr–Oct 2026).
+  const STRONG_TEMPLATES = ['Building intro', 'Following up', 'Lease expiration'];
+  const COLLATERAL_UPGRADES = [
+    { key: 'upTakeaway', label: '"What this means for you" box for tenants' },
+    { key: 'upCompare', label: 'Comparison with neighboring submarkets and the metro' },
+    { key: 'upAvailability', label: 'Top available blocks or spec suites' },
+    { key: 'upTombstones', label: 'Closed-deal tombstones on page 1' },
+    { key: 'upPersonalized', label: 'Per-building version with a trackable link' },
+  ];
+
+  // Live checklist of habits to build; each tip re-checks itself against the CRM on every render.
+  function coachTips(data, opts) {
+    opts = opts || {};
+    const today = opts.today || todayISO();
+    const outreach = data.activities.filter((a) => OUTREACH_TYPES.includes(a.type) && a.date && a.date <= today).sort((a, b) => b.date.localeCompare(a.date));
+    const recentEmails = outreach.filter((a) => a.type === 'Email' && a.template).slice(0, 20);
+    const strong = recentEmails.filter((a) => STRONG_TEMPLATES.includes(a.template)).length;
+    const last30 = outreach.filter((a) => a.date >= addDays(today, -30));
+    const withOutcome = last30.filter((a) => a.outcome || parseNumber(a.replies) !== null).length;
+    const calls14 = outreach.filter((a) => a.type === 'Call' && a.date >= addDays(today, -14)).length;
+    const plan = dailyPlan(data, { today });
+    const staleOpened = plan.opened.filter((o) => {
+      const a = data.activities.find((x) => x.id === o.activityId);
+      return a && a.date <= addDays(today, -3);
+    }).length;
+    const firstTouches = outreach.filter((a) => a.type === 'Email' && a.template && a.template !== 'Following up' && !responded(a) && a.date <= addDays(today, -7) && a.date >= addDays(today, -35));
+    const followedUp = firstTouches.filter((a) => outreach.some((b) => b.companyId === a.companyId && b.date > a.date)).length;
+    const marketing = data.marketing || [];
+    const flyers = marketing.filter((m) => m.kind === 'One-pager / flyer' && m.status !== 'Retired');
+    const stale = flyers.filter((m) => collateralStale(m, today)).length;
+    const upgradesDone = flyers.reduce((t, m) => t + COLLATERAL_UPGRADES.filter((u) => m[u.key] === true || m[u.key] === 'true').length, 0);
+    const upgradesTotal = flyers.length * COLLATERAL_UPGRADES.length;
+    const d = parseISODate(today);
+    const monday = addDays(today, -((d.getDay() + 6) % 7));
+    const posts = marketing.filter((m) => m.kind === 'Social post' && m.status === 'Sent / Posted' && m.date >= monday && m.date <= today).length;
+    const goal = parseNumber(opts.postsPerWeek) || 0;
+    const noSize = data.deals.filter((x) => OPEN_STAGES.includes(x.stage) && !dealSizeLabel(x)).length;
+    const ratio = (n, of) => (of ? Math.round((n / of) * 100) + '%' : '—');
+
+    return [
+      {
+        id: 'subjects',
+        title: 'Lead with their building in the subject line',
+        detail: '"{Company} | {Building} – Atlanta Office" got 35% replies and "Lease Expiration – {Company}" 33%, against 10% for "Quick insight on your office lease costs". Name the building or a neighbor in the first line.',
+        status: recentEmails.length ? `${strong} of your last ${recentEmails.length} emails used a strong template` : 'Pick a template when you log an email to track this',
+        done: recentEmails.length >= 5 && strong / recentEmails.length >= 0.6,
+      },
+      {
+        id: 'follow-up',
+        title: 'Always send the follow-up',
+        detail: '"Following up – {Company}" notes earned 53% replies, your best result. Send one 7–10 days after any first touch that gets no answer.',
+        status: firstTouches.length ? `${followedUp} of ${firstTouches.length} unanswered first touches from the last month got a follow-up` : 'No unanswered first touches from the last month',
+        done: !firstTouches.length || followedUp / firstTouches.length >= 0.8,
+      },
+      {
+        id: 'opened',
+        title: 'Act on opens within 3 days',
+        detail: "When someone opens your email but doesn't reply, call or send a short note within 3 days, and connect on LinkedIn.",
+        status: staleOpened ? `${staleOpened} opened email${staleOpened > 1 ? 's' : ''} waiting more than 3 days` : 'All caught up',
+        done: staleOpened === 0,
+      },
+      {
+        id: 'outcomes',
+        title: 'Record an outcome on every touch',
+        detail: 'Results by template and channel are only as good as the outcomes logged. Pick one each time you log a call or email.',
+        status: last30.length ? `${ratio(withOutcome, last30.length)} of the last 30 days' touches have an outcome` : 'No touches logged in the last 30 days',
+        done: last30.length > 0 && withOutcome / last30.length >= 0.9,
+      },
+      {
+        id: 'calls',
+        title: 'Log your calls',
+        detail: 'Only one real call is in HubSpot, so call results can\'t be measured yet. Tap ✓ Called on Today, then set the outcome.',
+        status: `${calls14} call${calls14 === 1 ? '' : 's'} logged in the last 2 weeks`,
+        done: calls14 >= 5,
+      },
+      {
+        id: 'timing',
+        title: 'Send early in the week, around midday',
+        detail: 'Monday (28%) and Tuesday (26%) emails got the most replies, and 12–2pm sends did best (28%). Thursday was weakest (17%).',
+        status: 'Habit to keep in mind',
+        done: null,
+      },
+      {
+        id: 'flyers',
+        title: 'Keep one-pagers on the latest quarter',
+        detail: 'Ping Research ~15 days after a quarter closes and send the refreshed one-pagers at ~1 month. Both reminders are on your Follow-ups list.',
+        status: flyers.length ? (stale ? `${stale} of ${flyers.length} one-pagers still on old data` : 'All current') : 'Add your one-pagers in Marketing',
+        done: flyers.length > 0 && stale === 0,
+      },
+      {
+        id: 'upgrades',
+        title: 'Upgrade your one-pagers',
+        detail: COLLATERAL_UPGRADES.map((u) => u.label).join(' · ') + '. Tick each one off on the piece in Marketing once it\'s done.',
+        status: upgradesTotal ? `${upgradesDone} of ${upgradesTotal} upgrades done across ${flyers.length} one-pagers` : 'Add your one-pagers in Marketing',
+        done: upgradesTotal > 0 && upgradesDone === upgradesTotal,
+      },
+      {
+        id: 'posting',
+        title: `Post on LinkedIn ${goal || 2}× a week`,
+        detail: 'Market takeaways from your one-pagers, closed-deal spotlights and move-in posts for clients whose space just delivered.',
+        status: `${posts} posted this week`,
+        done: goal ? posts >= goal : null,
+      },
+      {
+        id: 'rsf',
+        title: 'Every deal has its RSF',
+        detail: 'Size drives commission estimates and which spaces fit. A range is fine.',
+        status: noSize ? `${noSize} open deal${noSize > 1 ? 's' : ''} missing RSF` : 'All open deals have a size',
+        done: noSize === 0,
+      },
+    ];
+  }
+
   // ---------- daily plan ----------
 
   // Days to wait before the next touch, by lead stage.
@@ -467,7 +706,13 @@
     const newSlots = Math.min(fresh.length, Math.max(Math.ceil(goal / 3), goal - followUps.length));
     const outreach = followUps.slice(0, goal - newSlots).concat(fresh.slice(0, newSlots));
 
+    const care = clientTouchpoints(data.deals, { today, touches }).due.filter((p) => !snoozed(companies[p.companyId]));
+
     const updates = [];
+    openDeals.forEach((d) => {
+      if (!dealSizeLabel(d))
+        updates.push({ kind: 'update', dealId: d.id, companyId: d.companyId, title: d.name, why: 'No RSF on this deal yet. Add the size (a range is fine).' });
+    });
     data.companies.forEach((c) => {
       if (leadStage(c) === 'Secured Lead' && !dealCompanies.has(c.id) && !doNotContact(c))
         updates.push({ kind: 'update', action: 'create-deal', companyId: c.id, title: c.name, why: 'Secured lead with no deal. Start one so it shows in the Pipeline.' });
@@ -499,6 +744,7 @@
     return {
       tasks,
       opened,
+      care,
       deals,
       outreach,
       updates: updates.slice(0, 8),
@@ -1019,6 +1265,15 @@
     DO_NOT_CONTACT_REASONS,
     doNotContact,
     dailyPlan,
+    rangeLabel,
+    dealSizeLabel,
+    dealBudgetLabel,
+    quarterEndOf,
+    quarterlyTasks,
+    clientTouchpoints,
+    moveInPostIdeas,
+    coachTips,
+    COLLATERAL_UPGRADES,
     OUTCOMES,
     responded,
     outreachStats,
