@@ -544,6 +544,20 @@
         done: calls14 >= 5,
       },
       {
+        id: 'greeting',
+        title: 'Open with their name and one small ask',
+        detail: 'Most emails opened 3+ times with no reply opened with "Good afternoon," and no name, then a list of market stats. Replies came from notes that used a first name and ended with one easy ask ("a quick 10-minute call", "I\'ll be in the area Thursday").',
+        status: 'Habit to keep in mind',
+        done: null,
+      },
+      {
+        id: 'drop-by',
+        title: 'Pair a drop-by with an email the same day',
+        detail: '"I stopped by your office this morning…" notes got replies. Use the door-knock list on Today, then send the email that afternoon.',
+        status: 'Habit to keep in mind',
+        done: null,
+      },
+      {
         id: 'timing',
         title: 'Send early in the week, around midday',
         detail: 'Monday (28%) and Tuesday (26%) emails got the most replies, and 12–2pm sends did best (28%). Thursday was weakest (17%).',
