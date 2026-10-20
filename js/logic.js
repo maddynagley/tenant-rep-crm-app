@@ -609,8 +609,10 @@
       const date = hsDate(p.hs_timestamp);
       const opens = parseNumber(p.hs_email_open_count) || 0;
       const replied = (parseNumber(p.hs_email_reply_count) || 0) > 0;
+      const body = String(p.hs_email_text || '').replace(/\r\n/g, '\n').trim().slice(0, 20000);
       if (existing[id]) {
         const patch = { id, opens };
+        if (body && existing[id].body !== body) patch.body = body;
         if (!existing[id].dealId && dealFor(existing[id].companyId, rec)) patch.dealId = dealFor(existing[id].companyId, rec);
         if (replied && !RESPONDED.includes(existing[id].outcome)) patch.outcome = 'Replied';
         upserts.push(patch);
@@ -629,6 +631,7 @@
           inbound: inbound || undefined,
           dealThread: inPlay.has(companyId) || undefined,
           notes: stripHtml(p.hs_email_text).slice(0, 180),
+          body: body || undefined,
           source: 'HubSpot',
           done: true,
         });

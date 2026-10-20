@@ -344,3 +344,7 @@ dialog .form-grid { padding: 16px 18px; overflow-y: auto; }
 .seg button.on { background: var(--accent-soft); color: var(--accent); }
 .greeting-sub { color: var(--muted); margin-top: 2px; }
 #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
+
+.email-full { margin: 4px 0 2px; }
+.email-full summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+.email-body { margin-top: 6px; padding: 10px 12px; background: var(--gray-soft); border-radius: 8px; font-size: 13px; max-height: 420px; overflow-y: auto; }

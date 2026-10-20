@@ -1487,6 +1487,7 @@
               <button class="icon-btn" data-action="edit" data-col="activities" data-id="${esc(a.id)}" title="Edit">✎</button></div>
             <div class="sub">${[contact ? esc(contactName(contact)) : '', deal ? `<a href="#/deal/${esc(deal.id)}">${esc(deal.name)}</a>` : ''].filter(Boolean).join(' · ')}</div>
             ${a.notes ? `<p class="pre">${esc(a.notes)}</p>` : ''}
+            ${a.body ? `<details class="email-full"><summary>Show full ${a.type === 'Note' ? 'note' : 'email'}</summary><div class="pre email-body">${esc(a.body)}</div></details>` : ''}
             ${due ? `<div class="sub">Follow-up ${esc(L.fmtDate(due))} ${a.done ? badge('done', 'green') : due < L.todayISO() ? badge('overdue', 'red') : badge('open', 'amber')}</div>` : ''}
           </div></li>`;
       })
@@ -3205,9 +3206,12 @@
     ensureGenerated();
     render();
   });
-  ensureGenerated();
-  render();
-  syncHubSpot(false);
-  syncAllLists();
-  if (parseRoute().name === 'portfolio') maybeAutoSync();
+  // Data loads asynchronously from IndexedDB; start once it's in memory.
+  S.ready.then(() => {
+    ensureGenerated();
+    render();
+    syncHubSpot(false);
+    syncAllLists();
+    if (parseRoute().name === 'portfolio') maybeAutoSync();
+  });
 })();

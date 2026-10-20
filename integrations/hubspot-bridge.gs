@@ -80,7 +80,7 @@ function fetchSince_(type, properties, since) {
     const page = hubspot_('post', '/crm/v3/objects/' + type + '/search', body);
     (page.results || []).forEach(function (r) {
       const p = r.properties || {};
-      if (p.hs_email_text) p.hs_email_text = String(p.hs_email_text).slice(0, 600);
+      if (p.hs_email_text) p.hs_email_text = String(p.hs_email_text).slice(0, 20000);
       if (p.hs_call_body) p.hs_call_body = String(p.hs_call_body).slice(0, 600);
       if (p.hs_meeting_body) p.hs_meeting_body = String(p.hs_meeting_body).slice(0, 600);
       if (p.hs_note_body) p.hs_note_body = String(p.hs_note_body).slice(0, 1500);

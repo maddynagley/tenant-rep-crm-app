@@ -1,5 +1,6 @@
 /*
- * Data layer: everything is kept in the browser's localStorage under one key.
+ * Data layer: everything is kept in this browser's IndexedDB (falling back to localStorage where IndexedDB
+ * is unavailable). Nothing leaves the device.
  * Use Data > Export Backup regularly – browser storage is per-device.
  */
 (function (root) {
@@ -49,10 +50,37 @@
     return out;
   }
 
-  let db = load();
+  let db = emptyDb();
   const listeners = [];
 
-  function load() {
+  // ---------- storage: IndexedDB, with localStorage as the fallback ----------
+
+  const IDB_NAME = 'tenant-rep-crm';
+  const IDB_STORE = 'kv';
+  let idb = null;
+
+  function openIdb() {
+    return new Promise((resolve, reject) => {
+      if (!root.indexedDB) return reject(new Error('IndexedDB is not available'));
+      const req = root.indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function idbCall(mode, fn) {
+    return new Promise((resolve, reject) => {
+      const tx = idb.transaction(IDB_STORE, mode);
+      const req = fn(tx.objectStore(IDB_STORE));
+      tx.oncomplete = () => resolve(req.result);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('Save was interrupted'));
+    });
+  }
+  const idbGet = (key) => idbCall('readonly', (st) => st.get(key));
+  const idbPut = (key, value) => idbCall('readwrite', (st) => st.put(value, key));
+
+  function loadLocal() {
     try {
       const raw = root.localStorage.getItem(KEY);
       return raw ? normalize(JSON.parse(raw)) : emptyDb();
@@ -62,14 +90,57 @@
     }
   }
 
-  function persist() {
+  // Loads the data. The first time, it moves the localStorage copy into IndexedDB and removes the old copy
+  // only after reading the new one back.
+  const ready = (async () => {
     try {
-      root.localStorage.setItem(KEY, JSON.stringify(db));
+      idb = await openIdb();
+      let saved = await idbGet('db');
+      if (!saved) {
+        const raw = root.localStorage.getItem(KEY);
+        if (raw) {
+          saved = JSON.parse(raw);
+          await idbPut('db', saved);
+          if (await idbGet('db')) root.localStorage.removeItem(KEY);
+        }
+      }
+      db = saved ? normalize(saved) : emptyDb();
     } catch (e) {
-      alert('Could not save – browser storage may be full or disabled. Export a backup now.\n\n' + e.message);
+      console.warn('Using localStorage:', e.message);
+      idb = null;
+      db = loadLocal();
+    }
+  })();
+
+  let pending = null;
+  function saveFailed(e) {
+    alert('Could not save – browser storage may be full or disabled. Export a backup now.\n\n' + e.message);
+  }
+  function persist() {
+    if (idb) {
+      // Coalesce bursts of changes into one write of the latest state.
+      if (!pending)
+        pending = Promise.resolve()
+          .then(() => {
+            pending = null;
+            return idbPut('db', db);
+          })
+          .catch(saveFailed);
+    } else {
+      try {
+        root.localStorage.setItem(KEY, JSON.stringify(db));
+      } catch (e) {
+        saveFailed(e);
+      }
     }
     listeners.forEach((fn) => fn());
+    return flush();
   }
+  // Resolves once everything changed so far is saved.
+  function flush() {
+    return pending || Promise.resolve();
+  }
+  const backend = () => (idb ? 'IndexedDB' : 'localStorage');
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -140,7 +211,7 @@
 
   function saveSettings(patch) {
     Object.assign(db.settings, patch);
-    persist();
+    return persist();
   }
 
   // The Google Sheet connection (web app URL + sync key) never leaves this browser, so backups can't leak it.
@@ -182,7 +253,7 @@
       // An update file can also retire records (e.g. a duplicate deal merged into another).
       COLLECTIONS.forEach((c) => ((incoming.remove && incoming.remove[c]) || []).forEach((id) => get(c, id) && remove(c, id, true)));
     }
-    persist();
+    return persist();
   }
 
   function clearAll() {
@@ -258,6 +329,9 @@
   }
 
   root.CRMStore = {
+    ready,
+    flush,
+    backend,
     COLLECTIONS,
     all,
     get,
