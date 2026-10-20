@@ -294,6 +294,54 @@
     });
   }
 
+  // ---------- outreach & marketing ----------
+
+  const OUTREACH_TYPES = ['Call', 'Email', 'LinkedIn'];
+  const OUTCOMES = ['No response', 'Left voicemail', 'Connected', 'Replied', 'Meeting booked', 'Not interested', 'Wrong contact'];
+  const RESPONDED = ['Connected', 'Replied', 'Meeting booked', 'Not interested'];
+
+  function responded(a) {
+    return RESPONDED.includes(a.outcome) || (parseNumber(a.replies) || 0) > 0;
+  }
+
+  // Response rates for outreach, grouped by any key (channel, template, weekday…).
+  function outreachStats(activities, keyFn) {
+    const groups = {};
+    activities
+      .filter((a) => OUTREACH_TYPES.includes(a.type))
+      .forEach((a) => {
+        const key = keyFn(a) || '(none)';
+        const g = (groups[key] = groups[key] || { key, sent: 0, opened: 0, responded: 0, meetings: 0 });
+        g.sent += 1;
+        if ((parseNumber(a.opens) || 0) > 0) g.opened += 1;
+        if (responded(a)) g.responded += 1;
+        if (a.outcome === 'Meeting booked') g.meetings += 1;
+      });
+    return Object.values(groups)
+      .map((g) => Object.assign(g, { responseRate: g.sent ? g.responded / g.sent : 0, openRate: g.sent ? g.opened / g.sent : 0 }))
+      .sort((a, b) => b.sent - a.sent);
+  }
+
+  // "3Q26" for the quarter a date falls in; the latest finished quarter is what market data covers.
+  function quarterOf(iso) {
+    const d = parseISODate(iso);
+    return Math.floor(d.getMonth() / 3) + 1 + 'Q' + String(d.getFullYear()).slice(2);
+  }
+  function latestDataQuarter(today) {
+    const d = parseISODate(today || todayISO());
+    d.setMonth(d.getMonth() - 3);
+    return quarterOf(toISODate(d));
+  }
+  function quarterKey(q) {
+    const m = /^([1-4])Q(\d{2})$/i.exec(String(q || '').trim());
+    return m ? Number(m[2]) * 4 + Number(m[1]) : null;
+  }
+  // Collateral built on market stats goes stale once a newer quarter's data is out.
+  function collateralStale(item, today) {
+    const k = quarterKey(item.dataQuarter);
+    return k !== null && k < quarterKey(latestDataQuarter(today)) && item.status !== 'Retired';
+  }
+
   // ---------- daily plan ----------
 
   // Days to wait before the next touch, by lead stage.
@@ -361,6 +409,27 @@
       .sort((a, b) => b.prob - a.prob);
 
     const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c));
+
+    // Opened but unanswered emails from the last 3 weeks, where nothing has happened since: follow up while it's warm.
+    const opened = data.activities
+      .filter((a) => a.type === 'Email' && (parseNumber(a.opens) || 0) > 0 && !responded(a) && a.date && a.date >= addDays(today, -21) && a.date <= today)
+      .filter((a) => companies[a.companyId] && !doNotContact(companies[a.companyId]) && !snoozed(companies[a.companyId]) && touches[a.companyId] === a.date)
+      .sort((a, b) => (parseNumber(b.opens) || 0) - (parseNumber(a.opens) || 0) || b.date.localeCompare(a.date))
+      .map((a) => {
+        const contact = data.contacts.find((p) => p.id === a.contactId) || bestContact(a.companyId);
+        const n = parseNumber(a.opens);
+        return {
+          kind: 'opened',
+          activityId: a.id,
+          companyId: a.companyId,
+          contactId: contact ? contact.id : '',
+          title: companies[a.companyId].name,
+          channel: reachChannel(contact),
+          linkedin: contact && contact.linkedin && !contact.linkedinConnected ? contact.linkedin : '',
+          why: `Opened "${a.subject}" ${n === 1 ? 'once' : n + ' times'} (sent ${fmtDate(a.date)}), no reply yet.`,
+        };
+      });
+    const openedIds = new Set(opened.map((o) => o.companyId));
     const expiry = (c) => c.leaseExpiration || '9999-12-31';
     const outreachItem = (c, why) => {
       const contact = bestContact(c.id);
@@ -369,6 +438,7 @@
 
     const followUps = leads
       .filter((c) => {
+        if (openedIds.has(c.id)) return false;
         const wait = FOLLOW_UP_DAYS[leadStage(c)];
         const since = sinceTouch(c.id);
         return wait && (since === null || since >= wait);
@@ -428,6 +498,7 @@
 
     return {
       tasks,
+      opened,
       deals,
       outreach,
       updates: updates.slice(0, 8),
@@ -948,6 +1019,12 @@
     DO_NOT_CONTACT_REASONS,
     doNotContact,
     dailyPlan,
+    OUTCOMES,
+    responded,
+    outreachStats,
+    quarterOf,
+    latestDataQuarter,
+    collateralStale,
     RATE_BASES,
     ACTIVITY_TYPES,
     PROPERTY_STATUSES,

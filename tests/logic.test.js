@@ -339,3 +339,49 @@ test('dailyPlan prioritizes due follow-ups, skips Do-Not-Call numbers and finds 
   assert.deepEqual(plan.updates.map((u) => u.action || u.dealId), ['create-deal', 'y']);
   assert.deepEqual(plan.doorKnock[0].companyIds, ['c', 'a'], 'Bravo was touched this week');
 });
+
+test('outreachStats measures response rates per group', () => {
+  const acts = [
+    { type: 'Email', template: 'Market update', opens: 3, outcome: 'Replied' },
+    { type: 'Email', template: 'Market update', opens: 1 },
+    { type: 'Email', template: 'Following up', opens: 0, replies: 0 },
+    { type: 'Call', outcome: 'Meeting booked' },
+    { type: 'Note', outcome: 'Replied' },
+  ];
+  const byTemplate = L.outreachStats(acts, (a) => a.template);
+  const mu = byTemplate.find((g) => g.key === 'Market update');
+  assert.equal(mu.sent, 2);
+  assert.equal(mu.responseRate, 0.5);
+  assert.equal(mu.openRate, 1);
+  const call = L.outreachStats(acts, (a) => a.type).find((g) => g.key === 'Call');
+  assert.equal(call.meetings, 1);
+  assert.equal(L.outreachStats(acts, (a) => a.type).reduce((t, g) => t + g.sent, 0), 4, 'notes are not outreach');
+});
+
+test('collateral is stale once a newer quarter of market data is out', () => {
+  assert.equal(L.latestDataQuarter('2026-10-20'), '3Q26');
+  assert.equal(L.latestDataQuarter('2027-01-05'), '4Q26');
+  assert.equal(L.collateralStale({ dataQuarter: '2Q26' }, '2026-10-20'), true);
+  assert.equal(L.collateralStale({ dataQuarter: '3Q26' }, '2026-10-20'), false);
+  assert.equal(L.collateralStale({ dataQuarter: '2Q26', status: 'Retired' }, '2026-10-20'), false);
+});
+
+test('dailyPlan surfaces opened-but-unanswered emails ahead of routine follow-ups', () => {
+  const data = {
+    companies: [
+      { id: 'a', name: 'Alpha', leadStage: 'Initial Outreach' },
+      { id: 'b', name: 'Bravo', leadStage: 'Initial Outreach', doNotContact: true },
+    ],
+    contacts: [{ id: 'p', companyId: 'a', firstName: 'Ann', email: 'a@a.com', linkedin: 'https://linkedin.com/in/ann' }],
+    deals: [],
+    activities: [
+      { id: 'e1', type: 'Email', companyId: 'a', contactId: 'p', date: '2026-10-10', subject: 'Q3 market update', opens: 4 },
+      { id: 'e2', type: 'Email', companyId: 'b', date: '2026-10-10', subject: 'Hi', opens: 2 },
+    ],
+  };
+  const plan = L.dailyPlan(data, { today: '2026-10-20' });
+  assert.deepEqual(plan.opened.map((o) => o.companyId), ['a']);
+  assert.match(plan.opened[0].why, /4 times/);
+  assert.equal(plan.opened[0].linkedin, 'https://linkedin.com/in/ann');
+  assert.ok(!plan.outreach.some((o) => o.companyId === 'a'), 'not listed twice');
+});

@@ -158,6 +158,8 @@ ul.plain { margin: 6px 0 0; padding-left: 18px; }
 .seg.wrap { display: flex; flex-wrap: wrap; margin-bottom: 12px; }
 .seg.wrap button { height: 34px; }
 select.inline { height: 28px; font-size: 12px; padding: 0 4px; max-width: 150px; }
+.tbl tr.clickable { cursor: pointer; }
+.tbl tr.clickable:hover td { background: var(--gray-soft); }
 .show-more { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 14px 0; }
 .count { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
 

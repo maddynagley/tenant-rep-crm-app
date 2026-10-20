@@ -23,6 +23,7 @@
       companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', limit: 100 },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', limit: 100 },
       contacts: { q: '' },
+      marketing: { tab: 'collateral', q: '' },
       pipeline: { view: 'board', asset: 'All', showClosed: false },
       activities: { tab: 'open', q: '' },
       expirations: { asset: 'All', horizon: 36, includeClients: true },
@@ -105,6 +106,7 @@
       { key: 'mobileDNC', label: 'Mobile is Do-Not-Call', type: 'checkbox' },
       { key: 'verification', label: 'Verification', type: 'select', options: ['Web-verified', 'ZoomInfo only', 'Unverified'] },
       { key: 'linkedin', label: 'LinkedIn URL', type: 'url', wide: true },
+      { key: 'linkedinConnected', label: 'Connected on LinkedIn', type: 'checkbox' },
       { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
     ],
     deals: [
@@ -171,6 +173,9 @@
       { key: 'dealId', label: 'Deal', type: 'ref', ref: 'deals', filterBy: 'companyId' },
       { key: 'subject', label: 'Subject', required: true, wide: true },
       { key: 'notes', label: 'Notes / outcome', type: 'textarea', wide: true },
+      { key: 'outcome', label: 'Outcome', type: 'select', options: L.OUTCOMES },
+      { key: 'template', label: 'Template / message used', list: () => distinct('activities', 'template') },
+      { key: 'opens', label: 'Email opens', type: 'number' },
       { key: 'followUpDate', label: 'Follow-up date', type: 'date' },
       { key: 'done', label: 'Follow-up complete', type: 'checkbox' },
     ],
@@ -193,7 +198,34 @@
     ],
   };
 
-  const LABELS = { companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
+  const MARKETING_KINDS = ['One-pager / flyer', 'Market report', 'Email campaign', 'Social post', 'Event', 'Other'];
+  const MARKETING_STATUSES = ['Idea', 'Drafting', 'Ready', 'Sent / Posted', 'Retired'];
+  FIELDS.marketing = [
+    { key: 'title', label: 'Title', required: true, wide: true },
+    { key: 'kind', label: 'Type', type: 'select', options: MARKETING_KINDS },
+    { key: 'status', label: 'Status', type: 'select', options: MARKETING_STATUSES },
+    { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES },
+    { key: 'submarket', label: 'Submarket', list: () => distinct('companies', 'submarket').concat(distinct('marketing', 'submarket')) },
+    { key: 'partner', label: 'Partner broker(s)', list: () => distinct('marketing', 'partner') },
+    { key: 'dataQuarter', label: 'Market data as of (e.g. 3Q26)' },
+    { key: 'channel', label: 'Channel', type: 'select', options: ['LinkedIn', 'Email', 'Instagram', 'Print / in person', 'Website'] },
+    { key: 'date', label: 'Publish / send date', type: 'date' },
+    { key: 'link', label: 'Link to file or post (Drive, SharePoint, LinkedIn)', type: 'url', wide: true },
+    { key: 'audience', label: 'Audience (who it is for)', wide: true },
+    { section: 'Results' },
+    { key: 'sentCount', label: 'Sent to (#)', type: 'number' },
+    { key: 'opens', label: 'Opens', type: 'number' },
+    { key: 'replies', label: 'Replies / responses', type: 'number' },
+    { key: 'meetings', label: 'Meetings booked', type: 'number' },
+    { key: 'impressions', label: 'Impressions (social)', type: 'number' },
+    { key: 'reactions', label: 'Reactions (social)', type: 'number' },
+    { key: 'comments', label: 'Comments (social)', type: 'number' },
+    { section: 'Notes' },
+    { key: 'ideas', label: 'Ideas to improve it', type: 'textarea', wide: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
+  ];
+
+  const LABELS = { marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
 
   // ---------- derived data helpers ----------
 
@@ -569,6 +601,30 @@
       </li>`;
     });
 
+    const openedItems = plan.opened.slice(0, 8).map((item) => {
+      const c = S.get('companies', item.companyId);
+      const p = S.get('contacts', item.contactId);
+      return `<li>
+        <div class="fu-body">
+          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${leadBadge(c)}</div>
+          <div class="sub">${esc(item.why)}${p ? ' · ' + esc(contactName(p)) : ''}</div>
+        </div>
+        <div class="todo-actions">${reachLink(item)}
+          ${item.linkedin ? `<a class="btn small" href="${esc(item.linkedin)}" target="_blank" rel="noopener">in Connect</a><button class="btn small ghost" data-action="li-connected" data-contact="${esc(p.id)}">Connected ✓</button>` : ''}
+          ${touchButtons(c.id, item.contactId)}</div>
+      </li>`;
+    });
+    const posts = S.all('marketing').filter((m) => m.kind === 'Social post');
+    const postGoal = Number(s.postsPerWeek) || 0;
+    const postedThisWeek = posts.filter((m) => m.status === 'Sent / Posted' && m.date && m.date >= weekStart(today) && m.date <= today).length;
+    const nextPost = posts.filter((m) => !['Sent / Posted', 'Retired'].includes(m.status)).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))[0];
+    const staleCollateral = S.all('marketing').filter((m) => m.kind !== 'Social post' && L.collateralStale(m, today));
+    const marketingItems = [];
+    if (postGoal && postedThisWeek < postGoal)
+      marketingItems.push(`<li><div class="fu-body"><div><strong>Post on LinkedIn</strong> ${badge(postedThisWeek + ' / ' + postGoal + ' this week', 'amber')}</div><div class="sub">${nextPost ? 'Next up: ' + esc(nextPost.title) : 'No post ideas queued yet.'}</div></div><div class="todo-actions">${nextPost ? `<button class="btn small" data-action="edit" data-col="marketing" data-id="${esc(nextPost.id)}">Open post</button>` : '<a class="btn small" href="#/marketing">Plan a post</a>'}</div></li>`);
+    if (staleCollateral.length)
+      marketingItems.push(`<li><div class="fu-body"><div><strong>Refresh ${staleCollateral.length} piece${staleCollateral.length > 1 ? 's' : ''} of collateral with ${esc(L.latestDataQuarter(today))} data</strong></div><div class="sub">${esc(staleCollateral.slice(0, 3).map((m) => m.title).join(' · '))}</div></div><div class="todo-actions"><a class="btn small" href="#/marketing">Open Marketing</a></div></li>`);
+
     const dealItems = plan.deals.slice(0, 6).map(
       (item) => `<li>
         <div class="fu-body">
@@ -617,20 +673,115 @@
         <a class="kpi" href="#/leads"><span class="kpi-label">Leads waiting on a follow-up</span><span class="kpi-value">${plan.remaining.followUps}</span><span class="kpi-sub">${plan.remaining.fresh} new leads not yet touched</span></a>
         <a class="kpi" href="#/pipeline"><span class="kpi-label">Deals needing attention</span><span class="kpi-value">${plan.deals.length}</span><span class="kpi-sub">stale, past due or expiring rep agreement</span></a>
       </div>
-      ${tasks.length ? `<section class="card"><h2>1. Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
+      ${tasks.length ? `<section class="card"><h2>Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
+      ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
       ${section(
-        `${tasks.length ? 2 : 1}. Reach out today`,
+        'Reach out today',
         outreach,
         'No one to reach out to today. Add leads or check back tomorrow.',
         `<p class="hint">Follow-ups come first (hot, then soonest expiration), then the best brand-new leads. Tap ✓ when done; it logs the touch and drops off the list. New leads move to Initial Outreach automatically.</p>`
       )}
       ${dealItems.length ? section('Deals to move forward', dealItems, '', plan.deals.length > dealItems.length ? `<p class="hint">Top ${dealItems.length} of ${plan.deals.length} by probability. Log an update on each and the next ones appear.</p>` : '') : ''}
+      ${marketingItems.length ? section('Marketing', marketingItems, '') : ''}
       ${updateItems.length ? section('Records to update', updateItems, '', plan.remaining.updates > updateItems.length ? `<p class="hint">Showing ${updateItems.length} of ${plan.remaining.updates}.</p>` : '') : ''}
       ${
         knock.length
           ? `<section class="card"><h2>Rather get out of the office? Door-knock here</h2><p class="hint">Buildings where several of your un-engaged leads sit. One trip covers them all.</p>${knock.join('')}</section>`
           : ''
       }`;
+  }
+
+  // ----- marketing -----
+
+  const pct = (x) => (x ? Math.round(x * 100) + '%' : '0%');
+
+  function weekStart(iso) {
+    const d = L.parseISODate(iso);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Monday
+    return L.toISODate(d);
+  }
+
+  function statsTable(rows, label) {
+    if (!rows.length) return emptyState('Nothing logged yet.');
+    return `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>${esc(label)}</th><th class="right">Sent</th><th class="right">Opened</th><th class="right">Responded</th><th class="right">Meetings</th></tr></thead><tbody>${rows
+      .map(
+        (r) => `<tr><td>${esc(r.key)}</td><td class="right">${r.sent}</td><td class="right">${r.opened ? pct(r.openRate) : '<span class="muted">—</span>'}</td>
+        <td class="right"><strong>${pct(r.responseRate)}</strong> <span class="muted">(${r.responded})</span></td><td class="right">${r.meetings}</td></tr>`
+      )
+      .join('')}</tbody></table></div>`;
+  }
+
+  function viewMarketing() {
+    const f = state.marketing;
+    const today = L.todayISO();
+    const items = S.all('marketing');
+    const q = f.q.trim().toLowerCase();
+    const match = (m) => !q || [m.title, m.kind, m.submarket, m.partner, m.audience, m.notes, m.ideas].join(' ').toLowerCase().includes(q);
+    const collateral = items.filter((m) => m.kind !== 'Social post' && match(m)).sort((a, b) => (b.date || b.updatedAt || '').localeCompare(a.date || a.updatedAt || ''));
+    const posts = items.filter((m) => m.kind === 'Social post' && match(m));
+    const stale = collateral.filter((m) => L.collateralStale(m, today));
+    const goal = Number(S.settings().postsPerWeek) || 0;
+    const thisWeek = posts.filter((p) => p.status === 'Sent / Posted' && p.date && p.date >= weekStart(today) && p.date <= today).length;
+    const latestQ = L.latestDataQuarter(today);
+
+    const tabs = [
+      { v: 'collateral', l: `Collateral (${collateral.length})` },
+      { v: 'social', l: `Social (${posts.length})` },
+      { v: 'outreach', l: 'Outreach results' },
+    ];
+    let body = '';
+    if (f.tab === 'collateral') {
+      body = collateral.length
+        ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Piece</th><th>Asset</th><th>Submarket</th><th>Partner</th><th>Data</th><th>Status</th><th class="right">Sent</th><th class="right">Responses</th></tr></thead><tbody>${collateral
+            .map(
+              (m) => `<tr data-action="edit" data-col="marketing" data-id="${esc(m.id)}" class="clickable">
+              <td><strong>${esc(m.title)}</strong> ${badge(m.kind, 'gray')}${m.link ? ` <a href="${esc(m.link)}" target="_blank" rel="noopener">Open ↗</a>` : ''}${m.ideas ? `<div class="sub clamp" title="${esc(m.ideas)}">Ideas: ${esc(m.ideas)}</div>` : ''}</td>
+              <td>${assetBadge(m.assetClass)}</td><td>${esc(m.submarket)}</td><td>${esc(m.partner)}</td>
+              <td>${esc(m.dataQuarter)} ${L.collateralStale(m, today) ? badge('Update to ' + latestQ, 'amber') : ''}</td>
+              <td>${badge(m.status, m.status === 'Sent / Posted' ? 'green' : m.status === 'Ready' ? 'blue' : 'gray')}</td>
+              <td class="right">${esc(L.fmtNumber(m.sentCount))}</td>
+              <td class="right">${m.sentCount ? pct((L.parseNumber(m.replies) || 0) / L.parseNumber(m.sentCount)) : '<span class="muted">—</span>'}</td></tr>`
+            )
+            .join('')}</tbody></table></div>`
+        : emptyState('No collateral yet. Add your one-pagers, market reports and email campaigns to track them.', '<button class="btn primary" data-action="new" data-col="marketing">+ Collateral</button>');
+    } else if (f.tab === 'social') {
+      const upcoming = posts.filter((p) => !['Sent / Posted', 'Retired'].includes(p.status)).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+      const posted = posts.filter((p) => p.status === 'Sent / Posted').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      const postRow = (p) => `<tr data-action="edit" data-col="marketing" data-id="${esc(p.id)}" class="clickable">
+          <td class="nowrap">${esc(L.fmtDate(p.date)) || '<span class="muted">Unscheduled</span>'}</td><td><strong>${esc(p.title)}</strong>${p.notes ? `<div class="sub clamp">${esc(p.notes)}</div>` : ''}</td>
+          <td>${esc(p.channel)}</td><td>${badge(p.status, 'gray')}</td>
+          <td class="right">${esc(L.fmtNumber(p.impressions))}</td><td class="right">${esc(L.fmtNumber(p.reactions))}</td><td class="right">${esc(L.fmtNumber(p.comments))}</td></tr>`;
+      const head = '<thead><tr><th>Date</th><th>Post</th><th>Channel</th><th>Status</th><th class="right">Impressions</th><th class="right">Reactions</th><th class="right">Comments</th></tr></thead>';
+      body = `<section class="card"><h2>Up next</h2>${upcoming.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${upcoming.map(postRow).join('')}</tbody></table></div>` : emptyState('No post ideas queued.', '<button class="btn" data-action="new" data-col="marketing">+ Post idea</button>')}</section>
+        <section class="card"><h2>Posted</h2>${posted.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${posted.map(postRow).join('')}</tbody></table></div>` : emptyState('Nothing posted yet.')}</section>`;
+    } else {
+      const acts = S.all('activities');
+      const weekday = (a) => (a.date ? L.parseISODate(a.date).toLocaleDateString(undefined, { weekday: 'long' }) : '');
+      body = `<p class="hint">Response = a reply, a live conversation, a meeting, or a clear "not interested". Set the outcome when you log a call or email; emails imported from HubSpot carry their opens and replies.</p>
+        <div class="grid2">
+          <section class="card"><h2>By channel</h2>${statsTable(L.outreachStats(acts, (a) => a.type), 'Channel')}</section>
+          <section class="card"><h2>By template / message</h2>${statsTable(L.outreachStats(acts, (a) => a.template), 'Template')}</section>
+        </div>
+        <div class="grid2">
+          <section class="card"><h2>By day sent</h2>${statsTable(L.outreachStats(acts, weekday), 'Day')}</section>
+          <section class="card"><h2>By lead stage at the time</h2>${statsTable(L.outreachStats(acts, (a) => a.leadStageAtSend), 'Stage')}</section>
+        </div>`;
+    }
+
+    return `
+      <div class="page-head"><h1>Marketing</h1>
+        <div class="actions"><button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button></div>
+      </div>
+      <div class="kpis">
+        <div class="kpi ${goal && thisWeek >= goal ? 'good' : ''}"><span class="kpi-label">Posts this week</span><span class="kpi-value">${thisWeek} / ${goal}</span><span class="kpi-sub">weekly goal (Settings)</span></div>
+        <div class="kpi ${stale.length ? 'alert' : ''}"><span class="kpi-label">Collateral to refresh</span><span class="kpi-value">${stale.length}</span><span class="kpi-sub">market data older than ${esc(latestQ)}</span></div>
+        <div class="kpi"><span class="kpi-label">Pieces tracked</span><span class="kpi-value">${collateral.length}</span><span class="kpi-sub">${posts.length} social posts</span></div>
+      </div>
+      <div class="toolbar">
+        <div class="seg">${tabs.map((t) => `<button class="${f.tab === t.v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="tab" data-value="${t.v}">${esc(t.l)}</button>`).join('')}</div>
+        ${f.tab === 'outreach' ? '' : `<input type="search" placeholder="Search title, submarket, partner…" value="${esc(f.q)}" data-filter="marketing.q" id="f-marketing-q" />`}
+      </div>
+      ${body}`;
   }
 
   // ----- leads -----
@@ -1465,6 +1616,7 @@
             <label>"Going stale" after (days)<input name="staleDays" type="number" value="${esc(s.staleDays)}" /></label>
             <label>House split % (firm keeps)<input name="houseSplitPct" type="number" step="0.1" value="${esc(s.houseSplitPct)}" /></label>
             <label>Daily outreach goal (Today list)<input name="outreachGoal" type="number" min="1" value="${esc(s.outreachGoal)}" /></label>
+            <label>Social posts per week goal<input name="postsPerWeek" type="number" min="0" value="${esc(s.postsPerWeek)}" /></label>
             <div class="wide"><button class="btn primary" type="submit">Save settings</button></div>
           </form>
         </section>
@@ -1572,6 +1724,8 @@
         return { status: 'Target', priority: 'B', growthSignal: 'Unknown', assetClass: state.companies.asset !== 'All' ? state.companies.asset : '' };
       case 'contacts':
         return { companyId: ctx.company || '' };
+      case 'marketing':
+        return { kind: state.marketing.tab === 'social' ? 'Social post' : 'One-pager / flyer', status: 'Drafting', channel: state.marketing.tab === 'social' ? 'LinkedIn' : '', dataQuarter: L.latestDataQuarter(today) };
       case 'deals': {
         const c = S.get('companies', ctx.company);
         return {
@@ -2028,6 +2182,7 @@
     today: viewToday,
     dashboard: viewDashboard,
     leads: viewLeads,
+    marketing: viewMarketing,
     companies: viewCompanies,
     company: viewCompany,
     contacts: viewContacts,
@@ -2095,6 +2250,7 @@
 
   document.addEventListener('click', (e) => {
     const actionEl = e.target.closest('[data-action]');
+    if (actionEl && actionEl.tagName === 'TR' && e.target.closest('a')) return; // a link inside a clickable row
     if (actionEl) {
       const d = actionEl.dataset;
       switch (d.action) {
@@ -2142,11 +2298,15 @@
         case 'log-touch': {
           const c = S.get('companies', d.company);
           const today = L.todayISO();
-          S.upsert('activities', { type: d.type, date: today, companyId: c.id, contactId: d.contact || '', subject: d.type === 'Call' ? 'Called' : 'Emailed' }, { silent: true });
+          S.upsert('activities', { type: d.type, date: today, companyId: c.id, contactId: d.contact || '', subject: d.type === 'Call' ? 'Called' : 'Emailed', leadStageAtSend: L.leadStage(c) }, { silent: true });
           const patch = { id: c.id, lastContacted: today };
           if (L.leadStage(c) === 'New') patch.leadStage = 'Initial Outreach';
           S.upsert('companies', patch);
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
+        }
+        case 'li-connected': {
+          S.upsert('contacts', { id: d.contact, linkedinConnected: true });
+          return toast('Marked as connected on LinkedIn.');
         }
         case 'snooze': {
           const c = S.get('companies', d.company);
