@@ -1,51 +1,61 @@
+/* Palette: warm neutrals (goat milk, antique marble, camel, woodland) with deep wine accents
+   (rubine, tamarind, Italian roast). */
 :root {
-  --bg: #f5f6f8;
-  --panel: #ffffff;
-  --text: #1b1f27;
-  --muted: #6b7280;
-  --border: #e3e6eb;
-  --accent: #2456c8;
-  --accent-soft: #e8eefb;
-  --red: #c0392b;
-  --red-soft: #fdecea;
-  --amber: #a86400;
-  --amber-soft: #fff4e0;
-  --green: #1e7e4a;
-  --green-soft: #e5f5ec;
-  --blue: #2456c8;
-  --blue-soft: #e8eefb;
-  --gray-soft: #eef0f3;
-  --office: #5b3fc4;
-  --office-soft: #efebfc;
-  --industrial: #9a5a12;
-  --industrial-soft: #f8eedf;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --radius: 10px;
-  --nav-w: 220px;
+  --bg: #f4f1ea;
+  --panel: #fdfcf9;
+  --text: #191a1e;
+  --muted: #6f604c;
+  --border: #e2dcd0;
+  --accent: #8d3a3c;
+  --accent-soft: #f3e7e4;
+  --red: #9b2c2c;
+  --red-soft: #f6e3e1;
+  --amber: #85642a;
+  --amber-soft: #f3ebdc;
+  --green: #4f6b4a;
+  --green-soft: #e7ede3;
+  --blue: #56483b;
+  --blue-soft: #ece7e0;
+  --gray-soft: #efebe3;
+  --office: #56483b;
+  --office-soft: #e9e3d9;
+  --industrial: #7b694e;
+  --industrial-soft: #f1eadf;
+  --camel: #c6b39a;
+  --nav-bg: #280b0f;
+  --nav-text: #e7e5db;
+  --nav-muted: #ad9e89;
+  --nav-hover: #3b1319;
+  --shadow: 0 1px 2px rgba(40, 11, 15, 0.04), 0 4px 14px rgba(40, 11, 15, 0.04);
+  --radius: 12px;
+  --nav-w: 224px;
+  --serif: 'Playfair Display', 'Iowan Old Style', 'Times New Roman', serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121418;
-    --panel: #1b1e24;
-    --text: #e6e8ec;
-    --muted: #9aa1ad;
-    --border: #2c3038;
-    --accent: #6d97f2;
-    --accent-soft: #1f2a44;
-    --red: #f07b6e;
-    --red-soft: #3a1f1c;
-    --amber: #f0b45a;
-    --amber-soft: #3a2c15;
-    --green: #5fcf8e;
-    --green-soft: #173123;
-    --blue: #6d97f2;
-    --blue-soft: #1f2a44;
-    --gray-soft: #262a31;
-    --office: #a993f5;
-    --office-soft: #2a2343;
-    --industrial: #e2a45c;
-    --industrial-soft: #3a2a17;
+    --bg: #1a0b0e;
+    --panel: #241316;
+    --text: #e7e5db;
+    --muted: #ad9e89;
+    --border: #3a2428;
+    --accent: #c6b39a;
+    --accent-soft: #3b1319;
+    --red: #e08a84;
+    --red-soft: #3d1a1c;
+    --amber: #d9b77a;
+    --amber-soft: #352816;
+    --green: #9cb894;
+    --green-soft: #1f2a1d;
+    --blue: #c8c2b7;
+    --blue-soft: #2e2224;
+    --gray-soft: #2e1d20;
+    --office: #c8c2b7;
+    --office-soft: #2e2224;
+    --industrial: #c6b39a;
+    --industrial-soft: #33261c;
+    --nav-bg: #120608;
+    --nav-hover: #2a1014;
     color-scheme: dark;
   }
 }
@@ -53,13 +63,13 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font: 14px/1.5 Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-h1 { font-size: 22px; margin: 0; }
+h1 { font-family: var(--serif); font-weight: 600; font-size: 28px; letter-spacing: -0.01em; margin: 0; }
 h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; }
 h2 .more { margin-left: auto; font-weight: 500; font-size: 13px; }
 h3.form-section { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 8px 0 0; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
@@ -250,7 +260,7 @@ dl.info dd { margin: 0; overflow-wrap: anywhere; }
 
 /* modal form */
 dialog { border: 1px solid var(--border); border-radius: 14px; padding: 0; width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 40px); background: var(--panel); color: var(--text); }
-dialog::backdrop { background: rgba(10, 14, 20, 0.45); }
+dialog::backdrop { background: rgba(40, 11, 15, 0.45); }
 dialog form { display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
 dialog header, dialog footer { display: flex; align-items: center; gap: 8px; padding: 14px 18px; }
 dialog header { border-bottom: 1px solid var(--border); }
@@ -309,3 +319,28 @@ dialog .form-grid { padding: 16px 18px; overflow-y: auto; }
 .coach-list li.done .coach-status { color: var(--green); }
 @media (min-width: 1200px) { body.coach-open main { margin-right: 340px; } }
 @media (max-width: 860px) { .coach { width: auto; left: 0; } .coach-btn { padding: 0 8px; } }
+
+
+/* ---------- neutral theme ---------- */
+.brand { font-family: var(--serif); font-weight: 600; font-size: 17px; letter-spacing: 0.01em; }
+.logo { background: var(--nav-bg); color: var(--camel); border-radius: 8px; padding: 4px 7px; font-family: var(--serif); font-size: 13px; letter-spacing: 0.04em; }
+.nav { background: var(--nav-bg); border-right: 0; padding: 14px 10px; }
+.nav a { color: var(--nav-text); padding: 9px 12px; border-left: 2px solid transparent; border-radius: 6px; }
+.nav a:hover { background: var(--nav-hover); }
+.nav a.active { background: var(--nav-hover); color: #fff; font-weight: 600; border-left-color: var(--camel); }
+.nav a .ico, .nav a span.ico { width: 18px; height: 18px; display: inline-flex; color: var(--nav-muted); }
+.nav a.active .ico { color: var(--camel); }
+.ico svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.nav .pill { background: var(--camel); color: var(--nav-bg); font-weight: 700; }
+.nav-foot { color: var(--nav-muted); }
+.card h2 { font-weight: 600; }
+.kpi { border-top: 3px solid var(--camel); }
+.kpi-value { font-family: var(--serif); font-weight: 600; font-size: 30px; font-variant-numeric: lining-nums; }
+.big { font-family: var(--serif); font-variant-numeric: lining-nums; }
+.kpi.good { background: linear-gradient(180deg, var(--green-soft), var(--panel) 70%); }
+.kpi-goal { font-size: 12px; font-weight: 600; color: var(--green); }
+.btn { border-radius: 8px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fdfcf9; }
+.seg button.on { background: var(--accent-soft); color: var(--accent); }
+.greeting-sub { color: var(--muted); margin-top: 2px; }
+#confetti { position: fixed; inset: 0; pointer-events: none; z-index: 100; }

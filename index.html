@@ -4,32 +4,35 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tenant Rep CRM</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232456c8'/><path d='M8 25V11l8-4 8 4v14h-5v-7h-6v7z' fill='white'/></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23280B0F'/><path d='M8 25V11l8-4 8 4v14h-5v-7h-6v7z' fill='white'/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap" />
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
     <header class="topbar">
       <button class="icon-btn menu" data-action="toggle-nav" aria-label="Menu">☰</button>
-      <a class="brand" href="#/today"><span class="logo">TR</span> Tenant Rep CRM</a>
-      <button class="btn small coach-btn" data-action="toggle-coach" title="Coach: what's working and what to improve">💡 Coach <em id="coach-count" class="pill"></em></button>
+      <a class="brand" href="#/today"><span class="logo" id="logo">TR</span> Tenant Rep CRM</a>
+      <button class="btn small coach-btn" data-action="toggle-coach" title="Coach: what's working and what to improve">Coach <em id="coach-count" class="pill"></em></button>
       <div id="backup-nag" class="nag" hidden>
         <span id="backup-nag-text"></span>
         <button class="link" data-action="export-json">Export backup</button>
       </div>
     </header>
     <nav class="nav" aria-label="Main">
-      <a href="#/today" data-route="today"><span>☀</span> Today</a>
-      <a href="#/dashboard" data-route="dashboard"><span>◧</span> Dashboard</a>
-      <a href="#/leads" data-route="leads"><span>◎</span> Leads</a>
-      <a href="#/pipeline" data-route="pipeline"><span>▤</span> Pipeline</a>
-      <a href="#/companies" data-route="companies"><span>▦</span> Companies</a>
-      <a href="#/expirations" data-route="expirations"><span>◷</span> Lease Expirations</a>
-      <a href="#/portfolio" data-route="portfolio"><span>$</span> Portfolio</a>
-      <a href="#/marketing" data-route="marketing"><span>✎</span> Marketing</a>
-      <a href="#/comps" data-route="comps"><span>⚑</span> Comps & Dates</a>
-      <a href="#/activities" data-route="activities"><span>✓</span> Follow-ups <em id="nav-due" class="pill"></em></a>
-      <a href="#/contacts" data-route="contacts"><span>☺</span> Contacts</a>
-      <a href="#/data" data-route="data"><span>⇅</span> Import / Settings</a>
+      <a href="#/today" data-route="today"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span> Today</a>
+      <a href="#/dashboard" data-route="dashboard"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg></span> Dashboard</a>
+      <a href="#/leads" data-route="leads"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span> Leads</a>
+      <a href="#/pipeline" data-route="pipeline"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="11" rx="1"/><rect x="17" y="4" width="4" height="7" rx="1"/></svg></span> Pipeline</a>
+      <a href="#/companies" data-route="companies"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M15 9h4a1 1 0 0 1 1 1v11M3 21h18M8 8h3M8 12h3M8 16h3"/></svg></span> Companies</a>
+      <a href="#/expirations" data-route="expirations"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg></span> Lease Expirations</a>
+      <a href="#/portfolio" data-route="portfolio"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span> Portfolio</a>
+      <a href="#/marketing" data-route="marketing"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1zM16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/></svg></span> Marketing</a>
+      <a href="#/comps" data-route="comps"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span> Comps & Dates</a>
+      <a href="#/activities" data-route="activities"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span> Follow-ups <em id="nav-due" class="pill"></em></a>
+      <a href="#/contacts" data-route="contacts"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></svg></span> Contacts</a>
+      <a href="#/data" data-route="data"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></span> Import / Settings</a>
       <p class="nav-foot">Data is stored in this browser. Back up from Import / Settings.</p>
     </nav>
     <main id="view"></main>

@@ -582,7 +582,7 @@
     if (!to.length) return '<a class="btn small" href="#/data" title="Add the research team in Import / Settings">Add research emails</a>';
     const first = String(s.brokerName || '').split(' ')[0];
     const mail = L.researchRequestEmail(quarter, S.all('marketing'), { to, signature: first });
-    return `<a class="btn small" href="mailto:${to.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(mail.subject)}&body=${encodeURIComponent(mail.body)}">✉ Draft email</a>`;
+    return `<a class="btn small" href="mailto:${to.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(mail.subject)}&body=${encodeURIComponent(mail.body)}">Draft email</a>`;
   }
 
   function followUpList(list) {
@@ -621,11 +621,11 @@
     const p = S.get('contacts', item.contactId);
     switch (item.channel) {
       case 'Call':
-        return `<a class="btn small" href="tel:${esc(callableNumber(p))}">☎ Call ${esc(p.firstName)}</a>`;
+        return `<a class="btn small" href="tel:${esc(callableNumber(p))}">Call ${esc(p.firstName)}</a>`;
       case 'Email':
-        return `<a class="btn small" href="mailto:${esc(p.email)}">✉ Email ${esc(p.firstName)}</a>`;
+        return `<a class="btn small" href="mailto:${esc(p.email)}">Email ${esc(p.firstName)}</a>`;
       case 'LinkedIn':
-        return `<a class="btn small" href="${esc(p.linkedin)}" target="_blank" rel="noopener">in Message ${esc(p.firstName)}</a>`;
+        return `<a class="btn small" href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ${esc(p.firstName)}</a>`;
       default:
         return `<a class="btn small" href="#/company/${esc(item.companyId)}">Find a contact</a>`;
     }
@@ -636,6 +636,58 @@
     return `<button class="btn small" data-action="log-touch" data-type="Call" ${attrs} title="Log a call today">✓ Called</button>
       <button class="btn small" data-action="log-touch" data-type="Email" ${attrs} title="Log an email today">✓ Emailed</button>
       <button class="btn small ghost" data-action="snooze" data-company="${esc(companyId)}" title="Hide from Today for a week">Snooze</button>`;
+  }
+
+  function greeting() {
+    const h = new Date().getHours();
+    const first = String(S.settings().brokerName || '').trim().split(/\s+/)[0];
+    return (h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening') + (first ? ', ' + first : '');
+  }
+
+  function dayLine(followUps, outreach) {
+    const parts = [];
+    if (followUps) parts.push(followUps + (followUps === 1 ? ' follow-up due' : ' follow-ups due'));
+    if (outreach) parts.push(outreach + ' people to reach out to');
+    return parts.length ? parts.join(' and ') : 'a clear day';
+  }
+
+  // A brief burst in the palette's colors when a deal closes. Skipped for people who prefer reduced motion.
+  function celebrate() {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const canvas = document.createElement('canvas');
+    canvas.id = 'confetti';
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+    document.body.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    const colors = ['#c6b39a', '#8d3a3c', '#e7e5db', '#7b694e', '#3b1319'];
+    const bits = Array.from({ length: 140 }, () => ({
+      x: innerWidth / 2 + (Math.random() - 0.5) * 160,
+      y: innerHeight / 3,
+      vx: (Math.random() - 0.5) * 12,
+      vy: -Math.random() * 11 - 3,
+      r: Math.random() * Math.PI,
+      w: 5 + Math.random() * 5,
+      c: colors[Math.floor(Math.random() * colors.length)],
+    }));
+    const start = performance.now();
+    (function frame(t) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      bits.forEach((b) => {
+        b.x += b.vx;
+        b.y += b.vy;
+        b.vy += 0.35;
+        b.r += 0.1;
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.rotate(b.r);
+        ctx.fillStyle = b.c;
+        ctx.fillRect(-b.w / 2, -b.w / 4, b.w, b.w / 2);
+        ctx.restore();
+      });
+      if (t - start < 1800) requestAnimationFrame(frame);
+      else canvas.remove();
+    })(start);
   }
 
   function viewToday() {
@@ -672,7 +724,7 @@
           <div class="sub">${esc(item.why)}${p ? ' · ' + esc(contactName(p)) : ''}</div>
         </div>
         <div class="todo-actions">${reachLink(item)}
-          ${item.linkedin ? `<a class="btn small" href="${esc(item.linkedin)}" target="_blank" rel="noopener">in Connect</a><button class="btn small ghost" data-action="li-connected" data-contact="${esc(p.id)}">Connected ✓</button>` : ''}
+          ${item.linkedin ? `<a class="btn small" href="${esc(item.linkedin)}" target="_blank" rel="noopener">Connect on LinkedIn</a><button class="btn small ghost" data-action="li-connected" data-contact="${esc(p.id)}">Connected ✓</button>` : ''}
           ${touchButtons(c.id, item.contactId)}</div>
       </li>`;
     });
@@ -733,11 +785,11 @@
       `<section class="card"><h2>${title}</h2>${extra || ''}${items.length ? `<ul class="followups todo">${items.join('')}</ul>` : emptyState(empty)}</section>`;
 
     return `
-      <div class="page-head"><div><h1>Today</h1><div class="muted">${esc(dateLabel)}</div></div>
+      <div class="page-head"><div><h1>${esc(greeting())}</h1><div class="greeting-sub">${esc(dateLabel)} · ${esc(dayLine(tasks.length, plan.outreach.length))}</div></div>
         <div class="actions"><button class="btn" data-action="new" data-col="activities">Log activity</button></div>
       </div>
       <div class="kpis">
-        <div class="kpi ${touchedToday >= goal ? 'good' : ''}"><span class="kpi-label">Touches logged today</span><span class="kpi-value">${touchedToday} / ${goal}</span><span class="kpi-sub">calls, emails, meetings</span></div>
+        <div class="kpi ${touchedToday >= goal ? 'good' : ''}"><span class="kpi-label">Touches logged today</span><span class="kpi-value">${touchedToday} / ${goal}</span><span class="kpi-sub">${touchedToday >= goal ? '<span class="kpi-goal">Goal met. Nice work.</span>' : 'calls, emails, meetings'}</span></div>
         <a class="kpi ${tasks.length ? 'alert' : ''}" href="#/activities"><span class="kpi-label">Follow-ups due</span><span class="kpi-value">${tasks.length}</span><span class="kpi-sub">today or overdue</span></a>
         <a class="kpi" href="#/leads"><span class="kpi-label">Leads waiting on a follow-up</span><span class="kpi-value">${plan.remaining.followUps}</span><span class="kpi-sub">${plan.remaining.fresh} new leads not yet touched</span></a>
         <a class="kpi" href="#/pipeline"><span class="kpi-label">Deals needing attention</span><span class="kpi-value">${plan.deals.length}</span><span class="kpi-sub">stale, past due or expiring rep agreement</span></a>
@@ -1211,7 +1263,7 @@
                   .map(
                     (p) => `<tr><td><strong>${esc(contactName(p))}</strong> ${p.role ? badge(p.role, p.role === 'Decision Maker' ? 'green' : 'gray') : ''} ${verificationBadge(p.verification)}<div class="sub">${esc(p.title)}</div>${p.notes ? `<div class="sub clamp" title="${esc(p.notes)}">${esc(p.notes)}</div>` : ''}</td>
                     <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}${p.mobile ? ' · ' + phoneLink(p.mobile, p.mobileDNC, '(m)') : ''}</div>${p.linkedin ? `<div class="sub"><a href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ↗</a></div>` : ''}</td>
-                    <td class="right nowrap"><button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">☎</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
+                    <td class="right nowrap"><button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
                   )
                   .join('')}</tbody></table>`
               : emptyState('No contacts yet.')
@@ -1337,7 +1389,7 @@
               <td class="nowrap">${phoneLink(c.phone, c.phoneDNC)}${c.mobile ? `<div class="sub">${phoneLink(c.mobile, c.mobileDNC, '(m)')}</div>` : ''}</td>
               <td>${touches[c.id] ? esc(L.fmtDate(touches[c.id])) : '<span class="muted">Never</span>'}</td>
               <td class="right nowrap">${c.linkedin ? `<a class="icon-btn" href="${esc(c.linkedin)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}
-                <button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(c.companyId)}" data-contact="${esc(c.id)}" title="Log activity">☎</button>
+                <button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(c.companyId)}" data-contact="${esc(c.id)}" title="Log activity">Log</button>
                 <button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(c.id)}" title="Edit">✎</button>
                 <button class="icon-btn" data-action="delete" data-col="contacts" data-id="${esc(c.id)}" title="Delete">✕</button></td></tr>`
             )
@@ -2024,6 +2076,7 @@
     const rec = readForm(form, col);
     if (form.dataset.id) rec.id = form.dataset.id;
     if (col === 'deals' && rec.stage === 'Closed Won' && !rec.closedDate) rec.closedDate = L.todayISO();
+    if (col === 'deals' && rec.stage === 'Closed Won' && (!form.dataset.id || S.get('deals', form.dataset.id).stage !== 'Closed Won')) setTimeout(celebrate, 200);
     const wasSecured = col === 'companies' && form.dataset.id && L.leadStage(S.get('companies', form.dataset.id)) === 'Secured Lead';
     const saved = S.upsert(col, rec);
     if (col === 'companies' && !wasSecured && L.leadStage(saved) === 'Secured Lead' && createDealForLead(saved.id)) toast('Secured! Created a deal in Intro Call.');
@@ -2426,6 +2479,8 @@
     const openCount = openFollowUps().filter((a) => activityDue(a) <= L.todayISO()).length;
     $('#nav-due').textContent = openCount || '';
     renderBackupNag();
+    const initials = String(S.settings().brokerName || '').trim().split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase()).slice(0, 2).join('');
+    $('#logo').textContent = initials || 'TR';
     renderCoach();
 
     if (focusId && $('#' + focusId)) {
@@ -2508,6 +2563,7 @@
         case 'set-stage': {
           const patch = { id: d.id, stage: d.stage };
           if (d.stage === 'Closed Won' && !S.get('deals', d.id).closedDate) patch.closedDate = L.todayISO();
+          if (d.stage === 'Closed Won' && S.get('deals', d.id).stage !== 'Closed Won') celebrate();
           S.upsert('deals', patch);
           return toast('Stage → ' + d.stage);
         }
@@ -2764,6 +2820,7 @@
     if (deal && deal.stage !== col.dataset.stage) {
       const patch = { id, stage: col.dataset.stage };
       if (patch.stage === 'Closed Won' && !deal.closedDate) patch.closedDate = L.todayISO();
+      if (patch.stage === 'Closed Won') celebrate();
       S.upsert('deals', patch);
       toast(deal.name + ' → ' + col.dataset.stage);
     } else render();
