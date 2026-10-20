@@ -20,6 +20,7 @@
     sheetSyncUrl: '',
     sheetSyncKey: '',
     sheetLastSync: '',
+    outreachGoal: 10,
   };
 
   function emptyDb() {
@@ -33,6 +34,9 @@
     out.settings = Object.assign({}, DEFAULT_SETTINGS, (db && db.settings) || {});
     COLLECTIONS.forEach((c) => {
       if (!Array.isArray(out[c])) out[c] = [];
+    });
+    out.deals.forEach((d) => {
+      if (d.stage) d.stage = L.normalizeDealStage(d.stage);
     });
     return out;
   }
@@ -135,6 +139,7 @@
   }
 
   // mode 'replace' swaps everything; 'merge' adds/updates records by id.
+  // A patchOnly file only updates records that already exist (it carries partial records).
   function importJSON(text, mode) {
     const incoming = normalize(JSON.parse(text));
     if (mode === 'replace') {
@@ -147,7 +152,7 @@
         incoming[c].forEach((rec) => {
           const existing = get(c, rec.id);
           if (existing) Object.assign(existing, rec);
-          else db[c].push(rec);
+          else if (!incoming.patchOnly) db[c].push(rec);
         });
       });
     }
@@ -204,7 +209,7 @@
     const deals = bulkInsert('deals', [
       { name: 'Northwind – Expansion / Relocation', companyId: id('Northwind Analytics'), dealType: 'Relocation', assetClass: 'Office', stage: 'Market Survey', sfMin: 32000, sfMax: 40000, estSF: 36000, targetSubmarkets: 'CBD, Midtown', budgetRate: 50, rateBasis: 'Full Service ($/SF/yr)', termMonths: 88, escalationPct: 3, freeRentMonths: 8, commissionPct: s.defaultCommissionPct, targetOccupancy: inMonths(19), targetClose: inMonths(8), repAgreementSigned: true, repAgreementExpires: inMonths(12), requirements: 'Open plan, 2 training rooms, near transit, 2.5/1000 parking.' },
       { name: 'Summit – Freezer Expansion', companyId: id('Summit Cold Chain Logistics'), dealType: 'Expansion', assetClass: 'Industrial', stage: 'Pitching', sfMin: 220000, sfMax: 260000, estSF: 240000, targetSubmarkets: 'Airport Industrial, I-5 Corridor', budgetRate: 8.25, rateBasis: 'NNN ($/SF/yr)', termMonths: 120, escalationPct: 3.5, freeRentMonths: 4, commissionPct: 3, targetClose: inMonths(14), requirements: '36’ clear, ESFR, 50+ dock doors, 4,000A power, trailer parking 100+.' },
-      { name: 'BrightPath – Renewal vs. Relocation', companyId: id('BrightPath Health Partners'), dealType: 'Renewal', assetClass: 'Office', stage: 'RFP / Proposals', sfMin: 20000, sfMax: 25000, estSF: 22000, targetSubmarkets: 'North Suburban', budgetRate: 32, rateBasis: 'Full Service ($/SF/yr)', termMonths: 120, escalationPct: 2.5, freeRentMonths: 6, commissionPct: s.defaultCommissionPct, targetOccupancy: inMonths(9), targetClose: inMonths(3), repAgreementSigned: true, repAgreementExpires: inMonths(10), requirements: 'Medical-grade HVAC, ground floor preferred, 5/1000 parking.' },
+      { name: 'BrightPath – Renewal vs. Relocation', companyId: id('BrightPath Health Partners'), dealType: 'Renewal', assetClass: 'Office', stage: 'RFP', sfMin: 20000, sfMax: 25000, estSF: 22000, targetSubmarkets: 'North Suburban', budgetRate: 32, rateBasis: 'Full Service ($/SF/yr)', termMonths: 120, escalationPct: 2.5, freeRentMonths: 6, commissionPct: s.defaultCommissionPct, targetOccupancy: inMonths(9), targetClose: inMonths(3), repAgreementSigned: true, repAgreementExpires: inMonths(10), requirements: 'Medical-grade HVAC, ground floor preferred, 5/1000 parking.' },
       { name: 'Precision Fab – Renewal', companyId: id('Precision Fab Works'), dealType: 'Renewal', assetClass: 'Industrial', stage: 'Closed Won', estSF: 62000, budgetRate: 6.75, rateBasis: 'NNN ($/SF/yr)', termMonths: 60, escalationPct: 3, commissionPct: 4, targetClose: days(-40) },
     ]);
 

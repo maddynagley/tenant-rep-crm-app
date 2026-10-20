@@ -21,6 +21,7 @@
   const state = mergeUIState(
     {
       companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', limit: 100 },
+      leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', limit: 100 },
       contacts: { q: '' },
       pipeline: { view: 'board', asset: 'All', showClosed: false },
       activities: { tab: 'open', q: '' },
@@ -62,6 +63,9 @@
       { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES, required: true },
       { key: 'industry', label: 'Industry', list: () => distinct('companies', 'industry') },
       { key: 'status', label: 'Status', type: 'select', options: L.COMPANY_STATUSES },
+      { key: 'leadStage', label: 'Lead stage', type: 'select', options: L.LEAD_STAGES },
+      { key: 'leadTemp', label: 'Lead temperature', type: 'select', options: L.LEAD_TEMPS },
+      { key: 'snoozeUntil', label: 'Hide from Today list until', type: 'date' },
       { key: 'priority', label: 'Priority', type: 'select', options: ['A', 'B', 'C'] },
       { key: 'growthSignal', label: 'Growth signal', type: 'select', options: GROWTH },
       { key: 'source', label: 'Lead source', list: () => Array.from(new Set(SOURCES.concat(distinct('companies', 'source')))) },
@@ -294,6 +298,13 @@
     return badge(v, v === 'Web-verified' ? 'green' : v === 'ZoomInfo only' ? 'amber' : 'gray');
   }
 
+  function leadBadge(c) {
+    const st = L.leadStage(c);
+    if (!st) return '';
+    const cls = { 'Secured Lead': 'green', Engaged: 'blue', 'Follow Up': 'amber', 'Initial Outreach': 'amber', 'Dead Lead': 'red' }[st] || 'gray';
+    return badge('Lead: ' + st, cls) + (c.leadTemp ? ' ' + badge(c.leadTemp, { Hot: 'red', Warm: 'amber', Cold: 'blue' }[c.leadTemp]) : '');
+  }
+
   function linkCompany(id) {
     const c = S.get('companies', id);
     return c ? `<a href="#/company/${esc(id)}">${esc(c.name)}</a>` : '<span class="muted">—</span>';
@@ -498,6 +509,209 @@
       .join('')}</ul>`;
   }
 
+  // ----- today -----
+
+  const TOUCH_TYPES = ['Call', 'Email', 'Meeting', 'Tour', 'LinkedIn', 'Pitch', 'Proposal'];
+
+  function callableNumber(p) {
+    if (!p) return '';
+    if (p.phone && !p.phoneDNC) return p.phone;
+    return p.mobile && !p.mobileDNC ? p.mobile : '';
+  }
+
+  // The "reach out" link for a lead: tap-to-call (never a Do-Not-Call number), email, LinkedIn, or go find a contact.
+  function reachLink(item) {
+    const p = S.get('contacts', item.contactId);
+    switch (item.channel) {
+      case 'Call':
+        return `<a class="btn small" href="tel:${esc(callableNumber(p))}">☎ Call ${esc(p.firstName)}</a>`;
+      case 'Email':
+        return `<a class="btn small" href="mailto:${esc(p.email)}">✉ Email ${esc(p.firstName)}</a>`;
+      case 'LinkedIn':
+        return `<a class="btn small" href="${esc(p.linkedin)}" target="_blank" rel="noopener">in Message ${esc(p.firstName)}</a>`;
+      default:
+        return `<a class="btn small" href="#/company/${esc(item.companyId)}">Find a contact</a>`;
+    }
+  }
+
+  function touchButtons(companyId, contactId) {
+    const attrs = `data-company="${esc(companyId)}" data-contact="${esc(contactId || '')}"`;
+    return `<button class="btn small" data-action="log-touch" data-type="Call" ${attrs} title="Log a call today">✓ Called</button>
+      <button class="btn small" data-action="log-touch" data-type="Email" ${attrs} title="Log an email today">✓ Emailed</button>
+      <button class="btn small ghost" data-action="snooze" data-company="${esc(companyId)}" title="Hide from Today for a week">Snooze</button>`;
+  }
+
+  function viewToday() {
+    const s = S.settings();
+    if (!S.all('companies').length) return viewDashboard();
+    const today = L.todayISO();
+    const plan = L.dailyPlan(
+      { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') },
+      { today, outreachGoal: s.outreachGoal }
+    );
+    const touchedToday = S.all('activities').filter((a) => a.date === today && TOUCH_TYPES.includes(a.type)).length;
+    const goal = Number(s.outreachGoal) || 10;
+    const dateLabel = L.parseISODate(today).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    const tasks = plan.tasks.map((t) => S.get('activities', t.activityId));
+
+    const outreach = plan.outreach.map((item) => {
+      const c = S.get('companies', item.companyId);
+      const p = S.get('contacts', item.contactId);
+      return `<li>
+        <div class="fu-body">
+          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${leadBadge(c)}</div>
+          <div class="sub">${esc(item.why)}${p ? ' · ' + esc(contactName(p)) + (p.title ? ', ' + esc(p.title) : '') : ''}</div>
+        </div>
+        <div class="todo-actions">${reachLink(item)} ${touchButtons(c.id, item.contactId)}</div>
+      </li>`;
+    });
+
+    const dealItems = plan.deals.slice(0, 6).map(
+      (item) => `<li>
+        <div class="fu-body">
+          <div><a href="#/deal/${esc(item.dealId)}"><strong>${esc(item.title)}</strong></a> ${badge(item.stage, 'blue')}</div>
+          <div class="sub">${esc(item.why)}</div>
+        </div>
+        <div class="todo-actions"><button class="btn small" data-action="new" data-col="activities" data-company="${esc(item.companyId)}" data-deal="${esc(item.dealId)}">Log update</button>
+        <button class="btn small ghost" data-action="edit" data-col="deals" data-id="${esc(item.dealId)}">Edit deal</button></div>
+      </li>`
+    );
+
+    const updateItems = plan.updates.map((item) => {
+      const action =
+        item.action === 'create-deal'
+          ? `<button class="btn small" data-action="new" data-col="deals" data-company="${esc(item.companyId)}">Start deal</button>`
+          : item.dealId
+            ? `<button class="btn small" data-action="edit" data-col="deals" data-id="${esc(item.dealId)}">Update deal</button>`
+            : `<button class="btn small" data-action="edit" data-col="companies" data-id="${esc(item.companyId)}">Update company</button>`;
+      return `<li><div class="fu-body"><div><a href="${item.dealId ? '#/deal/' + esc(item.dealId) : '#/company/' + esc(item.companyId)}"><strong>${esc(item.title)}</strong></a></div><div class="sub">${esc(item.why)}</div></div><div class="todo-actions">${action}</div></li>`;
+    });
+
+    const knock = plan.doorKnock.map((g) => {
+      const maps = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(g.address);
+      return `<div class="knock">
+        <div><strong>${esc(g.building || g.address)}</strong> <span class="muted">${esc(g.building ? g.address : '')}</span> · ${g.companyIds.length} leads · <a href="${esc(maps)}" target="_blank" rel="noopener">Map ↗</a></div>
+        <ul class="plain">${g.companyIds
+          .slice(0, 8)
+          .map((id) => {
+            const c = S.get('companies', id);
+            return `<li><a href="#/company/${esc(id)}">${esc(c.name)}</a>${c.floor ? ' <span class="muted">· ' + esc(c.floor) + '</span>' : ''} ${c.leaseExpiration ? '<span class="muted">· exp. ' + esc(L.fmtDate(c.leaseExpiration)) + '</span>' : ''}</li>`;
+          })
+          .join('')}${g.companyIds.length > 8 ? `<li class="muted">+ ${g.companyIds.length - 8} more in this building (soonest expirations shown)</li>` : ''}</ul>
+      </div>`;
+    });
+
+    const section = (title, items, empty, extra) =>
+      `<section class="card"><h2>${title}</h2>${extra || ''}${items.length ? `<ul class="followups todo">${items.join('')}</ul>` : emptyState(empty)}</section>`;
+
+    return `
+      <div class="page-head"><div><h1>Today</h1><div class="muted">${esc(dateLabel)}</div></div>
+        <div class="actions"><button class="btn" data-action="new" data-col="activities">Log activity</button></div>
+      </div>
+      <div class="kpis">
+        <div class="kpi ${touchedToday >= goal ? 'good' : ''}"><span class="kpi-label">Touches logged today</span><span class="kpi-value">${touchedToday} / ${goal}</span><span class="kpi-sub">calls, emails, meetings</span></div>
+        <a class="kpi ${tasks.length ? 'alert' : ''}" href="#/activities"><span class="kpi-label">Follow-ups due</span><span class="kpi-value">${tasks.length}</span><span class="kpi-sub">today or overdue</span></a>
+        <a class="kpi" href="#/leads"><span class="kpi-label">Leads waiting on a follow-up</span><span class="kpi-value">${plan.remaining.followUps}</span><span class="kpi-sub">${plan.remaining.fresh} new leads not yet touched</span></a>
+        <a class="kpi" href="#/pipeline"><span class="kpi-label">Deals needing attention</span><span class="kpi-value">${plan.deals.length}</span><span class="kpi-sub">stale, past due or expiring rep agreement</span></a>
+      </div>
+      ${tasks.length ? `<section class="card"><h2>1. Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
+      ${section(
+        `${tasks.length ? 2 : 1}. Reach out today`,
+        outreach,
+        'No one to reach out to today. Add leads or check back tomorrow.',
+        `<p class="hint">Follow-ups come first (hot, then soonest expiration), then the best brand-new leads. Tap ✓ when done; it logs the touch and drops off the list. New leads move to Initial Outreach automatically.</p>`
+      )}
+      ${dealItems.length ? section('Deals to move forward', dealItems, '', plan.deals.length > dealItems.length ? `<p class="hint">Top ${dealItems.length} of ${plan.deals.length} by probability. Log an update on each and the next ones appear.</p>` : '') : ''}
+      ${updateItems.length ? section('Records to update', updateItems, '', plan.remaining.updates > updateItems.length ? `<p class="hint">Showing ${updateItems.length} of ${plan.remaining.updates}.</p>` : '') : ''}
+      ${
+        knock.length
+          ? `<section class="card"><h2>Rather get out of the office? Door-knock here</h2><p class="hint">Buildings where several of your un-engaged leads sit. One trip covers them all.</p>${knock.join('')}</section>`
+          : ''
+      }`;
+  }
+
+  // ----- leads -----
+
+  function leadList() {
+    const f = state.leads;
+    const touches = lastTouchMap();
+    const inPipeline = new Set(S.all('deals').filter((d) => d.stage !== 'Closed Lost').map((d) => d.companyId));
+    const all = S.all('companies').filter((c) => L.leadStage(c) && !inPipeline.has(c.id) && matchesAsset(c.assetClass, f.asset));
+    const counts = {};
+    all.forEach((c) => (counts[L.leadStage(c)] = (counts[L.leadStage(c)] || 0) + 1));
+    const q = f.q.trim().toLowerCase();
+    const rows = all
+      .filter((c) => {
+        const st = L.leadStage(c);
+        if (f.stage === 'active' ? st === 'Dead Lead' : st !== f.stage) return false;
+        if (f.temp && c.leadTemp !== f.temp) return false;
+        return !q || [c.name, c.aliases, c.industry, c.address, c.building, c.submarket, c.tags].join(' ').toLowerCase().includes(q);
+      })
+      .map((c) => ({ c, last: touches[c.id] || '', score: scoreOf(c, touches) }));
+    // Expirations more than 6 months past are likely stale data, so they sort after upcoming ones.
+    const staleBefore = L.addDays(L.todayISO(), -183);
+    const expKey = (c) => (!c.leaseExpiration ? '9999' : c.leaseExpiration < staleBefore ? '9998' + c.leaseExpiration : c.leaseExpiration);
+    const sorters = {
+      expiration: (a, b) => expKey(a.c).localeCompare(expKey(b.c)),
+      lastTouch: (a, b) => (a.last || '0000').localeCompare(b.last || '0000'),
+      score: (a, b) => b.score - a.score,
+      name: (a, b) => a.c.name.localeCompare(b.c.name),
+    };
+    rows.sort(sorters[f.sort] || sorters.expiration);
+    return { rows, counts, total: all.length };
+  }
+
+  function viewLeads() {
+    const f = state.leads;
+    const { rows, counts, total } = leadList();
+    const shown = rows.slice(0, f.limit || 100);
+    const contactsBy = {};
+    S.all('contacts').forEach((p) => (contactsBy[p.companyId] = contactsBy[p.companyId] || []).push(p));
+    const chips = [{ value: 'active', label: 'All active', n: total - (counts['Dead Lead'] || 0) }].concat(L.LEAD_STAGES.map((st) => ({ value: st, label: st, n: counts[st] || 0 })));
+    return `
+      <div class="page-head"><h1>Leads</h1>
+        <div class="actions"><button class="btn primary" data-action="new" data-col="companies">+ Lead</button></div>
+      </div>
+      <p class="hint">Companies you're working to win, before there's a deal. Mark one <strong>Secured Lead</strong> to start a deal in the Pipeline.</p>
+      <div class="seg wrap stage-chips">${chips
+        .map((ch) => `<button class="${f.stage === ch.value ? 'on' : ''}" data-action="set-filter" data-scope="leads" data-key="stage" data-value="${esc(ch.value)}">${esc(ch.label)} <span class="muted">${ch.n}</span></button>`)
+        .join('')}</div>
+      <div class="toolbar">
+        ${assetTabs(f.asset, 'leads')}
+        <input type="search" placeholder="Search name, building, industry…" value="${esc(f.q)}" data-filter="leads.q" id="f-leads-q" />
+        <select data-filter="leads.temp">${options(L.LEAD_TEMPS, f.temp, 'Any temperature')}</select>
+        <select data-filter="leads.sort">${options(
+          [
+            { value: 'expiration', label: 'Sort: Lease expiration' },
+            { value: 'lastTouch', label: 'Sort: Longest since touch' },
+            { value: 'score', label: 'Sort: Prospect score' },
+            { value: 'name', label: 'Sort: Name' },
+          ],
+          f.sort
+        )}</select>
+      </div>
+      <p class="count">${rows.length} leads</p>
+      ${
+        rows.length
+          ? `<div class="table-wrap"><table class="tbl">
+          <thead><tr><th>Company</th><th>Stage</th><th>Temp.</th><th>Lease expiration</th><th>Last touch</th><th>Best contact</th></tr></thead>
+          <tbody>${shown
+            .map(({ c, last }) => {
+              const p = (contactsBy[c.id] || []).slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker') || Boolean(b.email) - Boolean(a.email))[0];
+              return `<tr data-href="#/company/${esc(c.id)}">
+              <td><strong>${esc(c.name)}</strong> ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
+              <td><select class="inline" data-lead-stage="${esc(c.id)}">${options(L.LEAD_STAGES, L.leadStage(c))}</select></td>
+              <td><select class="inline" data-lead-temp="${esc(c.id)}">${options(L.LEAD_TEMPS, c.leadTemp, '—')}</select></td>
+              <td>${expirationBadge(c.leaseExpiration)}</td>
+              <td>${last ? esc(L.fmtDate(last)) : '<span class="muted">Never</span>'}</td>
+              <td>${p ? `${esc(contactName(p))}<div class="sub">${esc(p.title)}</div>` : '<span class="muted">None yet</span>'}</td></tr>`;
+            })
+            .join('')}</tbody></table></div>
+          ${rows.length > shown.length ? `<div class="show-more"><span class="muted">Showing ${shown.length} of ${rows.length}</span> <button class="btn" data-action="show-more" data-scope="leads">Show ${Math.min(200, rows.length - shown.length)} more</button></div>` : ''}`
+          : emptyState('No leads match these filters.')
+      }`;
+  }
+
   // ----- companies -----
 
   function filteredCompanies() {
@@ -641,7 +855,7 @@
       <div class="crumbs"><a href="#/companies">Companies</a> /</div>
       <div class="page-head">
         <div><h1>${esc(c.name)}</h1>
-          <div class="head-badges">${assetBadge(c.assetClass)} ${statusBadge(c.status)} ${c.priority ? badge('Priority ' + c.priority, 'prio') : ''} ${scoreChip(score)}</div>
+          <div class="head-badges">${assetBadge(c.assetClass)} ${statusBadge(c.status)} ${leadBadge(c)} ${c.priority ? badge('Priority ' + c.priority, 'prio') : ''} ${scoreChip(score)}</div>
         </div>
         <div class="actions">
           <button class="btn" data-action="new" data-col="activities" data-company="${esc(id)}">Log activity</button>
@@ -1247,6 +1461,7 @@
             <label>Default term (months)<input name="defaultTermMonths" type="number" value="${esc(s.defaultTermMonths)}" /></label>
             <label>"Going stale" after (days)<input name="staleDays" type="number" value="${esc(s.staleDays)}" /></label>
             <label>House split % (firm keeps)<input name="houseSplitPct" type="number" step="0.1" value="${esc(s.houseSplitPct)}" /></label>
+            <label>Daily outreach goal (Today list)<input name="outreachGoal" type="number" min="1" value="${esc(s.outreachGoal)}" /></label>
             <div class="wide"><button class="btn primary" type="submit">Save settings</button></div>
           </form>
         </section>
@@ -1805,7 +2020,9 @@
   // ---------- routing & render ----------
 
   const ROUTES = {
+    today: viewToday,
     dashboard: viewDashboard,
+    leads: viewLeads,
     companies: viewCompanies,
     company: viewCompany,
     contacts: viewContacts,
@@ -1819,7 +2036,7 @@
 
   function parseRoute() {
     const parts = location.hash.replace(/^#\/?/, '').split('/');
-    return { name: ROUTES[parts[0]] ? parts[0] : 'dashboard', id: parts[1] ? decodeURIComponent(parts[1]) : null };
+    return { name: ROUTES[parts[0]] ? parts[0] : 'today', id: parts[1] ? decodeURIComponent(parts[1]) : null };
   }
 
   function render() {
@@ -1855,6 +2072,13 @@
     if (show) $('#backup-nag-text').textContent = age === null ? "You haven't backed up yet." : `Last backup was ${age} days ago.`;
   }
 
+  // Securing a lead hands it to the Pipeline as a new deal in Pitching.
+  function setLeadStage(id, stage) {
+    S.upsert('companies', { id, leadStage: stage });
+    if (stage === 'Secured Lead' && confirm('Secured! Start a deal for this company in the Pipeline (Pitching)?')) openForm('deals', null, { company: id });
+    else toast('Lead stage → ' + stage);
+  }
+
   // ---------- events ----------
 
   document.addEventListener('click', (e) => {
@@ -1878,9 +2102,11 @@
           else if (d.col === 'deals') location.hash = '#/company/' + rec.companyId;
           return;
         }
-        case 'show-more':
-          state.companies.limit = (state.companies.limit || 100) + 200;
+        case 'show-more': {
+          const scope = state[d.scope || 'companies'];
+          scope.limit = (scope.limit || 100) + 200;
           return render();
+        }
         case 'close-modal':
           return $('#modal').close();
         case 'toggle-done': {
@@ -1891,7 +2117,7 @@
         case 'set-filter':
           if (actionEl.tagName === 'A') e.preventDefault();
           state[d.scope][d.key] = d.value;
-          if (d.scope === 'companies') state.companies.limit = 100;
+          if (d.scope === 'companies' || d.scope === 'leads') state[d.scope].limit = 100;
           saveUIState();
           if (d.scope === 'companies' && !location.hash.startsWith('#/companies')) location.hash = '#/companies';
           return render();
@@ -1900,6 +2126,20 @@
           if (d.stage === 'Closed Won' && !S.get('deals', d.id).closedDate) patch.closedDate = L.todayISO();
           S.upsert('deals', patch);
           return toast('Stage → ' + d.stage);
+        }
+        case 'log-touch': {
+          const c = S.get('companies', d.company);
+          const today = L.todayISO();
+          S.upsert('activities', { type: d.type, date: today, companyId: c.id, contactId: d.contact || '', subject: d.type === 'Call' ? 'Called' : 'Emailed' }, { silent: true });
+          const patch = { id: c.id, lastContacted: today };
+          if (L.leadStage(c) === 'New') patch.leadStage = 'Initial Outreach';
+          S.upsert('companies', patch);
+          return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
+        }
+        case 'snooze': {
+          const c = S.get('companies', d.company);
+          S.upsert('companies', { id: c.id, snoozeUntil: L.addDays(L.todayISO(), 7) });
+          return toast(`${c.name} hidden from Today for a week.`);
         }
         case 'export-companies':
           return exportCompanies(
@@ -2023,7 +2263,7 @@
       return;
     }
     const row = e.target.closest('tr[data-href]');
-    if (row && !e.target.closest('a, button, input')) location.hash = row.dataset.href;
+    if (row && !e.target.closest('a, button, input, select')) location.hash = row.dataset.href;
   });
 
   function onFilterChange(e) {
@@ -2031,7 +2271,7 @@
     if (!el.dataset.filter) return;
     const [scope, key] = el.dataset.filter.split('.');
     state[scope][key] = el.type === 'checkbox' ? el.checked : el.value;
-    if (scope === 'companies') state.companies.limit = 100;
+    if (scope === 'companies' || scope === 'leads') state[scope].limit = 100;
     saveUIState();
     render();
   }
@@ -2040,6 +2280,8 @@
   });
   document.addEventListener('change', (e) => {
     if (e.target.dataset.filter && e.target.type !== 'search') onFilterChange(e);
+    if (e.target.dataset.leadTemp) S.upsert('companies', { id: e.target.dataset.leadTemp, leadTemp: e.target.value });
+    if (e.target.dataset.leadStage) setLeadStage(e.target.dataset.leadStage, e.target.value);
     const form = e.target.closest('#record-form');
     if (form && (e.target.name === 'assetClass' || e.target.name === 'companyId')) syncFormDependencies(form);
   });

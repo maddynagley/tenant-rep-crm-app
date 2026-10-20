@@ -10,17 +10,19 @@
   <body>
     <header class="topbar">
       <button class="icon-btn menu" data-action="toggle-nav" aria-label="Menu">☰</button>
-      <a class="brand" href="#/dashboard"><span class="logo">TR</span> Tenant Rep CRM</a>
+      <a class="brand" href="#/today"><span class="logo">TR</span> Tenant Rep CRM</a>
       <div id="backup-nag" class="nag" hidden>
         <span id="backup-nag-text"></span>
         <button class="link" data-action="export-json">Export backup</button>
       </div>
     </header>
     <nav class="nav" aria-label="Main">
+      <a href="#/today" data-route="today"><span>☀</span> Today</a>
       <a href="#/dashboard" data-route="dashboard"><span>◧</span> Dashboard</a>
+      <a href="#/leads" data-route="leads"><span>◎</span> Leads</a>
+      <a href="#/pipeline" data-route="pipeline"><span>▤</span> Pipeline</a>
       <a href="#/companies" data-route="companies"><span>▦</span> Companies</a>
       <a href="#/expirations" data-route="expirations"><span>◷</span> Lease Expirations</a>
-      <a href="#/pipeline" data-route="pipeline"><span>▤</span> Pipeline</a>
       <a href="#/portfolio" data-route="portfolio"><span>$</span> Portfolio</a>
       <a href="#/activities" data-route="activities"><span>✓</span> Follow-ups <em id="nav-due" class="pill"></em></a>
       <a href="#/contacts" data-route="contacts"><span>☺</span> Contacts</a>

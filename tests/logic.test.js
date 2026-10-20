@@ -285,3 +285,55 @@ test('a sheet row with figures closes the open deal of the aliased company', () 
   assert.equal(plan.updates[0].patch.stage, 'Closed Won');
   assert.equal(plan.creates.length, 1, 'second row is a separate deal');
 });
+
+test('old deal stages fold into the current pipeline', () => {
+  assert.deepEqual(
+    L.DEAL_STAGES.map((s) => s.name),
+    ['Pitching', 'Market Survey', 'Touring', 'RFP', 'LOI', 'Lease Negotiation', 'Closed Won', 'Closed Lost']
+  );
+  assert.equal(L.normalizeDealStage('Rep Agreement Signed'), 'Market Survey');
+  assert.equal(L.normalizeDealStage('Needs Analysis'), 'Market Survey');
+  assert.equal(L.normalizeDealStage('RFP / Proposals'), 'RFP');
+  assert.equal(L.normalizeDealStage('Touring'), 'Touring');
+});
+
+test('leadStage uses the explicit stage, else infers it from status', () => {
+  assert.equal(L.leadStage({ leadStage: 'Follow Up', status: 'Target' }), 'Follow Up');
+  assert.equal(L.leadStage({ status: 'Target' }), 'New');
+  assert.equal(L.leadStage({ status: 'Contacted' }), 'Initial Outreach');
+  assert.equal(L.leadStage({ status: 'Active Client' }), '');
+});
+
+test('dailyPlan prioritizes due follow-ups, skips Do-Not-Call numbers and finds door-knock buildings', () => {
+  const today = '2026-10-20';
+  const data = {
+    companies: [
+      { id: 'a', name: 'Alpha', leadStage: 'Initial Outreach', lastContacted: '2026-10-01', address: '100 Main St, Ste 200' },
+      { id: 'b', name: 'Bravo', leadStage: 'Initial Outreach', lastContacted: '2026-10-18', address: '100 Main Street Suite 900' },
+      { id: 'c', name: 'Charlie', leadStage: 'New', leaseExpiration: '2027-06-30', address: '100 Main St' },
+      { id: 'd', name: 'Delta', leadStage: 'Engaged', leadTemp: 'Hot', lastContacted: '2026-09-01' },
+      { id: 'e', name: 'Echo', leadStage: 'Secured Lead' },
+      { id: 'f', name: 'Foxtrot', leadStage: 'Follow Up', snoozeUntil: '2026-10-25' },
+      { id: 'g', name: 'Golf', status: 'Active Client' },
+    ],
+    contacts: [
+      { id: 'p1', companyId: 'a', firstName: 'Ann', mobile: '555', mobileDNC: true, email: 'ann@a.com' },
+      { id: 'p2', companyId: 'd', firstName: 'Dan', phone: '777', role: 'Decision Maker' },
+    ],
+    deals: [
+      { id: 'x', companyId: 'g', name: 'Golf renewal', stage: 'Touring', targetClose: '2026-09-30' },
+      { id: 'y', companyId: 'g', name: 'Golf HQ', stage: 'Closed Won', actualSF: 5000 },
+    ],
+    activities: [{ id: 't1', companyId: 'g', date: '2026-10-19', followUpDate: '2026-10-19', subject: 'Send survey', done: false }],
+  };
+  const plan = L.dailyPlan(data, { today, outreachGoal: 4 });
+  assert.deepEqual(plan.tasks.map((t) => t.activityId), ['t1']);
+  assert.deepEqual(plan.outreach.map((o) => o.companyId), ['d', 'a', 'c'], 'hot follow-up first, Bravo was touched 2 days ago, Foxtrot is snoozed');
+  assert.equal(plan.outreach[0].channel, 'Call');
+  assert.equal(plan.outreach[1].channel, 'Email', 'DNC mobile is never suggested as a call');
+  assert.equal(plan.outreach[2].channel, 'Find a contact');
+  assert.equal(plan.deals.length, 1);
+  assert.match(plan.deals[0].why, /has passed/);
+  assert.deepEqual(plan.updates.map((u) => u.action || u.dealId), ['create-deal', 'y']);
+  assert.deepEqual(plan.doorKnock[0].companyIds, ['c', 'a'], 'Bravo was touched this week');
+});

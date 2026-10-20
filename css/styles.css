@@ -147,6 +147,17 @@ label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; whi
 .seg button { border: 0; background: none; padding: 0 12px; height: 32px; cursor: pointer; font: inherit; color: var(--muted); }
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.btn.small { height: 28px; padding: 0 10px; font-size: 12px; }
+.btn.ghost { border-color: transparent; background: none; color: var(--muted); }
+.kpi.good .kpi-value { color: var(--green); }
+.todo li { flex-wrap: wrap; }
+.todo-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.knock { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.knock:last-child { border-bottom: 0; }
+ul.plain { margin: 6px 0 0; padding-left: 18px; }
+.seg.wrap { display: flex; flex-wrap: wrap; margin-bottom: 12px; }
+.seg.wrap button { height: 34px; }
+select.inline { height: 28px; font-size: 12px; padding: 0 4px; max-width: 150px; }
 .show-more { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 14px 0; }
 .count { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
 

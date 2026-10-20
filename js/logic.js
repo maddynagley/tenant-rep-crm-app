@@ -14,20 +14,35 @@
 
   const DEAL_TYPES = ['New Lease', 'Renewal', 'Expansion', 'Relocation', 'Blend & Extend', 'Sublease', 'Purchase', 'Build-to-Suit'];
 
-  // Tenant rep deal stages with default win probabilities.
+  // Tenant rep deal stages with default win probabilities. A deal starts once a lead is secured.
   const DEAL_STAGES = [
     { name: 'Pitching', probability: 10 },
-    { name: 'Rep Agreement Signed', probability: 25 },
-    { name: 'Needs Analysis', probability: 30 },
-    { name: 'Market Survey', probability: 35 },
+    { name: 'Market Survey', probability: 30 },
     { name: 'Touring', probability: 45 },
-    { name: 'RFP / Proposals', probability: 60 },
+    { name: 'RFP', probability: 60 },
     { name: 'LOI', probability: 75 },
     { name: 'Lease Negotiation', probability: 90 },
     { name: 'Closed Won', probability: 100 },
     { name: 'Closed Lost', probability: 0 },
   ];
   const OPEN_STAGES = DEAL_STAGES.filter((s) => !s.name.startsWith('Closed')).map((s) => s.name);
+
+  // Stages from earlier versions, folded into the current list.
+  const LEGACY_DEAL_STAGES = { 'Rep Agreement Signed': 'Market Survey', 'Needs Analysis': 'Market Survey', 'RFP / Proposals': 'RFP' };
+  function normalizeDealStage(stage) {
+    return LEGACY_DEAL_STAGES[stage] || stage;
+  }
+
+  // Lead stages mirror the HubSpot lead pipeline. "Secured Lead" is the hand-off to a deal.
+  const LEAD_STAGES = ['New', 'Initial Outreach', 'Follow Up', 'Engaged', 'Secured Lead', 'Dead Lead'];
+  const LEAD_TEMPS = ['Hot', 'Warm', 'Cold'];
+  const LEAD_FROM_STATUS = { Target: 'New', Contacted: 'Initial Outreach', Nurture: 'Follow Up', Engaged: 'Engaged', 'Not a Fit': 'Dead Lead' };
+
+  // A company's lead stage: set explicitly, or inferred from its status. Clients without one aren't leads.
+  function leadStage(company) {
+    if (LEAD_STAGES.includes(company.leadStage)) return company.leadStage;
+    return LEAD_FROM_STATUS[company.status] || '';
+  }
 
   const RATE_BASES = ['Full Service ($/SF/yr)', 'Modified Gross ($/SF/yr)', 'NNN ($/SF/yr)', 'NNN ($/SF/mo)', 'Gross ($/SF/mo)'];
 
@@ -271,6 +286,148 @@
         sf: inStage.reduce((t, d) => t + (parseNumber(d.estSF || d.sfMax || d.sfMin) || 0), 0),
       };
     });
+  }
+
+  // ---------- daily plan ----------
+
+  // Days to wait before the next touch, by lead stage.
+  const FOLLOW_UP_DAYS = { 'Initial Outreach': 7, 'Follow Up': 14, Engaged: 10 };
+  const TEMP_RANK = { Hot: 0, Warm: 1, '': 2, Cold: 3 };
+
+  function contactRank(c) {
+    const callable = (c.phone && !c.phoneDNC) || (c.mobile && !c.mobileDNC);
+    return (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callable ? 2 : 0) + (c.verification === 'Web-verified' ? 1 : 0);
+  }
+
+  // How to reach a company's best contact: call (never a Do-Not-Call number), email, or find someone first.
+  function reachChannel(contact) {
+    if (!contact) return 'Find a contact';
+    if ((contact.phone && !contact.phoneDNC) || (contact.mobile && !contact.mobileDNC)) return 'Call';
+    if (contact.email) return 'Email';
+    return contact.linkedin ? 'LinkedIn' : 'Find a contact';
+  }
+
+  // Today's to-do list: due follow-ups, deals that need attention, who to reach out to,
+  // records to update, and a door-knocking route when several leads share a building.
+  function dailyPlan(data, opts) {
+    opts = opts || {};
+    const today = opts.today || todayISO();
+    const goal = Math.max(1, parseNumber(opts.outreachGoal) || 10);
+
+    const touches = {};
+    data.companies.forEach((c) => {
+      if (c.lastContacted && c.lastContacted <= today) touches[c.id] = c.lastContacted;
+    });
+    data.activities.forEach((a) => {
+      if (a.date && a.date <= today && (!touches[a.companyId] || a.date > touches[a.companyId])) touches[a.companyId] = a.date;
+    });
+    const sinceTouch = (id) => (touches[id] ? daysBetween(touches[id], today) : null);
+    const snoozed = (c) => Boolean(c && c.snoozeUntil && c.snoozeUntil > today);
+    const companies = {};
+    data.companies.forEach((c) => (companies[c.id] = c));
+    const contactsBy = {};
+    data.contacts.forEach((c) => (contactsBy[c.companyId] = contactsBy[c.companyId] || []).push(c));
+    const bestContact = (id) => (contactsBy[id] || []).slice().sort((a, b) => contactRank(b) - contactRank(a))[0] || null;
+
+    const tasks = data.activities
+      .filter((a) => !a.done)
+      .map((a) => ({ a, due: a.followUpDate || (a.type === 'Task' ? a.date : '') }))
+      .filter((x) => x.due && x.due <= today)
+      .sort((x, y) => x.due.localeCompare(y.due))
+      .map(({ a, due }) => ({ kind: 'task', activityId: a.id, companyId: a.companyId, contactId: a.contactId, title: a.subject, due }));
+
+    const openDeals = data.deals.filter((d) => OPEN_STAGES.includes(d.stage));
+    const dealCompanies = new Set(data.deals.filter((d) => d.stage !== 'Closed Lost').map((d) => d.companyId));
+
+    const deals = openDeals
+      .filter((d) => !snoozed(companies[d.companyId]))
+      .map((d) => {
+        const why = [];
+        if (d.targetClose && d.targetClose < today) why.push(`Target execution (${fmtDate(d.targetClose)}) has passed. Update the timeline or stage.`);
+        if (d.repAgreementSigned && d.repAgreementExpires && d.repAgreementExpires <= addDays(today, 30))
+          why.push(`Rep agreement ${d.repAgreementExpires < today ? 'expired' : 'expires'} ${fmtDate(d.repAgreementExpires)}. Renew it.`);
+        const since = sinceTouch(d.companyId);
+        if (since === null) why.push('No activity logged yet. Check in and log where it stands.');
+        else if (since > 14) why.push(`No activity in ${since} days. Check in and update the stage.`);
+        return { kind: 'deal', dealId: d.id, companyId: d.companyId, title: d.name, stage: d.stage, why: why.join(' '), prob: dealProbability(d) };
+      })
+      .filter((x) => x.why)
+      .sort((a, b) => b.prob - a.prob);
+
+    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c));
+    const expiry = (c) => c.leaseExpiration || '9999-12-31';
+    const outreachItem = (c, why) => {
+      const contact = bestContact(c.id);
+      return { kind: 'outreach', companyId: c.id, contactId: contact ? contact.id : '', title: c.name, stage: leadStage(c), temp: c.leadTemp || '', channel: reachChannel(contact), why };
+    };
+
+    const followUps = leads
+      .filter((c) => {
+        const wait = FOLLOW_UP_DAYS[leadStage(c)];
+        const since = sinceTouch(c.id);
+        return wait && (since === null || since >= wait);
+      })
+      .sort(
+        (a, b) =>
+          TEMP_RANK[a.leadTemp || ''] - TEMP_RANK[b.leadTemp || ''] ||
+          expiry(a).localeCompare(expiry(b)) ||
+          (sinceTouch(b.id) === null ? 1e9 : sinceTouch(b.id)) - (sinceTouch(a.id) === null ? 1e9 : sinceTouch(a.id))
+      )
+      .map((c) => {
+        const since = sinceTouch(c.id);
+        return outreachItem(c, `${leadStage(c)} · ${since === null ? 'no touch logged' : 'last touch ' + since + ' days ago'}`);
+      });
+
+    const fresh = leads
+      .filter((c) => leadStage(c) === 'New' && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 30))
+      .map((c) => ({ c, score: prospectScore(c, { today, lastActivityDate: touches[c.id] }).score }))
+      .sort((a, b) => b.score - a.score || expiry(a.c).localeCompare(expiry(b.c)))
+      .map(({ c }) => {
+        const m = monthsUntil(c.leaseExpiration, today);
+        return outreachItem(c, 'First touch' + (m === null ? '' : m < 0 ? ` · lease expired ${fmtDate(c.leaseExpiration)}` : ` · lease expires in ${fmtMonths(m)}`));
+      });
+
+    // Keep about a third of the day for brand-new leads so the top of the funnel keeps filling.
+    const newSlots = Math.min(fresh.length, Math.max(Math.ceil(goal / 3), goal - followUps.length));
+    const outreach = followUps.slice(0, goal - newSlots).concat(fresh.slice(0, newSlots));
+
+    const updates = [];
+    data.companies.forEach((c) => {
+      if (leadStage(c) === 'Secured Lead' && !dealCompanies.has(c.id))
+        updates.push({ kind: 'update', action: 'create-deal', companyId: c.id, title: c.name, why: 'Secured lead with no deal. Start one so it shows in the Pipeline.' });
+    });
+    data.deals.forEach((d) => {
+      if (d.stage === 'Closed Won' && !d.partnerDeal && (!parseNumber(d.actualSF) || !parseNumber(d.commissionEarned)))
+        updates.push({ kind: 'update', dealId: d.id, companyId: d.companyId, title: d.name, why: 'Closed won. Add the final SF and commission so your portfolio is complete.' });
+    });
+    leads.forEach((c) => {
+      const m = monthsUntil(c.leaseExpiration, today);
+      if (m !== null && m < 0 && c.leaseExpiration >= addDays(today, -183) && leadStage(c) !== 'Dead Lead')
+        updates.push({ kind: 'update', companyId: c.id, title: c.name, why: `Lease expired ${fmtDate(c.leaseExpiration)}. Confirm whether they renewed or moved, and update the expiration.` });
+    });
+
+    // Door knocking: un-engaged leads sharing an address, so one trip covers several.
+    const knockable = leads.filter((c) => ['New', 'Initial Outreach', 'Follow Up'].includes(leadStage(c)) && c.address && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 7));
+    const groups = {};
+    knockable.forEach((c) => {
+      const key = normalizeAddress(c.address);
+      (groups[key] = groups[key] || []).push(c);
+    });
+    const doorKnock = Object.values(groups)
+      .filter((g) => g.length >= 2)
+      .map((g) => g.sort((a, b) => expiry(a).localeCompare(expiry(b))))
+      .sort((a, b) => b.length - a.length || expiry(a[0]).localeCompare(expiry(b[0])))
+      .slice(0, 3)
+      .map((g) => ({ address: g[0].address, building: (g.find((c) => c.building) || {}).building || '', companyIds: g.map((c) => c.id) }));
+
+    return {
+      tasks,
+      deals,
+      outreach,
+      updates: updates.slice(0, 8),
+      doorKnock,
+      remaining: { followUps: followUps.length, fresh: fresh.length, updates: updates.length },
+    };
   }
 
   // ---------- closed-deal portfolio ----------
@@ -778,6 +935,11 @@
     DEAL_TYPES,
     DEAL_STAGES,
     OPEN_STAGES,
+    normalizeDealStage,
+    LEAD_STAGES,
+    LEAD_TEMPS,
+    leadStage,
+    dailyPlan,
     RATE_BASES,
     ACTIVITY_TYPES,
     PROPERTY_STATUSES,
