@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tenant Rep CRM</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232456c8'/><path d='M8 25V11l8-4 8 4v14h-5v-7h-6v7z' fill='white'/></svg>" />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <button class="icon-btn menu" data-action="toggle-nav" aria-label="Menu">☰</button>
+      <a class="brand" href="#/dashboard"><span class="logo">TR</span> Tenant Rep CRM</a>
+      <div id="backup-nag" class="nag" hidden>
+        <span id="backup-nag-text"></span>
+        <button class="link" data-action="export-json">Export backup</button>
+      </div>
+    </header>
+    <nav class="nav" aria-label="Main">
+      <a href="#/dashboard" data-route="dashboard"><span>◧</span> Dashboard</a>
+      <a href="#/companies" data-route="companies"><span>▦</span> Companies</a>
+      <a href="#/expirations" data-route="expirations"><span>◷</span> Lease Expirations</a>
+      <a href="#/pipeline" data-route="pipeline"><span>▤</span> Pipeline</a>
+      <a href="#/portfolio" data-route="portfolio"><span>$</span> Portfolio</a>
+      <a href="#/activities" data-route="activities"><span>✓</span> Follow-ups <em id="nav-due" class="pill"></em></a>
+      <a href="#/contacts" data-route="contacts"><span>☺</span> Contacts</a>
+      <a href="#/data" data-route="data"><span>⇅</span> Import / Settings</a>
+      <p class="nav-foot">Data is stored in this browser. Back up from Import / Settings.</p>
+    </nav>
+    <main id="view"></main>
+    <dialog id="modal"></dialog>
+    <input type="file" id="file-input" hidden />
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <script src="js/logic.js"></script>
+    <script src="js/store.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

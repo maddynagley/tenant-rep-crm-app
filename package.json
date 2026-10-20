@@ -1,0 +1,10 @@
+{
+  "name": "tenant-rep-crm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CRM for commercial real estate tenant representation – office & industrial prospecting, lease expirations and deal pipeline.",
+  "scripts": {
+    "start": "npx --yes http-server -c-1 -p 8080 .",
+    "test": "node --test tests/*.test.js"
+  }
+}
