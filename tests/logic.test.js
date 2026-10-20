@@ -389,6 +389,7 @@ test('dailyPlan surfaces opened-but-unanswered emails ahead of routine follow-up
 test('sizes and budgets show as ranges when the tenant gave one', () => {
   assert.equal(L.dealSizeLabel({ sfMin: 3500, sfMax: 4000, estSF: 3800 }), '3,500–4,000 RSF');
   assert.equal(L.dealSizeLabel({ estSF: 20000 }), '20,000 RSF');
+  assert.equal(L.dealSizeLabel({ estSF: 20000, sfMax: 25000 }), '20,000–25,000 RSF');
   assert.equal(L.dealSizeLabel({}), '');
   assert.equal(L.dealBudgetLabel({ budgetRate: 25, budgetRateMax: 29, rateBasis: 'Full Service ($/SF/yr)' }), '$25–$29/SF Full Service');
 });

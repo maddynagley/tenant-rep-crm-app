@@ -353,7 +353,9 @@
     return one !== null ? fmt(one) : '';
   }
   function dealSizeLabel(d) {
-    const r = rangeLabel(d.sfMin, d.sfMax, fmtNumber) || (parseNumber(d.estSF) !== null ? fmtNumber(d.estSF) : '') || (parseNumber(d.actualSF) !== null ? fmtNumber(d.actualSF) : '');
+    // With only a ceiling given, the estimate is the low end (e.g. ~20,000 up to a 25,000 cap).
+    const low = parseNumber(d.sfMin) !== null ? d.sfMin : d.estSF;
+    const r = rangeLabel(low, d.sfMax, fmtNumber) || (parseNumber(d.actualSF) !== null ? fmtNumber(d.actualSF) : '');
     return r ? r + ' RSF' : '';
   }
   function dealBudgetLabel(d) {
