@@ -568,7 +568,11 @@
     data.deals
       .filter((d) => OPEN_STAGES.includes(d.stage))
       .forEach((d) => (openDealOf[d.companyId] = openDealOf[d.companyId] === undefined ? d.id : null));
-    const dealFor = (companyId) => openDealOf[companyId] || '';
+    const dealIds = new Set(data.deals.map((d) => d.id));
+    const dealFor = (companyId, rec) => {
+      const linked = ((rec && rec.deals) || []).map((id) => 'hs-dl-' + id).find((id) => dealIds.has(id));
+      return linked || openDealOf[companyId] || '';
+    };
     const emails = (s) => String(s || '').toLowerCase().split(/[;,\s]+/).filter((x) => x.includes('@'));
 
     const resolve = (rec, addrs) => {
@@ -607,7 +611,7 @@
       const replied = (parseNumber(p.hs_email_reply_count) || 0) > 0;
       if (existing[id]) {
         const patch = { id, opens };
-        if (!existing[id].dealId && dealFor(existing[id].companyId)) patch.dealId = dealFor(existing[id].companyId);
+        if (!existing[id].dealId && dealFor(existing[id].companyId, rec)) patch.dealId = dealFor(existing[id].companyId, rec);
         if (replied && !RESPONDED.includes(existing[id].outcome)) patch.outcome = 'Replied';
         upserts.push(patch);
       } else {
@@ -616,7 +620,7 @@
           type: 'Email',
           date,
           companyId,
-          dealId: dealFor(companyId),
+          dealId: dealFor(companyId, rec),
           contactId: contactFor(rec, addrs),
           subject: (inbound ? 'Reply: ' : '') + (p.hs_email_subject || '(no subject)'),
           template: inbound ? '' : guessTemplate(p.hs_email_subject),
@@ -646,13 +650,26 @@
       }
     });
 
+    // Notes you log in HubSpot. They're a record, not a touch, so they don't change last-contacted dates.
+    (payload.notes || []).forEach((rec) => {
+      const p = rec.properties || {};
+      const companyId = resolve(rec, []);
+      if (!companyId) return skipped++;
+      const id = 'hs-nt-' + rec.id;
+      const body = stripHtml(p.hs_note_body);
+      if (!body) return;
+      const fields = { type: 'Note', date: hsDate(p.hs_timestamp), companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: body.length > 80 ? body.slice(0, 77).replace(/\s+\S*$/, '') + '…' : body, notes: body.slice(0, 600), source: 'HubSpot', done: true };
+      if (!existing[id]) upserts.push(Object.assign({ id }, fields));
+      else if (existing[id].notes !== fields.notes) upserts.push({ id, subject: fields.subject, notes: fields.notes });
+    });
+
     (payload.meetings || []).forEach((rec) => {
       const p = rec.properties || {};
       const companyId = resolve(rec, []);
       if (!companyId) return skipped++;
       const date = hsDate(p.hs_meeting_start_time || p.hs_timestamp);
       const id = 'hs-mt-' + rec.id;
-      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, dealId: dealFor(companyId), contactId: contactFor(rec, []), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
+      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
       if (date <= todayISO()) touch(companyId, date);
     });
 
@@ -664,7 +681,7 @@
       const id = 'hs-cl-' + rec.id;
       const outcome = CALL_DISPOSITIONS[p.hs_call_disposition] || '';
       if (existing[id]) upserts.push({ id, outcome: existing[id].outcome || outcome });
-      else upserts.push({ id, type: 'Call', date, companyId, dealId: dealFor(companyId), contactId: contactFor(rec, []), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
+      else upserts.push({ id, type: 'Call', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
       touch(companyId, date);
     });
 

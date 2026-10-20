@@ -2041,7 +2041,7 @@
           <form id="settings-form-hubspot" class="form-grid">
             <label class="wide">Web app URL<input name="hubspotBridgeUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(s.hubspotBridgeUrl)}" /></label>
             <label class="wide">Sync key<input name="hubspotBridgeKey" type="password" autocomplete="off" value="${esc(s.hubspotBridgeKey)}" /></label>
-            <div class="wide actions"><button class="btn primary" type="submit">Save</button>${s.hubspotBridgeUrl ? '<button class="btn" type="button" data-action="sync-hubspot">Sync now</button>' : ''}</div>
+            <div class="wide actions"><button class="btn primary" type="submit">Save</button>${s.hubspotBridgeUrl ? '<button class="btn" type="button" data-action="sync-hubspot">Sync now</button><button class="btn" type="button" data-action="backfill-hubspot" title="One time: every email and note HubSpot has, not just the past week">Load full history</button>' : ''}</div>
           </form>
           <p class="hint">${s.hubspotLastSync ? 'Last synced ' + esc(new Date(s.hubspotLastSync).toLocaleString()) + (hubspotStatus ? ' · ' + esc(hubspotStatus) : '') : hubspotStatus ? esc(hubspotStatus) : 'Not connected yet.'}</p>
         </section>
@@ -2769,6 +2769,8 @@
         }
         case 'sync-hubspot':
           return syncHubSpot(true);
+        case 'backfill-hubspot':
+          return backfillHubSpot();
         case 'copy-link':
           e.preventDefault();
           navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
@@ -3152,6 +3154,46 @@
       hubspotSyncing = false;
     }
   }
+  // One-time pull of everything HubSpot holds, type by type, in pages of up to 1,000.
+  async function backfillHubSpot() {
+    const st = S.settings();
+    if (!st.hubspotBridgeUrl || hubspotSyncing) return;
+    hubspotSyncing = true;
+    const totals = { added: 0, updated: 0, skipped: 0 };
+    try {
+      for (const type of ['emails', 'notes', 'meetings', 'calls']) {
+        let since = 0;
+        for (let page = 0; page < 50; page++) {
+          toast(`Loading HubSpot ${type}${page ? ' (page ' + (page + 1) + ')' : ''}…`);
+          const url = st.hubspotBridgeUrl + (st.hubspotBridgeUrl.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(st.hubspotBridgeKey) + '&types=' + type + '&since=' + since;
+          const data = await (await fetch(url)).json();
+          if (!data.ok) throw new Error(data.error || 'Sync failed');
+          if (data[type] === undefined) throw new Error('Update the HubSpot bridge script to the latest version first');
+          const plan = L.planHubSpotSync(data, { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') });
+          const before = S.all('activities').length;
+          plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
+          plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
+          S.saveSettings({});
+          const added = S.all('activities').length - before;
+          totals.added += added;
+          totals.updated += plan.activities.length - added;
+          totals.skipped += plan.skipped;
+          if (!(data.more && data.more[type]) || !data.next || data.next[type] <= since) break;
+          since = data.next[type];
+        }
+      }
+      hubspotStatus = `full history loaded: ${totals.added} new, ${totals.updated} updated` + (totals.skipped ? `, ${totals.skipped} not matched to a CRM company` : '');
+      toast('HubSpot ' + hubspotStatus + '.');
+      render();
+    } catch (err) {
+      hubspotStatus = 'Full history failed: ' + err.message;
+      toast(hubspotStatus);
+      render();
+    } finally {
+      hubspotSyncing = false;
+    }
+  }
+
   setInterval(() => {
     if (!document.hidden) syncHubSpot(false);
   }, 5 * 60000);

@@ -1,7 +1,7 @@
 /**
  * Tenant Rep CRM – HubSpot bridge (Google Apps Script web app).
  *
- * Lets the CRM pick up emails (with opens and replies), meetings and calls that HubSpot logs from
+ * Lets the CRM pick up emails (with opens and replies), notes, meetings and calls that HubSpot logs from
  * Outlook, without ever putting a HubSpot key in the browser. The HubSpot token stays in this
  * script's properties; the CRM only holds the bridge URL and a sync key.
  *
@@ -21,11 +21,13 @@ const MAX_PER_TYPE = 1000;
 
 const TYPES = {
   emails: [
+    'hs_lastmodifieddate',
     'hs_timestamp', 'hs_email_subject', 'hs_email_direction', 'hs_email_status', 'hs_email_open_count',
     'hs_email_reply_count', 'hs_email_click_count', 'hs_email_to_email', 'hs_email_from_email', 'hs_email_text',
   ],
-  meetings: ['hs_timestamp', 'hs_meeting_title', 'hs_meeting_start_time', 'hs_meeting_outcome', 'hs_meeting_body'],
-  calls: ['hs_timestamp', 'hs_call_title', 'hs_call_body', 'hs_call_disposition', 'hs_call_direction', 'hs_call_duration'],
+  notes: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_note_body'],
+  meetings: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_meeting_title', 'hs_meeting_start_time', 'hs_meeting_outcome', 'hs_meeting_body'],
+  calls: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_call_title', 'hs_call_body', 'hs_call_disposition', 'hs_call_direction', 'hs_call_duration'],
 };
 
 function setup() {
@@ -45,12 +47,18 @@ function doGet(e) {
   const params = (e && e.parameter) || {};
   if (params.key !== PropertiesService.getScriptProperties().getProperty('SYNC_KEY')) return json_({ ok: false, error: 'Wrong sync key' });
   try {
-    // Fetch everything modified since the CRM's last sync (default: the last 7 days).
-    const since = Number(params.since) || Date.now() - 7 * 864e5;
+    // Fetch everything modified since the CRM's last sync (default: the last 7 days). `since=0` reads the
+    // whole history; `types` limits the call to some types. When a type hits the cap, `more` and `next`
+    // tell the CRM where to continue.
+    const since = params.since === '0' ? 0 : Number(params.since) || Date.now() - 7 * 864e5;
+    const wanted = params.types ? String(params.types).split(',') : Object.keys(TYPES);
     const now = Date.now();
-    const out = { ok: true, now: now };
-    Object.keys(TYPES).forEach(function (type) {
-      out[type] = fetchSince_(type, TYPES[type], since);
+    const out = { ok: true, now: now, more: {}, next: {} };
+    wanted.filter(function (t) { return TYPES[t]; }).forEach(function (type) {
+      const res = fetchSince_(type, TYPES[type], since);
+      out[type] = res.items;
+      out.more[type] = res.more;
+      out.next[type] = res.next;
     });
     return json_(out);
   } catch (err) {
@@ -75,13 +83,16 @@ function fetchSince_(type, properties, since) {
       if (p.hs_email_text) p.hs_email_text = String(p.hs_email_text).slice(0, 600);
       if (p.hs_call_body) p.hs_call_body = String(p.hs_call_body).slice(0, 600);
       if (p.hs_meeting_body) p.hs_meeting_body = String(p.hs_meeting_body).slice(0, 600);
+      if (p.hs_note_body) p.hs_note_body = String(p.hs_note_body).slice(0, 1500);
       results.push({ id: r.id, properties: p });
     });
     after = page.paging && page.paging.next && page.paging.next.after;
   } while (after && results.length < MAX_PER_TYPE);
   attachAssociations_(type, results, 'companies');
   attachAssociations_(type, results, 'contacts');
-  return results;
+  attachAssociations_(type, results, 'deals');
+  const last = results.length ? results[results.length - 1].properties.hs_lastmodifieddate : null;
+  return { items: results, more: Boolean(after), next: last ? new Date(last).getTime() : since };
 }
 
 function attachAssociations_(type, results, toType) {

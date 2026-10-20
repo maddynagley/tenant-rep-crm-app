@@ -594,3 +594,25 @@ test('planHubSpotSync files emails under the company\'s one open deal', () => {
   assert.equal(by['hs-em-6'].dealId, '', 'two open deals: left for you to file');
   assert.equal(by['hs-em-9'].dealId, 'd1', 'earlier synced emails get filed too');
 });
+
+test('planHubSpotSync brings in HubSpot notes and honors deal links', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Acme', lastContacted: '2026-10-01' }],
+    contacts: [],
+    deals: [{ id: 'hs-dl-7', companyId: 'hs-co-1', stage: 'Closed Won' }, { id: 'hs-dl-8', companyId: 'hs-co-1', stage: 'Touring' }],
+    activities: [],
+  };
+  const plan = L.planHubSpotSync(
+    {
+      notes: [{ id: '4', properties: { hs_note_body: '<p>Follow up week of June 5th</p>', hs_timestamp: '2026-05-20T15:00:00Z' }, companies: ['1'], deals: ['7'] }],
+      emails: [{ id: '5', properties: { hs_email_direction: 'EMAIL', hs_timestamp: '2026-10-19T15:00:00Z' }, companies: ['1'] }],
+    },
+    data
+  );
+  const by = Object.fromEntries(plan.activities.map((a) => [a.id, a]));
+  assert.equal(by['hs-nt-4'].type, 'Note');
+  assert.equal(by['hs-nt-4'].notes, 'Follow up week of June 5th');
+  assert.equal(by['hs-nt-4'].dealId, 'hs-dl-7', 'a note linked to a deal in HubSpot stays with that deal');
+  assert.equal(by['hs-em-5'].dealId, 'hs-dl-8');
+  assert.deepEqual(plan.companies, [{ id: 'hs-co-1', lastContacted: '2026-10-19' }], 'notes are not touches');
+});
