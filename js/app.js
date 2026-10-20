@@ -1619,6 +1619,10 @@
     const acts = S.all('activities')
       .filter((a) => a.dealId === id)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // The company's other activity (not tied to any deal) is shown too, so nothing is hidden.
+    const companyActs = S.all('activities')
+      .filter((a) => a.companyId === d.companyId && !a.dealId)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const isInd = d.assetClass !== 'Office';
     const isOff = d.assetClass !== 'Industrial';
 
@@ -1731,9 +1735,10 @@
       </section>
 
       <section class="card">
-        <h2>Activity</h2>
-        ${acts.length ? activityTimeline(acts) : emptyState('No activity logged against this deal.')}
-      </section>`;
+        <h2>Activity <span class="muted">${acts.length}</span></h2>
+        ${acts.length ? activityTimeline(acts) : emptyState('No activity logged against this deal yet.')}
+      </section>
+      ${companyActs.length ? `<section class="card"><h2>Other activity with ${esc(companyName(d.companyId))} <span class="muted">${companyActs.length}</span></h2><p class="hint">Not tied to a deal. Edit an item and pick this deal to move it above.</p>${activityTimeline(companyActs.slice(0, 50))}</section>` : ''}`;
   }
 
   // ----- activities -----

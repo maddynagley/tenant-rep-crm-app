@@ -567,3 +567,30 @@ test('planListSync reads and writes a presence column named for the region', () 
   plan = L.planListSync({ tabs: { 'Target List': { headers, rows: [{ row: 2, values: ['Acme', 'None', 'c1'] }] } } }, data, { listId: 'l' });
   assert.deepEqual(plan.pushes[0].values, { 'Local Area Presence': 'Sales rep' });
 });
+
+test('planHubSpotSync files emails under the company\'s one open deal', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Acme' }, { id: 'hs-co-2', name: 'Beta' }],
+    contacts: [],
+    deals: [
+      { id: 'd1', companyId: 'hs-co-1', stage: 'Touring' },
+      { id: 'd2', companyId: 'hs-co-2', stage: 'Touring' },
+      { id: 'd3', companyId: 'hs-co-2', stage: 'LOI' },
+    ],
+    activities: [{ id: 'hs-em-9', type: 'Email', companyId: 'hs-co-1', date: '2026-10-10' }],
+  };
+  const plan = L.planHubSpotSync(
+    {
+      emails: [
+        { id: '5', properties: { hs_email_direction: 'EMAIL', hs_timestamp: '2026-10-19T15:00:00Z' }, companies: ['1'] },
+        { id: '6', properties: { hs_email_direction: 'EMAIL', hs_timestamp: '2026-10-19T15:00:00Z' }, companies: ['2'] },
+        { id: '9', properties: { hs_email_direction: 'EMAIL', hs_email_open_count: '1' }, companies: ['1'] },
+      ],
+    },
+    data
+  );
+  const by = Object.fromEntries(plan.activities.map((a) => [a.id, a]));
+  assert.equal(by['hs-em-5'].dealId, 'd1');
+  assert.equal(by['hs-em-6'].dealId, '', 'two open deals: left for you to file');
+  assert.equal(by['hs-em-9'].dealId, 'd1', 'earlier synced emails get filed too');
+});

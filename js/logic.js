@@ -563,6 +563,12 @@
     const existing = {};
     data.activities.forEach((a) => (existing[a.id] = a));
     const inPlay = new Set(data.deals.filter((d) => d.stage !== 'Closed Lost').map((d) => d.companyId));
+    // A company with exactly one open deal: its emails, meetings and calls belong to that deal.
+    const openDealOf = {};
+    data.deals
+      .filter((d) => OPEN_STAGES.includes(d.stage))
+      .forEach((d) => (openDealOf[d.companyId] = openDealOf[d.companyId] === undefined ? d.id : null));
+    const dealFor = (companyId) => openDealOf[companyId] || '';
     const emails = (s) => String(s || '').toLowerCase().split(/[;,\s]+/).filter((x) => x.includes('@'));
 
     const resolve = (rec, addrs) => {
@@ -601,6 +607,7 @@
       const replied = (parseNumber(p.hs_email_reply_count) || 0) > 0;
       if (existing[id]) {
         const patch = { id, opens };
+        if (!existing[id].dealId && dealFor(existing[id].companyId)) patch.dealId = dealFor(existing[id].companyId);
         if (replied && !RESPONDED.includes(existing[id].outcome)) patch.outcome = 'Replied';
         upserts.push(patch);
       } else {
@@ -609,6 +616,7 @@
           type: 'Email',
           date,
           companyId,
+          dealId: dealFor(companyId),
           contactId: contactFor(rec, addrs),
           subject: (inbound ? 'Reply: ' : '') + (p.hs_email_subject || '(no subject)'),
           template: inbound ? '' : guessTemplate(p.hs_email_subject),
@@ -616,7 +624,7 @@
           outcome: inbound ? '' : replied ? 'Replied' : 'No response',
           inbound: inbound || undefined,
           dealThread: inPlay.has(companyId) || undefined,
-          notes: stripHtml(p.hs_email_text).slice(0, 400),
+          notes: stripHtml(p.hs_email_text).slice(0, 180),
           source: 'HubSpot',
           done: true,
         });
@@ -644,7 +652,7 @@
       if (!companyId) return skipped++;
       const date = hsDate(p.hs_meeting_start_time || p.hs_timestamp);
       const id = 'hs-mt-' + rec.id;
-      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, contactId: contactFor(rec, []), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
+      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, dealId: dealFor(companyId), contactId: contactFor(rec, []), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
       if (date <= todayISO()) touch(companyId, date);
     });
 
@@ -656,7 +664,7 @@
       const id = 'hs-cl-' + rec.id;
       const outcome = CALL_DISPOSITIONS[p.hs_call_disposition] || '';
       if (existing[id]) upserts.push({ id, outcome: existing[id].outcome || outcome });
-      else upserts.push({ id, type: 'Call', date, companyId, contactId: contactFor(rec, []), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
+      else upserts.push({ id, type: 'Call', date, companyId, dealId: dealFor(companyId), contactId: contactFor(rec, []), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
       touch(companyId, date);
     });
 
