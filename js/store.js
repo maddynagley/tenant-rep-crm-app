@@ -27,6 +27,8 @@
     hubspotBridgeUrl: '',
     hubspotBridgeKey: '',
     hubspotLastSync: 0,
+    myInitials: '',
+    sharedLists: [{ id: 'mac', name: 'Metro Chamber (with KB)', url: '', key: '', lastSync: '' }],
   };
 
   function emptyDb() {
@@ -147,6 +149,7 @@
   function exportJSON() {
     const copy = Object.assign({}, db, { settings: Object.assign({}, db.settings) });
     DEVICE_ONLY_SETTINGS.forEach((k) => delete copy.settings[k]);
+    copy.settings.sharedLists = (db.settings.sharedLists || []).map((l) => Object.assign({}, l, { url: '', key: '' }));
     return JSON.stringify(copy, null, 2);
   }
 
@@ -157,6 +160,11 @@
     if (mode === 'replace') {
       DEVICE_ONLY_SETTINGS.forEach((k) => {
         if (!incoming.settings[k]) incoming.settings[k] = db.settings[k];
+      });
+      // Shared-list connections (URL + key) also stay on this device.
+      incoming.settings.sharedLists = (incoming.settings.sharedLists || []).map((l) => {
+        const mine = (db.settings.sharedLists || []).find((x) => x.id === l.id) || {};
+        return Object.assign({}, l, { url: l.url || mine.url || '', key: l.key || mine.key || '' });
       });
       db = incoming;
     } else {
@@ -169,7 +177,7 @@
       });
       // Shared settings an update file may set (never the device-only connection details).
       Object.keys(incoming.settingsPatch || {}).forEach((k) => {
-        if (!DEVICE_ONLY_SETTINGS.includes(k)) db.settings[k] = incoming.settingsPatch[k];
+        if (!DEVICE_ONLY_SETTINGS.includes(k) && k !== 'sharedLists') db.settings[k] = incoming.settingsPatch[k];
       });
       // An update file can also retire records (e.g. a duplicate deal merged into another).
       COLLECTIONS.forEach((c) => ((incoming.remove && incoming.remove[c]) || []).forEach((id) => get(c, id) && remove(c, id, true)));

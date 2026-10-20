@@ -469,3 +469,101 @@ test('researchRequestEmail greets the team and lists each one-pager submarket', 
   assert.match(mail.body, /^Hi Ann, Bo and Cy,/);
   assert.match(mail.body, /• Northeast – Office\n• Northeast \/ I-85 Corridor – Flex\/Industrial/);
 });
+
+test('planListSync links sheet rows, merges both ways and never leaks private CRM details', () => {
+  const headers = ['Company Name', 'Industry', 'Space Need', 'Contact Name', 'Title', 'Email', 'Lead', 'Status', 'Contacted By', 'Last Touch', 'Notes', 'Last Updated By', 'CRM ID'];
+  const row = (n, vals) => ({ row: n, values: headers.map((h) => vals[h] || '') });
+  const payload = (rows, contactRows, research) => ({
+    tabs: {
+      'Target List': { headers, rows },
+      Contacts: { headers: ['Company Name', 'Contact Name', 'Title', 'Email', 'Role', 'Notes', 'CRM ID'], rows: contactRows || [] },
+      'Prospect Research': { headers: ['Rank', 'Company Name', 'Score', 'Recruitment Angle'], rows: research || [] },
+    },
+  });
+  const data = {
+    companies: [{ id: 'c-acme', name: 'Acme Robotics', assetClass: 'Office', industry: 'Robots (ZoomInfo)' }],
+    contacts: [{ id: 'p-ann', companyId: 'c-acme', firstName: 'Ann', lastName: 'Lee', email: 'ann@acme.com' }],
+    activities: [],
+  };
+  const opts = { listId: 'mac', listName: 'Metro Chamber', initials: 'MN', now: '2026-10-20T00:00:00Z' };
+
+  // First sync: Acme matches by name, Beta is new.
+  let plan = L.planListSync(
+    payload(
+      [row(2, { 'Company Name': 'Acme Robotics', 'Contact Name': 'Ann Lee', Status: 'Researching', 'Space Need': 'Industrial' }), row(3, { 'Company Name': 'Beta Labs', 'Contact Name': 'Bo Kim', Title: 'COO', 'Last Touch': '10/5/2026' })],
+      [],
+      [{ row: 2, values: ['1', 'Beta Labs', '93', 'Site screen'] }]
+    ),
+    data,
+    opts
+  );
+  assert.equal(plan.companies.length, 1);
+  const beta = plan.companies[0];
+  assert.equal(beta.name, 'Beta Labs');
+  assert.equal(beta.lastContacted, '2026-10-05');
+  assert.equal(beta.research.score, '93');
+  assert.equal(plan.contacts.find((p) => p.firstName === 'Bo').title, 'COO');
+  const acmePatch = plan.companyUpdates.find((u) => u.id === 'c-acme');
+  assert.equal(acmePatch.assetClass, 'Industrial');
+  assert.equal(acmePatch.listPrimaryContact, 'p-ann');
+  assert.equal(acmePatch.industry, undefined, 'a blank sheet cell does not erase the CRM value');
+  assert.ok(plan.pushes.every((p) => !p.values.Email && !p.values.Industry), 'private CRM details are not pushed on first link');
+  assert.ok(plan.pushes.some((p) => p.crmId === 'c-acme' && p.row === 2), 'CRM IDs are stamped on the rows');
+
+  // Apply the plan, then: MN updates Acme's status in the CRM, KB changes Beta's notes in the sheet.
+  const apply = (d, pl) => {
+    pl.companyUpdates.forEach((u) => Object.assign(d.companies.find((c) => c.id === u.id), u));
+    pl.contactUpdates.forEach((u) => Object.assign(d.contacts.find((c) => c.id === u.id), u));
+    d.companies.push(...pl.companies);
+    d.contacts.push(...pl.contacts);
+  };
+  apply(data, plan);
+  data.companies.find((c) => c.id === 'c-acme').listStatus = 'Contacted';
+  data.companies.find((c) => c.id === 'c-acme').contactedBy = 'MN';
+  plan = L.planListSync(
+    payload([
+      row(2, { 'Company Name': 'Acme Robotics', 'Contact Name': 'Ann Lee', Status: 'Researching', 'Space Need': 'Industrial', 'CRM ID': 'c-acme' }),
+      row(3, { 'Company Name': 'Beta Labs', 'Contact Name': 'Bo Kim', Title: 'COO', 'Last Touch': '10/5/2026', Notes: 'KB called', 'CRM ID': beta.id }),
+    ]),
+    data,
+    opts
+  );
+  const acmePush = plan.pushes.find((p) => p.crmId === 'c-acme');
+  assert.deepEqual(acmePush.values, { Status: 'Contacted', 'Contacted By': 'MN', 'Last Updated By': 'MN' });
+  assert.equal(plan.companyUpdates.find((u) => u.id === beta.id).listNotes, 'KB called');
+  assert.ok(!plan.pushes.some((p) => p.values && p.values.Email), 'still no private email pushed');
+
+  // A company added to the list in the CRM gets a new row; a row deleted from the sheet is flagged, not removed.
+  apply(data, plan);
+  data.companies.push({ id: 'c-new', name: 'Gamma Air', sharedList: 'mac', industry: 'Aerospace' });
+  plan = L.planListSync(payload([row(2, { 'Company Name': 'Acme Robotics', 'Contact Name': 'Ann Lee', Status: 'Contacted', 'Contacted By': 'MN', 'Space Need': 'Industrial', 'CRM ID': 'c-acme' })]), data, opts);
+  const add = plan.pushes.find((p) => p.crmId === 'c-new');
+  assert.equal(add.values['Company Name'], 'Gamma Air');
+  assert.equal(add.values.Status, 'Researching');
+  assert.deepEqual(plan.removed, [beta.id]);
+});
+
+test('dailyPlan leaves shared-list companies your partner leads off your outreach list', () => {
+  const data = {
+    companies: [
+      { id: 'kb', name: 'KB Co', leadStage: 'New', sharedList: 'mac', listLead: 'KB' },
+      { id: 'mn', name: 'MN Co', leadStage: 'New', sharedList: 'mac', listLead: 'MN' },
+      { id: 'own', name: 'Own Co', leadStage: 'New' },
+    ],
+    contacts: [],
+    deals: [],
+    activities: [],
+  };
+  const ids = L.dailyPlan(data, { today: '2026-10-20', initials: 'MN' }).outreach.map((o) => o.companyId).sort();
+  assert.deepEqual(ids, ['mn', 'own']);
+});
+
+test('planListSync reads and writes a presence column named for the region', () => {
+  const headers = ['Company Name', 'Local Area Presence', 'CRM ID'];
+  const data = { companies: [{ id: 'c1', name: 'Acme', sharedList: 'l' }], contacts: [], activities: [] };
+  let plan = L.planListSync({ tabs: { 'Target List': { headers, rows: [{ row: 2, values: ['Acme', 'None', ''] }] } } }, data, { listId: 'l' });
+  assert.equal(plan.companyUpdates[0].localPresence, 'None');
+  Object.assign(data.companies[0], plan.companyUpdates[0], { localPresence: 'Sales rep' });
+  plan = L.planListSync({ tabs: { 'Target List': { headers, rows: [{ row: 2, values: ['Acme', 'None', 'c1'] }] } } }, data, { listId: 'l' });
+  assert.deepEqual(plan.pushes[0].values, { 'Local Area Presence': 'Sales rep' });
+});

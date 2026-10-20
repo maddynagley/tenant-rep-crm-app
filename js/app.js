@@ -12,6 +12,7 @@
     String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
   const PROSPECT_STATUSES = ['Target', 'Contacted', 'Engaged', 'Nurture'];
+  const LIST_STATUSES = ['Researching', 'Ready to contact', 'Contacted', 'Meeting set', 'On hold', 'Not a fit'];
   const GROWTH = ['Growing', 'Stable', 'Contracting', 'Unknown'];
   const SOURCES = ['CoStar', 'Referral', 'Cold Call', 'LinkedIn', 'ZoomInfo', 'Drive-by', 'Existing client', 'Event', 'Landlord tip'];
 
@@ -20,7 +21,7 @@
   const UI_KEY = 'tenant-rep-crm.ui';
   const state = mergeUIState(
     {
-      companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', limit: 100 },
+      companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', limit: 100, list: '', listStatus: '' },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', limit: 100 },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
@@ -91,6 +92,29 @@
       { key: 'clearHeight', label: 'Clear height (ft)', type: 'number', asset: 'Industrial' },
       { key: 'dockDoors', label: 'Dock doors', type: 'number', asset: 'Industrial' },
       { key: 'leaseOptions', label: 'Renewal / termination / ROFR options', wide: true },
+      { section: 'Shared prospect list (these fields sync with the shared Google Sheet)' },
+      {
+        key: 'sharedList',
+        label: 'On shared list',
+        type: 'select',
+        get options() {
+          return (S.settings().sharedLists || []).map((l) => ({ value: l.id, label: l.name }));
+        },
+      },
+      { key: 'listStatus', label: 'List status', type: 'select', options: LIST_STATUSES },
+      { key: 'listLead', label: 'Lead', type: 'select', options: ['KB', 'MN', 'Both'] },
+      { key: 'contactedBy', label: 'Contacted by', type: 'select', options: ['KB', 'MN', 'Both'] },
+      { key: 'spaceNeed', label: 'Space need', type: 'select', options: ['Office', 'Industrial', 'Office & Industrial', 'Unknown'] },
+      { key: 'foe', label: 'Foreign-owned (FOE)', type: 'select', options: ['Y', 'N'] },
+      { key: 'localPresence', label: 'Local presence', type: 'select', options: ['None', 'Sales rep', 'Small office', 'Regional office', 'Facility', 'Unknown'] },
+      { key: 'hqCity', label: 'HQ city' },
+      { key: 'hqState', label: 'HQ state' },
+      { key: 'hqCountry', label: 'HQ country' },
+      { key: 'usHQ', label: 'US HQ' },
+      { key: 'introVia', label: 'Intro via' },
+      { key: 'nextStep', label: 'Next step', wide: true },
+      { key: 'nextStepDate', label: 'Next step date', type: 'date' },
+      { key: 'listNotes', label: 'Shared notes (visible to your list partner)', type: 'textarea', wide: true },
       { section: 'Notes' },
       { key: 'tags', label: 'Tags (comma separated)', wide: true },
       { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
@@ -109,6 +133,16 @@
       { key: 'verification', label: 'Verification', type: 'select', options: ['Web-verified', 'ZoomInfo only', 'Unverified'] },
       { key: 'linkedin', label: 'LinkedIn URL', type: 'url', wide: true },
       { key: 'linkedinConnected', label: 'Connected on LinkedIn', type: 'checkbox' },
+      {
+        key: 'sharedList',
+        label: 'Share on list (adds this person to the shared sheet)',
+        type: 'select',
+        get options() {
+          return (S.settings().sharedLists || []).map((l) => ({ value: l.id, label: l.name }));
+        },
+      },
+      { key: 'listRole', label: 'Role on shared list', type: 'select', options: ['Decision maker', 'Real estate / facilities', 'Executive', 'HR', 'Finance', 'Other'] },
+      { key: 'listNotes', label: 'Shared notes (visible to your list partner)', type: 'textarea', wide: true },
       { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
     ],
     deals: [
@@ -638,6 +672,17 @@
       <button class="btn small ghost" data-action="snooze" data-company="${esc(companyId)}" title="Hide from Today for a week">Snooze</button>`;
   }
 
+  function initialsOf(name) {
+    return String(name || '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((w) => w[0].toUpperCase())
+      .slice(0, 2)
+      .join('');
+  }
+  const myInitials = () => S.settings().myInitials || initialsOf(S.settings().brokerName);
+
   function greeting() {
     const h = new Date().getHours();
     const first = String(S.settings().brokerName || '').trim().split(/\s+/)[0];
@@ -696,7 +741,7 @@
     const today = L.todayISO();
     const plan = L.dailyPlan(
       { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') },
-      { today, outreachGoal: s.outreachGoal }
+      { today, outreachGoal: s.outreachGoal, initials: myInitials() }
     );
     const touchedToday = S.all('activities').filter((a) => a.date === today && TOUCH_TYPES.includes(a.type)).length;
     const goal = Number(s.outreachGoal) || 10;
@@ -1111,8 +1156,69 @@
     return withScore;
   }
 
+  function companyTabs() {
+    const f = state.companies;
+    const lists = S.settings().sharedLists || [];
+    if (!lists.length) return '';
+    return `<div class="seg wrap">${[{ id: '', name: 'All companies' }]
+      .concat(lists)
+      .map((l) => `<button class="${(f.list || '') === l.id ? 'on' : ''}" data-action="set-filter" data-scope="companies" data-key="list" data-value="${esc(l.id)}">${esc(l.name)}${l.id ? ` <span class="muted">${S.all('companies').filter((c) => c.sharedList === l.id && !c.listRemoved).length}</span>` : ''}</button>`)
+      .join('')}</div>`;
+  }
+
+  function viewSharedList(listId) {
+    const f = state.companies;
+    const list = (S.settings().sharedLists || []).find((l) => l.id === listId);
+    if (!list) {
+      f.list = '';
+      return viewCompanies();
+    }
+    const q = f.q.trim().toLowerCase();
+    const all = S.all('companies').filter((c) => c.sharedList === listId);
+    const rows = all
+      .filter((c) => (f.listStatus ? (f.listStatus === 'Removed' ? c.listRemoved : !c.listRemoved && c.listStatus === f.listStatus) : !c.listRemoved))
+      .filter((c) => !q || [c.name, c.industry, c.listNotes, c.nextStep, c.hqCity, c.usHQ].join(' ').toLowerCase().includes(q))
+      .sort((a, b) => (L.parseNumber(b.research && b.research.score) || 0) - (L.parseNumber(a.research && a.research.score) || 0) || a.name.localeCompare(b.name));
+    const counts = {};
+    all.forEach((c) => {
+      const k = c.listRemoved ? 'Removed' : c.listStatus || 'Researching';
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const statusCls = { 'Meeting set': 'green', Contacted: 'blue', 'Ready to contact': 'amber', 'Not a fit': 'red' };
+    return `
+      <div class="page-head"><div><h1>${esc(list.name)}</h1><div class="greeting-sub">Shared with your list partner through Google Sheets${list.lastSync ? ' · synced ' + esc(new Date(list.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })) : ''}</div></div>
+        <div class="actions">${list.url ? `<button class="btn" data-action="sync-list" data-list="${esc(listId)}">Sync now</button>` : '<a class="btn" href="#/data">Connect the sheet</a>'}<button class="btn primary" data-action="new" data-col="companies" data-list="${esc(listId)}">+ Company</button></div>
+      </div>
+      ${companyTabs()}
+      <div class="toolbar">
+        <div class="seg wrap">${['', ...LIST_STATUSES, 'Removed']
+          .filter((st) => !st || counts[st])
+          .map((st) => `<button class="${(f.listStatus || '') === st ? 'on' : ''}" data-action="set-filter" data-scope="companies" data-key="listStatus" data-value="${esc(st)}">${esc(st || 'All')} <span class="muted">${st ? counts[st] : all.filter((c) => !c.listRemoved).length}</span></button>`)
+          .join('')}</div>
+        <input type="search" placeholder="Search company, industry, notes…" value="${esc(f.q)}" data-filter="companies.q" id="f-companies-q" />
+      </div>
+      ${
+        rows.length
+          ? `<div class="table-wrap"><table class="tbl"><thead><tr><th class="right">Score</th><th>Company</th><th>Status</th><th>Lead</th><th>Contacted by</th><th>Primary contact</th><th>Next step</th><th>Last touch</th></tr></thead><tbody>${rows
+              .map((c) => {
+                const p = c.listPrimaryContact ? S.get('contacts', c.listPrimaryContact) : null;
+                return `<tr data-href="#/company/${esc(c.id)}">
+                  <td class="right">${c.research && c.research.score ? `<strong>${esc(c.research.score)}</strong>` : '<span class="muted">—</span>'}</td>
+                  <td><strong>${esc(c.name)}</strong> ${c.listRemoved ? badge('Removed from shared list', 'red') : ''}<div class="sub">${esc([c.industry, [c.hqCity, c.hqState || c.hqCountry].filter(Boolean).join(', ')].filter(Boolean).join(' · '))}</div></td>
+                  <td>${badge(c.listStatus || 'Researching', statusCls[c.listStatus] || 'gray')}</td>
+                  <td>${esc(c.listLead)}</td><td>${esc(c.contactedBy)}</td>
+                  <td>${p ? esc(contactName(p)) + (p.title ? `<div class="sub">${esc(p.title)}</div>` : '') : '<span class="muted">—</span>'}</td>
+                  <td>${esc(c.nextStep)}${c.nextStepDate ? `<div class="sub">${esc(L.fmtDate(c.nextStepDate))}</div>` : ''}</td>
+                  <td>${c.lastContacted ? esc(L.fmtDate(c.lastContacted)) : '<span class="muted">Never</span>'}</td></tr>`;
+              })
+              .join('')}</tbody></table></div>`
+          : emptyState(list.url ? 'No companies match.' : 'Connect the shared Google Sheet in Import / Settings to bring in the list.')
+      }`;
+  }
+
   function viewCompanies() {
     const f = state.companies;
+    if (f.list) return viewSharedList(f.list);
     const rows = filteredCompanies();
     const shown = rows.slice(0, f.limit || 100);
     const totalSF = rows.reduce((t, r) => t + (L.parseNumber(r.c.sfOccupied) || 0), 0);
@@ -1128,6 +1234,7 @@
           <button class="btn primary" data-action="new" data-col="companies">+ Company</button>
         </div>
       </div>
+      ${companyTabs()}
       <div class="toolbar">
         ${assetTabs(f.asset, 'companies')}
         <input type="search" placeholder="Search name, address, landlord, tags…" value="${esc(f.q)}" data-filter="companies.q" id="f-companies-q" />
@@ -1253,6 +1360,7 @@
         </section>
       </div>
       ${c.notes ? `<section class="card"><h2>Notes</h2><p class="pre">${esc(c.notes)}</p></section>` : ''}
+      ${sharedListCard(c)}
 
       <div class="grid2">
         <section class="card">
@@ -1280,6 +1388,39 @@
         <h2>Activity <button class="link more" data-action="new" data-col="activities" data-company="${esc(id)}">+ Log</button></h2>
         ${acts.length ? activityTimeline(acts) : emptyState('No activity logged yet.')}
       </section>`;
+  }
+
+  function sharedListCard(c) {
+    const list = (S.settings().sharedLists || []).find((l) => l.id === c.sharedList);
+    if (!list) return '';
+    const r = c.research || {};
+    const rows = [
+      ['Status', c.listStatus],
+      ['Lead', c.listLead],
+      ['Contacted by', c.contactedBy],
+      ['Next step', [c.nextStep, L.fmtDate(c.nextStepDate)].filter(Boolean).join(' · ')],
+      ['HQ', [c.hqCity, c.hqState, c.hqCountry].filter(Boolean).join(', ')],
+      ['US HQ', c.usHQ],
+      ['Local presence', c.localPresence],
+      ['Foreign-owned', c.foe],
+      ['Intro via', c.introVia],
+      ['Shared notes', c.listNotes],
+    ].filter((x) => x[1]);
+    const research = [
+      ['Score', r.score ? r.score + (r.rank ? ` (rank ${r.rank})` : '') + (r.confidence ? ` · ${r.confidence} confidence` : '') : ''],
+      ['Likely Atlanta operation', r.operation],
+      ['Approach', r.approach],
+      ['Recruitment angle', r.angle],
+      ['Atlanta fit', r.fit],
+      ['Submarkets to screen', r.submarkets],
+      ['Evidence', r.evidence],
+      ['Risk', r.risk],
+    ].filter((x) => x[1]);
+    return `<section class="card"><h2>${esc(list.name)} ${c.listRemoved ? badge('Removed from shared list', 'red') : ''}<button class="link more" data-action="edit" data-col="companies" data-id="${esc(c.id)}">Edit</button></h2>
+      <p class="hint">These fields sync both ways with the shared Google Sheet. Your other CRM details stay private.</p>
+      ${rows.length ? `<dl class="info">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${research.length ? `<h3 class="form-section">Prospect research</h3><dl class="info">${research.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+    </section>`;
   }
 
   function dealTermsCard(d) {
@@ -1872,6 +2013,23 @@
           </form>
         </section>
         <section class="card">
+          <h2>Shared prospect lists</h2>
+          <p>Two-way sync with a Google Sheet you share with a partner. Set it up once per sheet with the <a href="integrations/shared-list-sync.gs" target="_blank" rel="noopener">shared-list script</a> (instructions at the top), then paste its web-app URL and sync key here.</p>
+          ${(s.sharedLists || [])
+            .map(
+              (l) => `<form class="form-grid list-form" data-list="${esc(l.id)}">
+            <label>List name<input name="name" value="${esc(l.name)}" /></label>
+            <label>Your initials on this list<input name="initials" value="${esc(s.myInitials || initialsOf(s.brokerName))}" maxlength="4" /></label>
+            <label class="wide">Web app URL<input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(l.url)}" /></label>
+            <label class="wide">Sync key<input name="key" type="password" autocomplete="off" value="${esc(l.key)}" /></label>
+            <div class="wide actions"><button class="btn primary" type="submit">Save</button>${l.url ? `<button class="btn" type="button" data-action="sync-list" data-list="${esc(l.id)}">Sync now</button>` : ''}</div>
+            <p class="hint wide">${esc(listStatus[l.id] || (l.lastSync ? 'Last synced ' + new Date(l.lastSync).toLocaleString() : 'Not connected yet.'))}</p>
+          </form>`
+            )
+            .join('')}
+          <button class="btn" type="button" data-action="add-list">+ Add another shared list</button>
+        </section>
+        <section class="card">
           <h2>HubSpot live sync</h2>
           <p>Brings in the emails (with opens and replies), meetings and calls HubSpot logs from Outlook, every few minutes while the CRM is open.
           Set it up once with the <a href="integrations/hubspot-bridge.gs" target="_blank" rel="noopener">bridge script</a> (instructions at the top), then paste its web-app URL and sync key here. Your HubSpot key stays in your Google account, never in this browser.</p>
@@ -1983,7 +2141,10 @@
     const today = L.todayISO();
     switch (col) {
       case 'companies':
-        return { status: 'Target', priority: 'B', growthSignal: 'Unknown', assetClass: state.companies.asset !== 'All' ? state.companies.asset : '' };
+        return Object.assign(
+          { status: 'Target', priority: 'B', growthSignal: 'Unknown', assetClass: state.companies.asset !== 'All' ? state.companies.asset : '' },
+          ctx.list ? { sharedList: ctx.list, listStatus: 'Researching', source: ((S.settings().sharedLists || []).find((l) => l.id === ctx.list) || {}).name } : {}
+        );
       case 'contacts':
         return { companyId: ctx.company || '' };
       case 'documents': {
@@ -2076,11 +2237,18 @@
     const rec = readForm(form, col);
     if (form.dataset.id) rec.id = form.dataset.id;
     if (col === 'deals' && rec.stage === 'Closed Won' && !rec.closedDate) rec.closedDate = L.todayISO();
+    if (col === 'activities' && !form.dataset.id && ['Call', 'Email', 'LinkedIn', 'Meeting'].includes(rec.type) && rec.companyId && (rec.date || '') <= L.todayISO()) {
+      const touch = sharedListTouch(S.get('companies', rec.companyId));
+      if (Object.keys(touch).length) S.upsert('companies', Object.assign({ id: rec.companyId }, touch), { silent: true });
+    }
     if (col === 'deals' && rec.stage === 'Closed Won' && (!form.dataset.id || S.get('deals', form.dataset.id).stage !== 'Closed Won')) setTimeout(celebrate, 200);
     const wasSecured = col === 'companies' && form.dataset.id && L.leadStage(S.get('companies', form.dataset.id)) === 'Secured Lead';
     const saved = S.upsert(col, rec);
     if (col === 'companies' && !wasSecured && L.leadStage(saved) === 'Secured Lead' && createDealForLead(saved.id)) toast('Secured! Created a deal in Intro Call.');
     if (col === 'deals' && saved.inPortfolioSheet && S.settings().sheetSyncUrl) setTimeout(() => syncSheet(false), 0);
+    const touched = col === 'companies' ? saved : col === 'contacts' ? S.get('companies', saved.companyId) : col === 'activities' ? S.get('companies', saved.companyId) : null;
+    const listId = (col === 'contacts' && saved.sharedList) || (touched && touched.sharedList);
+    if (listId) setTimeout(() => syncSharedList(listId, false), 300);
     const another = form.elements.__another && form.elements.__another.checked;
     $('#modal').close();
     if (!form.dataset.id && col === 'companies') location.hash = '#/company/' + saved.id;
@@ -2479,7 +2647,7 @@
     const openCount = openFollowUps().filter((a) => activityDue(a) <= L.todayISO()).length;
     $('#nav-due').textContent = openCount || '';
     renderBackupNag();
-    const initials = String(S.settings().brokerName || '').trim().split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase()).slice(0, 2).join('');
+    const initials = initialsOf(S.settings().brokerName);
     $('#logo').textContent = initials || 'TR';
     renderCoach();
 
@@ -2501,6 +2669,16 @@
     const show = hasData && (age === null || age > 14);
     $('#backup-nag').hidden = !show;
     if (show) $('#backup-nag-text').textContent = age === null ? "You haven't backed up yet." : `Last backup was ${age} days ago.`;
+  }
+
+  // Reaching out to a company on a shared list records who did it, so your partner sees it in the sheet.
+  function sharedListTouch(c) {
+    if (!c || !c.sharedList || c.listRemoved) return {};
+    const me = myInitials();
+    const patch = {};
+    if (me && c.contactedBy !== me && c.contactedBy !== 'Both') patch.contactedBy = c.contactedBy ? 'Both' : me;
+    if (!c.listStatus || ['Researching', 'Ready to contact'].includes(c.listStatus)) patch.listStatus = 'Contacted';
+    return patch;
   }
 
   function setLeadStage(id, stage) {
@@ -2527,7 +2705,7 @@
       switch (d.action) {
         case 'new':
           e.preventDefault();
-          return openForm(d.col, null, { company: d.company, contact: d.contact, deal: d.deal });
+          return openForm(d.col, null, { company: d.company, contact: d.contact, deal: d.deal, list: d.list });
         case 'edit':
           e.preventDefault();
           return openForm(d.col, d.id);
@@ -2571,10 +2749,18 @@
           const c = S.get('companies', d.company);
           const today = L.todayISO();
           S.upsert('activities', { type: d.type, date: today, companyId: c.id, contactId: d.contact || '', subject: d.type === 'Call' ? 'Called' : 'Emailed', leadStageAtSend: L.leadStage(c) }, { silent: true });
-          const patch = { id: c.id, lastContacted: today };
+          const patch = Object.assign({ id: c.id, lastContacted: today }, sharedListTouch(c));
           if (L.leadStage(c) === 'New') patch.leadStage = 'Initial Outreach';
           S.upsert('companies', patch);
+          if (c.sharedList) setTimeout(() => syncSharedList(c.sharedList, false), 300);
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
+        }
+        case 'sync-list':
+          return syncSharedList(d.list, true);
+        case 'add-list': {
+          const lists = (S.settings().sharedLists || []).concat([{ id: 'list' + Date.now().toString(36), name: 'New shared list', url: '', key: '', lastSync: '' }]);
+          S.saveSettings({ sharedLists: lists });
+          return toast('Added. Name it and paste its web-app URL and sync key.');
         }
         case 'sync-hubspot':
           return syncHubSpot(true);
@@ -2776,6 +2962,16 @@
       S.saveSettings(patch);
       toast('Settings saved.');
       if (e.target.id === 'settings-form-hubspot' && patch.hubspotBridgeUrl) syncHubSpot(true);
+    } else if (e.target.classList.contains('list-form')) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const id = e.target.dataset.list;
+      const lists = (S.settings().sharedLists || []).map((l) =>
+        l.id === id ? Object.assign({}, l, { name: String(fd.get('name')).trim() || l.name, url: String(fd.get('url')).trim(), key: String(fd.get('key')).trim() }) : l
+      );
+      S.saveSettings({ sharedLists: lists, myInitials: String(fd.get('initials')).trim().toUpperCase() });
+      toast('Saved.');
+      if (lists.find((l) => l.id === id).url) syncSharedList(id, true);
     } else if (e.target.id === 'import-form') {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -2869,6 +3065,57 @@
     S.saveSettings({ generatedIds: Array.from(made) });
   }
 
+  // ---------- shared prospect lists ----------
+
+  const listStatus = {};
+  const listSyncing = {};
+  async function listRequest(list, body) {
+    const res = body
+      ? await fetch(list.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: list.key }, body)) })
+      : await fetch(list.url + (list.url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(list.key));
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Sync failed');
+    return data;
+  }
+
+  async function syncSharedList(listId, manual) {
+    const list = (S.settings().sharedLists || []).find((l) => l.id === listId);
+    if (!list || !list.url || !list.key || listSyncing[listId]) return;
+    listSyncing[listId] = true;
+    try {
+      const payload = await listRequest(list);
+      const plan = L.planListSync(
+        payload,
+        { companies: S.all('companies'), contacts: S.all('contacts'), activities: S.all('activities') },
+        { listId, listName: list.name, initials: myInitials() }
+      );
+      plan.companies.forEach((c) => S.upsert('companies', c, { silent: true }));
+      plan.contacts.forEach((c) => S.upsert('contacts', c, { silent: true }));
+      plan.companyUpdates.forEach((u) => S.upsert('companies', u, { silent: true, touch: false }));
+      plan.contactUpdates.forEach((u) => S.upsert('contacts', u, { silent: true, touch: false }));
+      if (plan.pushes.length) await listRequest(list, { changes: plan.pushes });
+      const parts = [];
+      if (plan.counts.added) parts.push(`${plan.counts.added} added from the sheet`);
+      if (plan.counts.updated) parts.push(`${plan.counts.updated} updated from the sheet`);
+      if (plan.counts.pushed) parts.push(`${plan.counts.pushed} sent to the sheet`);
+      if (plan.removed.length) parts.push(`${plan.removed.length} removed from the sheet`);
+      listStatus[listId] = 'Last synced ' + new Date().toLocaleString() + ' · ' + (parts.join(', ') || 'already in step');
+      const lists = (S.settings().sharedLists || []).map((l) => (l.id === listId ? Object.assign({}, l, { lastSync: new Date().toISOString() }) : l));
+      S.saveSettings({ sharedLists: lists });
+      if (manual) toast(list.name + ': ' + (parts.join(', ') || 'already in step') + '.');
+    } catch (err) {
+      listStatus[listId] = 'Last attempt failed: ' + err.message;
+      if (manual) toast(list.name + ' sync failed: ' + err.message);
+      render();
+    } finally {
+      listSyncing[listId] = false;
+    }
+  }
+  const syncAllLists = () => (S.settings().sharedLists || []).forEach((l) => l.url && syncSharedList(l.id, false));
+  setInterval(() => {
+    if (!document.hidden) syncAllLists();
+  }, 2 * 60000);
+
   // ---------- HubSpot live sync ----------
 
   let hubspotSyncing = false;
@@ -2914,5 +3161,6 @@
   ensureGenerated();
   render();
   syncHubSpot(false);
+  syncAllLists();
   if (parseRoute().name === 'portfolio') maybeAutoSync();
 })();

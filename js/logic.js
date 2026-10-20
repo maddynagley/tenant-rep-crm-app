@@ -666,6 +666,348 @@
     return { activities: upserts, companies: companyPatches, skipped };
   }
 
+  // ---------- shared prospect lists (two-way Google Sheet) ----------
+
+  // Shared columns on the list's main tab, and the CRM company field each one maps to.
+  const LIST_COMPANY_COLUMNS = {
+    'Company Name': 'name',
+    Website: 'website',
+    Industry: 'industry',
+    'Space Need': 'spaceNeed',
+    FOE: 'foe',
+    'HQ City': 'hqCity',
+    'HQ State': 'hqState',
+    'HQ Country': 'hqCountry',
+    'US HQ': 'usHQ',
+    Presence: 'localPresence', // matches any heading ending in "Presence"
+    'Intro Via': 'introVia',
+    Lead: 'listLead',
+    Status: 'listStatus',
+    'Contacted By': 'contactedBy',
+    'Last Touch': 'lastContacted',
+    'Next Step': 'nextStep',
+    'Next Step Date': 'nextStepDate',
+    Notes: 'listNotes',
+  };
+  // The main tab's primary-contact columns, mapped to CRM contact fields.
+  const LIST_PRIMARY_COLUMNS = { 'Contact Name': 'fullName', Title: 'title', Email: 'email', Phone: 'phone', LinkedIn: 'linkedin' };
+  const LIST_CONTACT_COLUMNS = { 'Contact Name': 'fullName', Title: 'title', Email: 'email', Phone: 'phone', LinkedIn: 'linkedin', Role: 'listRole', Notes: 'listNotes' };
+  const LIST_RESEARCH_COLUMNS = {
+    Rank: 'rank',
+    Score: 'score',
+    Confidence: 'confidence',
+    'Likely Metro Atlanta Operation': 'operation',
+    'Outreach Approach': 'approach',
+    Evidence: 'evidence',
+    'Atlanta Fit': 'fit',
+    'Submarkets to Screen': 'submarkets',
+    Risk: 'risk',
+    'Recruitment Angle': 'angle',
+  };
+  const LIST_DATE_FIELDS = ['lastContacted', 'nextStepDate'];
+  const SPACE_TO_ASSET = { Office: 'Office', Industrial: 'Industrial', 'Office & Industrial': 'Office & Industrial' };
+
+  const listNorm = (field, v) => {
+    const s = v === null || v === undefined ? '' : String(v).trim();
+    return LIST_DATE_FIELDS.includes(field) ? normalizeDate(s) || s : s;
+  };
+  const sheetDate = (iso) => {
+    const d = parseISODate(iso);
+    return d ? d.getMonth() + 1 + '/' + d.getDate() + '/' + d.getFullYear() : iso;
+  };
+  const contactFull = (p) => [p.firstName, p.lastName].filter(Boolean).join(' ');
+  const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+  // Per field, each side "changed" if it differs from what that side held after the last sync.
+  // Only the sheet changed: copy it to the CRM. Only the CRM changed: push it to the sheet. Both: the sheet wins.
+  // Neither: leave both alone, even if they differ, so private CRM details (e.g. a ZoomInfo email) are never
+  // pushed to a shared sheet and a blank sheet cell never erases them. First link: the sheet's filled cells win.
+  function mergeFields(fields, sheetRec, crmRec, last) {
+    const toCrm = {};
+    const toSheet = {};
+    fields.forEach((f) => {
+      const s = sheetRec[f] || '';
+      const c = crmRec[f] || '';
+      if (s === c) return;
+      if (!last) {
+        if (s) toCrm[f] = s;
+        return;
+      }
+      const sheetChanged = s !== ((last.sheet || {})[f] || '');
+      const crmChanged = c !== ((last.crm || {})[f] || '');
+      if (sheetChanged) toCrm[f] = s;
+      else if (crmChanged) toSheet[f] = c;
+    });
+    const sheet = Object.assign({}, sheetRec, toSheet);
+    const crm = Object.assign({}, crmRec, toCrm);
+    return { toCrm, toSheet, snapshot: { sheet, crm } };
+  }
+
+  // Plans one sync of a shared list. Returns CRM changes to apply and sheet changes to push.
+  function planListSync(payload, data, opts) {
+    const listId = opts.listId;
+    const mainTab = opts.mainTab || 'Target List';
+    const contactsTab = opts.contactsTab || 'Contacts';
+    const researchTab = opts.researchTab || 'Prospect Research';
+    const initials = opts.initials || '';
+    const tabs = payload.tabs || {};
+    const out = { companies: [], contacts: [], pushes: [], removed: [], counts: { added: 0, updated: 0, pushed: 0 } };
+    const now = opts.now || new Date().toISOString();
+
+    const companies = data.companies.slice();
+    const contacts = data.contacts.slice();
+    const companyPatch = {};
+    const patchCompany = (id, patch) => {
+      companyPatch[id] = Object.assign(companyPatch[id] || { id }, patch);
+    };
+    const contactPatch = {};
+    const patchContact = (id, patch) => {
+      contactPatch[id] = Object.assign(contactPatch[id] || { id }, patch);
+    };
+    const crmCompany = (id) => Object.assign({}, companies.find((c) => c.id === id) || {}, companyPatch[id] || {});
+    const crmContact = (id) => Object.assign({}, contacts.find((p) => p.id === id) || {}, contactPatch[id] || {});
+    let seq = 0;
+    const newId = (prefix) => prefix + '-' + listId + '-' + Date.now().toString(36) + (seq++).toString(36);
+
+    const tabRows = (name) => {
+      const t = tabs[name];
+      if (!t) return { headers: [], rows: [] };
+      const idx = {};
+      t.headers.forEach((h, i) => {
+        idx[h] = i;
+        if (/\bpresence$/i.test(h) && idx.Presence === undefined) idx.Presence = i;
+      });
+      return { headers: t.headers, idx, rows: t.rows.map((r) => ({ row: r.row, get: (h) => (idx[h] === undefined ? undefined : r.values[idx[h]]) })) };
+    };
+
+    // ---- main tab: companies + primary contact ----
+    const main = tabRows(mainTab);
+    // The sheet's own heading for a column (the presence column may be named for the region).
+    const realHeader = (h) => (main.headers.includes(h) ? h : h === 'Presence' ? main.headers.find((x) => /\bpresence$/i.test(x)) || h : h);
+    const companyFields = Object.values(LIST_COMPANY_COLUMNS);
+    const seenCompanies = new Set();
+    const primaryFields = ['fullName', 'title', 'email', 'phone', 'linkedin'];
+    const findContact = (companyId, fullName) =>
+      contacts.find((p) => p.companyId === companyId && sameName(contactFull(p), fullName)) ||
+      (out.contacts.find((p) => p.companyId === companyId && sameName(contactFull(p), fullName)) || null);
+
+    main.rows.forEach((r) => {
+      const name = String(r.get('Company Name') || '').trim();
+      if (!name) return;
+      const sheetRec = {};
+      Object.entries(LIST_COMPANY_COLUMNS).forEach(([h, f]) => {
+        if (main.idx[h] !== undefined) sheetRec[f] = listNorm(f, r.get(h));
+      });
+      const crmIdCell = String(r.get('CRM ID') || '').trim();
+      let company = (crmIdCell && companies.find((c) => c.id === crmIdCell)) || companies.find((c) => c.sharedList === listId && sameName(c.name, name)) || findCompanyByName(companies, name);
+      if (!company) {
+        company = {
+          id: newId('ls'),
+          name,
+          assetClass: SPACE_TO_ASSET[sheetRec.spaceNeed] || 'Office & Industrial',
+          status: 'Target',
+          priority: 'B',
+          source: opts.listName || 'Shared list',
+          sharedList: listId,
+          listSync: {},
+          createdAt: now,
+          updatedAt: now,
+        };
+        companies.push(company);
+        out.companies.push(company);
+        out.counts.added++;
+      }
+      seenCompanies.add(company.id);
+      const current = crmCompany(company.id);
+      const last = (current.listSync || {})[listId];
+      const crmRec = {};
+      companyFields.forEach((f) => (crmRec[f] = listNorm(f, current[f])));
+      const { toCrm, toSheet, snapshot: companySnap } = mergeFields(Object.keys(sheetRec), sheetRec, crmRec, last && last.company);
+      const patch = Object.assign({}, toCrm);
+      if (toCrm.spaceNeed && SPACE_TO_ASSET[toCrm.spaceNeed]) patch.assetClass = SPACE_TO_ASSET[toCrm.spaceNeed];
+      if (Object.keys(toCrm).length && !out.companies.includes(company)) out.counts.updated++;
+
+      // Primary contact on the same row.
+      const sheetPrimary = {};
+      Object.entries(LIST_PRIMARY_COLUMNS).forEach(([h, f]) => {
+        if (main.idx[h] !== undefined) sheetPrimary[f] = listNorm(f, r.get(h));
+      });
+      // Which person is the primary contact: the sheet decides unless only the CRM changed it since the last sync.
+      const lastPrimary = last && last.primary;
+      const sheetName = sheetPrimary.fullName || '';
+      let primary = current.listPrimaryContact ? crmContact(current.listPrimaryContact) : null;
+      if (primary && !primary.id) primary = out.contacts.find((x) => x.id === current.listPrimaryContact) || null;
+      const crmName = primary ? contactFull(primary) : '';
+      let pushName = '';
+      if (!sameName(sheetName, crmName)) {
+        const sheetUnchanged = lastPrimary && sameName((lastPrimary.sheet || {}).fullName, sheetName);
+        if (sheetUnchanged && crmName) pushName = crmName;
+        else if (sheetName) {
+          primary = findContact(company.id, sheetName);
+          if (!primary && !/^through\b/i.test(sheetName)) {
+            primary = Object.assign({ id: newId('lc'), companyId: company.id, sharedList: listId, source: opts.listName || 'Shared list', createdAt: now, updatedAt: now }, splitName(sheetName));
+            out.contacts.push(primary);
+          }
+        } else primary = null;
+      }
+      let primaryPush = {};
+      let primaryRecord = { sheet: sheetPrimary, crm: {} };
+      if (primary) {
+        const isNewContact = out.contacts.includes(primary);
+        const p = isNewContact ? primary : crmContact(primary.id);
+        const crmP = { fullName: contactFull(p), title: listNorm('', p.title), email: listNorm('', p.email), phone: listNorm('', p.phone), linkedin: listNorm('', p.linkedin) };
+        const samePerson = lastPrimary && sameName((lastPrimary.crm || {}).fullName, crmP.fullName);
+        const fields = primaryFields.filter((f) => f !== 'fullName');
+        // When the CRM switched to a different person, the sheet's details belong to the old one: send the new person's.
+        const m = pushName
+          ? mergeFields(fields, sheetPrimary, crmP, { sheet: sheetPrimary, crm: {} })
+          : mergeFields(fields, sheetPrimary, crmP, samePerson ? lastPrimary : null);
+        if (Object.keys(m.toCrm).length) {
+          if (isNewContact) Object.assign(primary, m.toCrm);
+          else patchContact(primary.id, m.toCrm);
+        }
+        primaryPush = m.toSheet;
+        if (pushName) primaryPush.fullName = pushName;
+        patch.listPrimaryContact = primary.id;
+        primaryRecord = {
+          sheet: Object.assign({}, m.snapshot.sheet, { fullName: pushName || sheetName }),
+          crm: Object.assign({}, m.snapshot.crm, { fullName: crmP.fullName }),
+        };
+      } else patch.listPrimaryContact = '';
+
+      patch.sharedList = listId;
+      patch.listRemoved = '';
+      patch.listSync = Object.assign({}, current.listSync || {}, { [listId]: { company: companySnap, primary: primaryRecord, row: r.row, at: now } });
+      if (out.companies.includes(company)) Object.assign(company, patch);
+      else patchCompany(company.id, patch);
+
+      const values = {};
+      Object.entries(toSheet).forEach(([f, v]) => {
+        const h = realHeader(Object.keys(LIST_COMPANY_COLUMNS).find((k) => LIST_COMPANY_COLUMNS[k] === f));
+        values[h] = LIST_DATE_FIELDS.includes(f) ? sheetDate(v) : v;
+      });
+      Object.entries(primaryPush).forEach(([f, v]) => {
+        const h = Object.keys(LIST_PRIMARY_COLUMNS).find((k) => LIST_PRIMARY_COLUMNS[k] === f);
+        values[h] = v;
+      });
+      const needsId = crmIdCell !== company.id;
+      if (Object.keys(values).length || needsId) {
+        if (Object.keys(values).length && initials) values['Last Updated By'] = initials;
+        out.pushes.push({ tab: mainTab, crmId: company.id, row: r.row, match: { 'Company Name': name }, values });
+        if (Object.keys(values).length) out.counts.pushed++;
+      }
+    });
+
+    // Companies added to the list in the CRM get a new row; ones that left the sheet are marked, not deleted.
+    companies
+      .filter((c) => c.sharedList === listId && !seenCompanies.has(c.id) && !out.companies.includes(c))
+      .forEach((c0) => {
+        const c = crmCompany(c0.id);
+        if (c.listSync && c.listSync[listId]) {
+          if (!c.listRemoved) out.removed.push(c.id);
+          return;
+        }
+        const values = {};
+        Object.entries(LIST_COMPANY_COLUMNS).forEach(([h, f]) => {
+          const v = listNorm(f, c[f]);
+          if (v) values[realHeader(h)] = LIST_DATE_FIELDS.includes(f) ? sheetDate(v) : v;
+        });
+        const p = c.listPrimaryContact ? crmContact(c.listPrimaryContact) : null;
+        if (p && p.id) {
+          Object.entries(LIST_PRIMARY_COLUMNS).forEach(([h, f]) => {
+            const v = f === 'fullName' ? contactFull(p) : listNorm(f, p[f]);
+            if (v) values[h] = v;
+          });
+        }
+        if (!values.Status) values.Status = 'Researching';
+        if (initials) values['Last Updated By'] = initials;
+        out.pushes.push({ tab: mainTab, crmId: c.id, values });
+        out.counts.pushed++;
+        const rec = {};
+        Object.values(LIST_COMPANY_COLUMNS).forEach((f) => (rec[f] = listNorm(f, c[f])));
+        if (!rec.listStatus) rec.listStatus = 'Researching';
+        const prim = {};
+        if (p && p.id) Object.values(LIST_PRIMARY_COLUMNS).forEach((f) => (prim[f] = f === 'fullName' ? contactFull(p) : listNorm(f, p[f])));
+        patchCompany(c.id, { listStatus: rec.listStatus, listSync: Object.assign({}, c.listSync || {}, { [listId]: { company: { sheet: rec, crm: rec }, primary: { sheet: prim, crm: prim }, at: now } }) });
+      });
+    out.removed.forEach((id) => patchCompany(id, { listRemoved: 'true' }));
+
+    // ---- Contacts tab ----
+    const ct = tabRows(contactsTab);
+    const contactFields = Object.values(LIST_CONTACT_COLUMNS);
+    const listCompanies = () => companies.filter((c) => (crmCompany(c.id).sharedList || c.sharedList) === listId);
+    ct.rows.forEach((r) => {
+      const companyName = String(r.get('Company Name') || '').trim();
+      const fullName = String(r.get('Contact Name') || '').trim();
+      if (!companyName || !fullName) return;
+      const company = findCompanyByName(listCompanies(), companyName) || findCompanyByName(companies, companyName);
+      if (!company) return;
+      const sheetRec = {};
+      Object.entries(LIST_CONTACT_COLUMNS).forEach(([h, f]) => {
+        if (ct.idx[h] !== undefined) sheetRec[f] = listNorm(f, r.get(h));
+      });
+      const crmIdCell = String(r.get('CRM ID') || '').trim();
+      let p = (crmIdCell && (contacts.find((x) => x.id === crmIdCell) || out.contacts.find((x) => x.id === crmIdCell))) || findContact(company.id, fullName);
+      if (!p) {
+        p = Object.assign({ id: newId('lc'), companyId: company.id, sharedList: listId, source: opts.listName || 'Shared list', createdAt: now, updatedAt: now }, splitName(fullName));
+        out.contacts.push(p);
+      }
+      const isNew = out.contacts.includes(p);
+      const cur = isNew ? p : crmContact(p.id);
+      const crmRec = { fullName: contactFull(cur) };
+      contactFields.forEach((f) => f !== 'fullName' && (crmRec[f] = listNorm(f, cur[f])));
+      const last = (cur.listSync || {})[listId];
+      const { toCrm, toSheet, snapshot } = mergeFields(contactFields, sheetRec, crmRec, last);
+      const patch = {};
+      Object.entries(toCrm).forEach(([f, v]) => (f === 'fullName' ? Object.assign(patch, splitName(v)) : (patch[f] = v)));
+      patch.sharedList = listId;
+      patch.listSync = Object.assign({}, cur.listSync || {}, { [listId]: snapshot });
+      if (isNew) Object.assign(p, patch);
+      else patchContact(p.id, patch);
+      const values = {};
+      Object.entries(toSheet).forEach(([f, v]) => (values[Object.keys(LIST_CONTACT_COLUMNS).find((k) => LIST_CONTACT_COLUMNS[k] === f)] = v));
+      if (Object.keys(values).length || crmIdCell !== p.id) out.pushes.push({ tab: contactsTab, crmId: p.id, row: r.row, match: { 'Company Name': companyName, 'Contact Name': fullName }, values });
+    });
+
+    // Contacts shared from the CRM that the Contacts tab doesn't have yet.
+    const onTab = new Set(out.pushes.filter((x) => x.tab === contactsTab).map((x) => x.crmId));
+    contacts
+      .filter((p) => crmContact(p.id).sharedList === listId && !onTab.has(p.id) && !((crmContact(p.id).listSync || {})[listId]))
+      .forEach((p0) => {
+        const p = crmContact(p0.id);
+        const company = crmCompany(p.companyId);
+        if (!company.name) return;
+        const rec = { fullName: contactFull(p) };
+        contactFields.forEach((f) => f !== 'fullName' && (rec[f] = listNorm(f, p[f])));
+        const values = { 'Company Name': company.name };
+        Object.entries(LIST_CONTACT_COLUMNS).forEach(([h, f]) => rec[f] && (values[h] = rec[f]));
+        out.pushes.push({ tab: contactsTab, crmId: p.id, values });
+        patchContact(p.id, { listSync: Object.assign({}, p.listSync || {}, { [listId]: { sheet: rec, crm: rec } }) });
+      });
+
+    // ---- research tab (read-only) ----
+    const rs = tabRows(researchTab);
+    rs.rows.forEach((r) => {
+      const name = String(r.get('Company Name') || '').trim();
+      const company = name && (findCompanyByName(listCompanies(), name) || findCompanyByName(out.companies, name));
+      if (!company) return;
+      const research = {};
+      Object.entries(LIST_RESEARCH_COLUMNS).forEach(([h, f]) => {
+        const v = r.get(h);
+        if (v !== undefined && String(v).trim()) research[f] = String(v).trim();
+      });
+      const cur = crmCompany(company.id);
+      if (JSON.stringify(cur.research || {}) !== JSON.stringify(research)) {
+        if (out.companies.includes(company)) company.research = research;
+        else patchCompany(company.id, { research });
+      }
+    });
+
+    out.companyUpdates = Object.values(companyPatch);
+    out.contactUpdates = Object.values(contactPatch);
+    return out;
+  }
+
   // ---------- coach ----------
 
   // Templates that earned replies in your own outreach history (Apr–Oct 2026).
@@ -861,7 +1203,9 @@
       .filter((x) => x.why)
       .sort((a, b) => b.prob - a.prob);
 
-    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c));
+    // Shared-list companies are yours to work only when you lead them (or share the lead).
+    const mine = (c) => !c.sharedList || (!c.listRemoved && (c.listLead === 'Both' || (Boolean(opts.initials) && c.listLead === opts.initials)));
+    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c) && mine(c));
 
     // Opened but unanswered emails from the last 3 weeks, where nothing has happened since: follow up while it's warm.
     const opened = data.activities
@@ -1490,6 +1834,8 @@
     dealLXD,
     researchRequestEmail,
     coachTips,
+    LIST_COMPANY_COLUMNS,
+    planListSync,
     guessTemplate,
     planHubSpotSync,
     COLLATERAL_UPGRADES,
