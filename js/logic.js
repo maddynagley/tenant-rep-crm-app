@@ -16,7 +16,7 @@
 
   // Tenant rep deal stages with default win probabilities. A deal starts once a lead is secured.
   const DEAL_STAGES = [
-    { name: 'Pitching', probability: 10 },
+    { name: 'Intro Call', probability: 10 },
     { name: 'Market Survey', probability: 30 },
     { name: 'Touring', probability: 45 },
     { name: 'RFP', probability: 60 },
@@ -28,7 +28,7 @@
   const OPEN_STAGES = DEAL_STAGES.filter((s) => !s.name.startsWith('Closed')).map((s) => s.name);
 
   // Stages from earlier versions, folded into the current list.
-  const LEGACY_DEAL_STAGES = { 'Rep Agreement Signed': 'Market Survey', 'Needs Analysis': 'Market Survey', 'RFP / Proposals': 'RFP' };
+  const LEGACY_DEAL_STAGES = { Pitching: 'Intro Call', 'Rep Agreement Signed': 'Market Survey', 'Needs Analysis': 'Market Survey', 'RFP / Proposals': 'RFP' };
   function normalizeDealStage(stage) {
     return LEGACY_DEAL_STAGES[stage] || stage;
   }
@@ -37,6 +37,12 @@
   const LEAD_STAGES = ['New', 'Initial Outreach', 'Follow Up', 'Engaged', 'Secured Lead', 'Dead Lead'];
   const LEAD_TEMPS = ['Hot', 'Warm', 'Cold'];
   const LEAD_FROM_STATUS = { Target: 'New', Contacted: 'Initial Outreach', Nurture: 'Follow Up', Engaged: 'Engaged', 'Not a Fit': 'Dead Lead' };
+
+  // Companies that must not be prospected (Firm do-not-call list, asked to be left alone, working with another broker…).
+  const DO_NOT_CONTACT_REASONS = ['Firm do-not-call list', 'Asked not to be contacted', 'Not interested', 'Working with another broker', 'Dead deal', 'Closed / left the market'];
+  function doNotContact(company) {
+    return Boolean(company && (company.doNotContact === true || company.doNotContact === 'true'));
+  }
 
   // A company's lead stage: set explicitly, or inferred from its status. Clients without one aren't leads.
   function leadStage(company) {
@@ -354,7 +360,7 @@
       .filter((x) => x.why)
       .sort((a, b) => b.prob - a.prob);
 
-    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c));
+    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c));
     const expiry = (c) => c.leaseExpiration || '9999-12-31';
     const outreachItem = (c, why) => {
       const contact = bestContact(c.id);
@@ -393,7 +399,7 @@
 
     const updates = [];
     data.companies.forEach((c) => {
-      if (leadStage(c) === 'Secured Lead' && !dealCompanies.has(c.id))
+      if (leadStage(c) === 'Secured Lead' && !dealCompanies.has(c.id) && !doNotContact(c))
         updates.push({ kind: 'update', action: 'create-deal', companyId: c.id, title: c.name, why: 'Secured lead with no deal. Start one so it shows in the Pipeline.' });
     });
     data.deals.forEach((d) => {
@@ -939,6 +945,8 @@
     LEAD_STAGES,
     LEAD_TEMPS,
     leadStage,
+    DO_NOT_CONTACT_REASONS,
+    doNotContact,
     dailyPlan,
     RATE_BASES,
     ACTIVITY_TYPES,

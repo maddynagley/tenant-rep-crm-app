@@ -66,6 +66,8 @@
       { key: 'leadStage', label: 'Lead stage', type: 'select', options: L.LEAD_STAGES },
       { key: 'leadTemp', label: 'Lead temperature', type: 'select', options: L.LEAD_TEMPS },
       { key: 'snoozeUntil', label: 'Hide from Today list until', type: 'date' },
+      { key: 'doNotContact', label: 'Do not contact (keeps it off the Today list)', type: 'checkbox' },
+      { key: 'doNotContactReason', label: 'Why not', type: 'select', options: L.DO_NOT_CONTACT_REASONS },
       { key: 'priority', label: 'Priority', type: 'select', options: ['A', 'B', 'C'] },
       { key: 'growthSignal', label: 'Growth signal', type: 'select', options: GROWTH },
       { key: 'source', label: 'Lead source', list: () => Array.from(new Set(SOURCES.concat(distinct('companies', 'source')))) },
@@ -164,7 +166,7 @@
     activities: [
       { key: 'type', label: 'Type', type: 'select', options: L.ACTIVITY_TYPES },
       { key: 'date', label: 'Date', type: 'date', required: true },
-      { key: 'companyId', label: 'Company', type: 'ref', ref: 'companies', required: true },
+      { key: 'companyId', label: 'Company (optional for personal tasks)', type: 'ref', ref: 'companies' },
       { key: 'contactId', label: 'Contact', type: 'ref', ref: 'contacts', filterBy: 'companyId' },
       { key: 'dealId', label: 'Deal', type: 'ref', ref: 'deals', filterBy: 'companyId' },
       { key: 'subject', label: 'Subject', required: true, wide: true },
@@ -299,6 +301,7 @@
   }
 
   function leadBadge(c) {
+    if (L.doNotContact(c)) return badge('Do not contact' + (c.doNotContactReason ? ': ' + c.doNotContactReason : ''), 'red');
     const st = L.leadStage(c);
     if (!st) return '';
     const cls = { 'Secured Lead': 'green', Engaged: 'blue', 'Follow Up': 'amber', 'Initial Outreach': 'amber', 'Dead Lead': 'red' }[st] || 'gray';
@@ -672,7 +675,7 @@
       <div class="page-head"><h1>Leads</h1>
         <div class="actions"><button class="btn primary" data-action="new" data-col="companies">+ Lead</button></div>
       </div>
-      <p class="hint">Companies you're working to win, before there's a deal. Mark one <strong>Secured Lead</strong> to start a deal in the Pipeline.</p>
+      <p class="hint">Companies you're working to win, before there's a deal. Mark one <strong>Secured Lead</strong> and a deal is created in the Pipeline under Intro Call.</p>
       <div class="seg wrap stage-chips">${chips
         .map((ch) => `<button class="${f.stage === ch.value ? 'on' : ''}" data-action="set-filter" data-scope="leads" data-key="stage" data-value="${esc(ch.value)}">${esc(ch.label)} <span class="muted">${ch.n}</span></button>`)
         .join('')}</div>
@@ -1574,7 +1577,7 @@
         return {
           companyId: ctx.company || '',
           name: c ? c.name + ' – ' : '',
-          stage: 'Pitching',
+          stage: 'Intro Call',
           dealType: 'New Lease',
           assetClass: c && c.assetClass ? c.assetClass : '',
           sfMin: c ? c.sfOccupied : '',
@@ -1653,7 +1656,9 @@
     const rec = readForm(form, col);
     if (form.dataset.id) rec.id = form.dataset.id;
     if (col === 'deals' && rec.stage === 'Closed Won' && !rec.closedDate) rec.closedDate = L.todayISO();
+    const wasSecured = col === 'companies' && form.dataset.id && L.leadStage(S.get('companies', form.dataset.id)) === 'Secured Lead';
     const saved = S.upsert(col, rec);
+    if (col === 'companies' && !wasSecured && L.leadStage(saved) === 'Secured Lead' && createDealForLead(saved.id)) toast('Secured! Created a deal in Intro Call.');
     if (col === 'deals' && saved.inPortfolioSheet && S.settings().sheetSyncUrl) setTimeout(() => syncSheet(false), 0);
     const another = form.elements.__another && form.elements.__another.checked;
     $('#modal').close();
@@ -2072,11 +2077,18 @@
     if (show) $('#backup-nag-text').textContent = age === null ? "You haven't backed up yet." : `Last backup was ${age} days ago.`;
   }
 
-  // Securing a lead hands it to the Pipeline as a new deal in Pitching.
   function setLeadStage(id, stage) {
     S.upsert('companies', { id, leadStage: stage });
-    if (stage === 'Secured Lead' && confirm('Secured! Start a deal for this company in the Pipeline (Pitching)?')) openForm('deals', null, { company: id });
-    else toast('Lead stage → ' + stage);
+    const deal = stage === 'Secured Lead' ? createDealForLead(id) : null;
+    toast(deal ? `Secured! Created deal "${deal.name}" in Intro Call.` : 'Lead stage → ' + stage);
+  }
+
+  // Securing a lead hands it to the Pipeline: a new deal in Intro Call, unless one is already open.
+  function createDealForLead(companyId) {
+    if (S.all('deals').some((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage))) return null;
+    const c = S.get('companies', companyId);
+    const deal = Object.assign(defaultsFor('deals', { company: companyId }), { name: c.name, assetClass: c.assetClass || 'Office' });
+    return S.upsert('deals', deal);
   }
 
   // ---------- events ----------

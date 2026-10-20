@@ -289,11 +289,12 @@ test('a sheet row with figures closes the open deal of the aliased company', () 
 test('old deal stages fold into the current pipeline', () => {
   assert.deepEqual(
     L.DEAL_STAGES.map((s) => s.name),
-    ['Pitching', 'Market Survey', 'Touring', 'RFP', 'LOI', 'Lease Negotiation', 'Closed Won', 'Closed Lost']
+    ['Intro Call', 'Market Survey', 'Touring', 'RFP', 'LOI', 'Lease Negotiation', 'Closed Won', 'Closed Lost']
   );
   assert.equal(L.normalizeDealStage('Rep Agreement Signed'), 'Market Survey');
   assert.equal(L.normalizeDealStage('Needs Analysis'), 'Market Survey');
   assert.equal(L.normalizeDealStage('RFP / Proposals'), 'RFP');
+  assert.equal(L.normalizeDealStage('Pitching'), 'Intro Call');
   assert.equal(L.normalizeDealStage('Touring'), 'Touring');
 });
 
@@ -315,6 +316,7 @@ test('dailyPlan prioritizes due follow-ups, skips Do-Not-Call numbers and finds 
       { id: 'e', name: 'Echo', leadStage: 'Secured Lead' },
       { id: 'f', name: 'Foxtrot', leadStage: 'Follow Up', snoozeUntil: '2026-10-25' },
       { id: 'g', name: 'Golf', status: 'Active Client' },
+      { id: 'h', name: 'Hotel', leadStage: 'Engaged', leadTemp: 'Hot', doNotContact: true, address: '100 Main St' },
     ],
     contacts: [
       { id: 'p1', companyId: 'a', firstName: 'Ann', mobile: '555', mobileDNC: true, email: 'ann@a.com' },
