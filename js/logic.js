@@ -591,6 +591,14 @@
       return '';
     };
 
+    // A template drafted from the CRM in the last two weeks names the next email sent to that company.
+    const usedTemplate = new Set();
+    const pendingTemplate = (companyId, date) => {
+      const c = companies[companyId];
+      if (!c || !c.pendingTemplate || !c.pendingTemplateAt || (date && date < c.pendingTemplateAt) || (date && c.pendingTemplateAt < addDays(date, -14))) return '';
+      usedTemplate.add(companyId);
+      return c.pendingTemplate;
+    };
     const upserts = [];
     const lastTouch = {};
     const touch = (cid, date) => {
@@ -626,7 +634,7 @@
           dealId: dealFor(companyId, rec),
           contactId: contactFor(rec, addrs),
           subject: (inbound ? 'Reply: ' : '') + (p.hs_email_subject || '(no subject)'),
-          template: inbound ? '' : guessTemplate(p.hs_email_subject),
+          template: inbound ? '' : pendingTemplate(companyId, date) || guessTemplate(p.hs_email_subject),
           opens: inbound ? '' : opens,
           outcome: inbound ? '' : replied ? 'Replied' : 'No response',
           inbound: inbound || undefined,
@@ -692,6 +700,11 @@
     const companyPatches = Object.keys(lastTouch)
       .filter((cid) => !companies[cid].lastContacted || lastTouch[cid] > companies[cid].lastContacted)
       .map((cid) => ({ id: cid, lastContacted: lastTouch[cid] }));
+    usedTemplate.forEach((cid) => {
+      const patch = companyPatches.find((x) => x.id === cid);
+      if (patch) Object.assign(patch, { pendingTemplate: '' });
+      else companyPatches.push({ id: cid, pendingTemplate: '' });
+    });
     return { activities: upserts, companies: companyPatches, skipped };
   }
 
@@ -1037,6 +1050,62 @@
     return out;
   }
 
+  // ---------- email templates ----------
+
+  const TEMPLATE_STEPS = ['Intro', 'Lease expiration', 'Follow-up', 'Drop-by', 'Market update', 'Other'];
+
+  // Fills {Placeholders} from the company, contact and your settings. A missing value becomes "[Name]" so it
+  // stands out in the draft.
+  function fillTemplate(text, ctx) {
+    const c = ctx.company || {};
+    const p = ctx.contact || {};
+    const me = ctx.me || {};
+    const exp = parseISODate(c.leaseExpiration);
+    const months = c.leaseExpiration ? monthsUntil(c.leaseExpiration, ctx.today) : null;
+    const values = {
+      FirstName: p.firstName,
+      LastName: p.lastName,
+      FullName: [p.firstName, p.lastName].filter(Boolean).join(' '),
+      Title: p.title,
+      Company: c.name,
+      Building: c.building || c.address,
+      Address: c.address,
+      Suite: c.floor,
+      Submarket: c.submarket || c.city,
+      City: c.city,
+      Industry: c.industry,
+      SF: parseNumber(c.sfOccupied) ? fmtNumber(c.sfOccupied) + ' SF' : '',
+      LeaseExpiration: exp ? exp.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : '',
+      MonthsToExpiration: months !== null && months >= 0 ? String(months) : '',
+      MyFirstName: String(me.name || '').split(' ')[0],
+      MyName: me.name,
+      MyFirm: me.firm,
+      Partner: ctx.partner,
+    };
+    return String(text || '').replace(/\{(\w+)\}/g, (m, key) => {
+      if (!(key in values)) return m;
+      const v = values[key];
+      return v === undefined || v === null || String(v).trim() === '' ? '[' + key + ']' : String(v).trim();
+    });
+  }
+
+  // Picks the template that fits where the company is: a follow-up after an unanswered touch, the lease-expiration
+  // note inside 30 months of expiration, otherwise an intro.
+  function suggestTemplate(templates, company, opts) {
+    opts = opts || {};
+    const active = templates.filter((t) => t.active !== false && t.active !== 'false');
+    const byStep = (step) => active.find((t) => t.step === step);
+    const stage = leadStage(company);
+    const months = company.leaseExpiration ? monthsUntil(company.leaseExpiration, opts.today) : null;
+    if (opts.lastTouch && ['Initial Outreach', 'Follow Up', 'Engaged'].includes(stage)) return byStep('Follow-up') || active[0] || null;
+    if (months !== null && months >= 0 && months <= 30) return byStep('Lease expiration') || byStep('Intro') || active[0] || null;
+    return byStep('Intro') || active[0] || null;
+  }
+
+  function mailtoLink(to, subject, body) {
+    return 'mailto:' + encodeURIComponent(to || '').replace(/%40/g, '@') + '?subject=' + encodeURIComponent(subject || '') + '&body=' + encodeURIComponent(body || '');
+  }
+
   // ---------- coach ----------
 
   // Templates that earned replies in your own outreach history (Apr–Oct 2026).
@@ -1183,6 +1252,71 @@
     if ((contact.phone && !contact.phoneDNC) || (contact.mobile && !contact.mobileDNC)) return 'Call';
     if (contact.email) return 'Email';
     return contact.linkedin ? 'LinkedIn' : 'Find a contact';
+  }
+
+  // Follow-up workflow: an initial email (no email, call or meeting with the company in the 60 days
+  // before it) to a lead with no open deal creates a "send a follow-up" task `days` later. The task closes
+  // itself once they reply or you reach out again. Only emails on or after `since` count, so loading old
+  // history doesn't flood the list; `created` holds task ids already made, so deleted tasks stay deleted.
+  function planFollowUpTasks(data, opts) {
+    opts = opts || {};
+    const today = opts.today || todayISO();
+    const days = Math.max(1, parseNumber(opts.days) || 7);
+    const since = opts.since || today;
+    const created = new Set(opts.created || []);
+    const companies = {};
+    data.companies.forEach((c) => (companies[c.id] = c));
+    const contacts = {};
+    (data.contacts || []).forEach((p) => (contacts[p.id] = p));
+    const openDeal = new Set(data.deals.filter((d) => OPEN_STAGES.includes(d.stage)).map((d) => d.companyId));
+    const byCompany = {};
+    data.activities.forEach((a) => {
+      if (a.companyId && a.date && ['Email', 'Call', 'Meeting'].includes(a.type)) (byCompany[a.companyId] = byCompany[a.companyId] || []).push(a);
+    });
+    // The first later touch after an email: their reply (any later or same-day inbound email), or yours.
+    const nextTouch = (e) =>
+      (byCompany[e.companyId] || [])
+        .filter((a) => a.id !== e.id && a.date <= today && (a.date > e.date || (a.date === e.date && a.inbound)))
+        .sort((a, b) => a.date.localeCompare(b.date))[0];
+    const add = [];
+    const seen = new Set();
+    data.activities.forEach((e) => {
+      if (e.type !== 'Email' || e.inbound || !e.companyId || !e.date || e.date < since || e.date > today) return;
+      const c = companies[e.companyId];
+      if (!c || openDeal.has(c.id) || e.dealId) return;
+      const id = 'wf-fu-' + c.id + '-' + e.date;
+      if (seen.has(id) || created.has(id)) return;
+      const prior = (byCompany[c.id] || []).some((a) => a.id !== e.id && a.date < e.date && a.date >= addDays(e.date, -60));
+      if (prior || RESPONDED.includes(e.outcome) || nextTouch(e)) return;
+      seen.add(id);
+      const p = contacts[e.contactId];
+      const due = addDays(e.date, days);
+      add.push({
+        id,
+        type: 'Task',
+        date: due,
+        followUpDate: due,
+        companyId: c.id,
+        contactId: e.contactId || '',
+        subject: 'Send follow-up email to ' + (p && p.firstName ? p.firstName + ' at ' : '') + c.name,
+        notes: `Automatic: no reply yet to "${String(e.subject || '').replace(/^Reply: /, '')}" sent ${fmtDate(e.date)}.`,
+        workflow: 'follow-up',
+        workflowEmailId: e.id,
+        done: false,
+      });
+    });
+    const emails = {};
+    data.activities.forEach((a) => (emails[a.id] = a));
+    const complete = [];
+    data.activities.forEach((t) => {
+      if (t.workflow !== 'follow-up' || t.done) return;
+      const e = emails[t.workflowEmailId] || { id: t.workflowEmailId, companyId: t.companyId, date: addDays(t.followUpDate, -days) };
+      const next = nextTouch(e);
+      if (!next) return;
+      const how = next.inbound ? 'they replied' : next.type === 'Email' ? 'you followed up' : 'you ' + (next.type === 'Call' ? 'called' : 'met');
+      complete.push({ id: t.id, done: true, notes: (t.notes ? t.notes + '\n' : '') + `Closed automatically: ${how} on ${fmtDate(next.date)}.` });
+    });
+    return { add, complete };
   }
 
   // Today's to-do list: due follow-ups, deals that need attention, who to reach out to,
@@ -1863,6 +1997,10 @@
     dealLXD,
     researchRequestEmail,
     coachTips,
+    TEMPLATE_STEPS,
+    fillTemplate,
+    suggestTemplate,
+    mailtoLink,
     LIST_COMPANY_COLUMNS,
     planListSync,
     guessTemplate,
@@ -1876,6 +2014,7 @@
     collateralStale,
     RATE_BASES,
     ACTIVITY_TYPES,
+    planFollowUpTasks,
     PROPERTY_STATUSES,
     EXPIRATION_WINDOWS,
     COMPANY_IMPORT_ALIASES,

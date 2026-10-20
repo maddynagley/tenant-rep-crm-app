@@ -7,7 +7,7 @@
   'use strict';
   const L = root.CRMLogic;
   const KEY = 'tenant-rep-crm.v1';
-  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps', 'documents'];
+  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps', 'documents', 'templates'];
 
   const DEFAULT_SETTINGS = {
     brokerName: '',
@@ -22,6 +22,9 @@
     sheetSyncKey: '',
     sheetLastSync: '',
     outreachGoal: 10,
+    followUpDays: 7,
+    workflowSince: '',
+    workflowCreated: [],
     postsPerWeek: 2,
     generatedIds: [],
     researchTeam: '',
@@ -29,6 +32,7 @@
     hubspotBridgeKey: '',
     hubspotLastSync: 0,
     myInitials: '',
+    myFirm: '',
     sharedLists: [{ id: 'mac', name: 'Metro Chamber (with KB)', url: '', key: '', lastSync: '' }],
   };
 
@@ -200,7 +204,7 @@
   }
 
   // A merged record that doesn't exist yet must be whole; partial updates for missing records are dropped.
-  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'], documents: ['name'] };
+  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'], documents: ['name'], templates: ['name'] };
   function isComplete(col, rec) {
     return REQUIRED[col].every((k) => rec[k]);
   }

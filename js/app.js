@@ -311,7 +311,16 @@
     { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
   ];
 
-  const LABELS = { documents: 'Document', comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
+  FIELDS.templates = [
+    { key: 'name', label: 'Template name (shows in Outreach results)', required: true, wide: true },
+    { key: 'step', label: 'When to use it', type: 'select', options: L.TEMPLATE_STEPS },
+    { key: 'active', label: 'Active (offered when drafting)', type: 'checkbox' },
+    { key: 'subject', label: 'Subject', wide: true },
+    { key: 'body', label: 'Body', type: 'textarea', wide: true, rows: 14 },
+    { key: 'notes', label: 'Notes (why it works, when to use it)', type: 'textarea', wide: true },
+  ];
+
+  const LABELS = { templates: 'Email template', documents: 'Document', comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
 
   // ---------- derived data helpers ----------
 
@@ -346,9 +355,37 @@
     return recAsset === filter || recAsset === 'Office & Industrial';
   }
 
+  // A short form for tasks: what to do, when, and which company, contact or deal it's for.
+  const TASK_FIELDS = [
+    { key: 'subject', label: 'Task', required: true, wide: true },
+    { key: 'date', label: 'Due date', type: 'date', required: true },
+    { key: 'type', label: 'Type', type: 'select', options: L.ACTIVITY_TYPES },
+    { key: 'companyId', label: 'Company (optional for personal tasks)', type: 'ref', ref: 'companies' },
+    { key: 'contactId', label: 'Contact', type: 'ref', ref: 'contacts', filterBy: 'companyId' },
+    { key: 'dealId', label: 'Deal', type: 'ref', ref: 'deals', filterBy: 'companyId' },
+    { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
+    { key: 'done', label: 'Complete', type: 'checkbox' },
+  ];
+
   function activityDue(a) {
     return a.followUpDate || (a.type === 'Task' ? a.date : '');
   }
+  // Automatic follow-up tasks after an initial email (see L.planFollowUpTasks). Runs after every sync or logged touch.
+  function runWorkflows() {
+    const s = S.settings();
+    if (Number(s.followUpDays) === 0) return;
+    const since = s.workflowSince || L.addDays(L.todayISO(), -7);
+    const plan = L.planFollowUpTasks(
+      { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') },
+      { days: s.followUpDays, since, created: s.workflowCreated }
+    );
+    plan.add.forEach((t) => S.upsert('activities', t, { silent: true }));
+    plan.complete.forEach((t) => S.upsert('activities', t, { silent: true }));
+    if (plan.add.length || plan.complete.length || !s.workflowSince)
+      S.saveSettings({ workflowSince: since, workflowCreated: (s.workflowCreated || []).concat(plan.add.map((t) => t.id)).slice(-2000) });
+    if (plan.add.length) toast(`Added ${plan.add.length} follow-up task${plan.add.length > 1 ? 's' : ''} for emails with no reply yet.`);
+  }
+
   function openFollowUps() {
     return S.all('activities')
       .filter((a) => !a.done && activityDue(a))
@@ -619,6 +656,11 @@
     return `<a class="btn small" href="mailto:${to.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(mail.subject)}&body=${encodeURIComponent(mail.body)}">Draft email</a>`;
   }
 
+  function tasksCard(list, attrs) {
+    if (!list.length) return '';
+    return `<section class="card"><h2>Open tasks <span class="muted">${list.length}</span> <button class="link more" data-action="new" data-col="activities" data-task="1" ${attrs}>+ Task</button></h2>${followUpList(list)}</section>`;
+  }
+
   function followUpList(list) {
     const today = L.todayISO();
     return `<ul class="followups">${list
@@ -634,6 +676,7 @@
           </div>
           ${badge(due < today ? 'Overdue · ' + L.fmtDate(due) : due === today ? 'Today' : L.fmtDate(due), cls)}
           ${/^q-research-/.test(a.id) ? researchMailLink(a.id.replace('q-research-', '')) : ''}
+          ${a.workflow === 'follow-up' ? `<button class="btn small" data-action="draft-email" data-company="${esc(a.companyId)}" data-contact="${esc(a.contactId || '')}" data-step="Follow-up">Draft follow-up</button>` : ''}
           <button class="icon-btn" data-action="edit" data-col="activities" data-id="${esc(a.id)}" title="Edit">✎</button>
         </li>`;
       })
@@ -655,9 +698,9 @@
     const p = S.get('contacts', item.contactId);
     switch (item.channel) {
       case 'Call':
-        return `<a class="btn small" href="tel:${esc(callableNumber(p))}">Call ${esc(p.firstName)}</a>`;
+        return `<a class="btn small" href="tel:${esc(callableNumber(p))}">Call ${esc(p.firstName)}</a>${p.email ? ` <button class="btn small" data-action="draft-email" data-company="${esc(item.companyId)}" data-contact="${esc(p.id)}">Draft email</button>` : ''}`;
       case 'Email':
-        return `<a class="btn small" href="mailto:${esc(p.email)}">Email ${esc(p.firstName)}</a>`;
+        return `<button class="btn small" data-action="draft-email" data-company="${esc(item.companyId)}" data-contact="${esc(p.id)}">Draft email to ${esc(p.firstName)}</button>`;
       case 'LinkedIn':
         return `<a class="btn small" href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ${esc(p.firstName)}</a>`;
       default:
@@ -894,6 +937,7 @@
     const tabs = [
       { v: 'collateral', l: `Collateral (${collateral.length})` },
       { v: 'social', l: `Social (${posts.length})` },
+      { v: 'templates', l: `Email templates (${S.all('templates').length})` },
       { v: 'outreach', l: 'Outreach results' },
     ];
     let body = '';
@@ -921,6 +965,21 @@
       const head = '<thead><tr><th>Date</th><th>Post</th><th>Channel</th><th>Status</th><th class="right">Impressions</th><th class="right">Reactions</th><th class="right">Comments</th></tr></thead>';
       body = `<section class="card"><h2>Up next</h2>${upcoming.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${upcoming.map(postRow).join('')}</tbody></table></div>` : emptyState('No post ideas queued.', '<button class="btn" data-action="new" data-col="marketing">+ Post idea</button>')}</section>
         <section class="card"><h2>Posted</h2>${posted.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${posted.map(postRow).join('')}</tbody></table></div>` : emptyState('Nothing posted yet.')}</section>`;
+    } else if (f.tab === 'templates') {
+      const stats = {};
+      L.outreachStats(S.all('activities'), (a) => a.template).forEach((r) => (stats[r.key] = r));
+      const list = S.all('templates').slice().sort((a, b) => L.TEMPLATE_STEPS.indexOf(a.step) - L.TEMPLATE_STEPS.indexOf(b.step) || a.name.localeCompare(b.name));
+      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
+        ${
+          list.length
+            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Template</th><th>When</th><th>Subject</th><th class="right">Sent</th><th class="right">Response rate</th></tr></thead><tbody>${list
+                .map((t) => {
+                  const r = stats[t.name];
+                  return `<tr class="clickable" data-action="edit" data-col="templates" data-id="${esc(t.id)}"><td><strong>${esc(t.name)}</strong> ${t.active === false ? badge('Inactive', 'gray') : ''}<div class="sub clamp">${esc(t.body)}</div></td><td>${esc(t.step)}</td><td>${esc(t.subject)}</td><td class="right">${r ? r.sent : 0}</td><td class="right">${r && r.sent ? `<strong>${pct(r.responseRate)}</strong>` : '<span class="muted">—</span>'}</td></tr>`;
+                })
+                .join('')}</tbody></table></div>`
+            : emptyState('No templates yet.', '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>')
+        }`;
     } else {
       const acts = S.all('activities');
       const weekday = (a) => (a.date ? L.parseISODate(a.date).toLocaleDateString(undefined, { weekday: 'long' }) : '');
@@ -937,7 +996,7 @@
 
     return `
       <div class="page-head"><h1>Marketing</h1>
-        <div class="actions"><button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button></div>
+        <div class="actions">${f.tab === 'templates' ? '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>' : `<button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button>`}</div>
       </div>
       <div class="kpis">
         <div class="kpi ${goal && thisWeek >= goal ? 'good' : ''}"><span class="kpi-label">Posts this week</span><span class="kpi-value">${thisWeek} / ${goal}</span><span class="kpi-sub">weekly goal (Settings)</span></div>
@@ -1323,6 +1382,8 @@
           <div class="head-badges">${assetBadge(c.assetClass)} ${statusBadge(c.status)} ${leadBadge(c)} ${c.priority ? badge('Priority ' + c.priority, 'prio') : ''} ${scoreChip(score)}</div>
         </div>
         <div class="actions">
+          <button class="btn primary" data-action="draft-email" data-company="${esc(id)}">Draft email</button>
+          <button class="btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-task="1">+ Task</button>
           <button class="btn" data-action="new" data-col="activities" data-company="${esc(id)}">Log activity</button>
           <button class="btn" data-action="new" data-col="contacts" data-company="${esc(id)}">+ Contact</button>
           <button class="btn" data-action="new" data-col="deals" data-company="${esc(id)}">+ Deal</button>
@@ -1330,7 +1391,7 @@
           <button class="btn danger" data-action="delete" data-col="companies" data-id="${esc(id)}">Delete</button>
         </div>
       </div>
-
+      ${tasksCard(openFollowUps().filter((a) => a.companyId === id), `data-company="${esc(id)}"`)}
       <div class="grid3">
         <section class="card">
           <h2>Lease timing</h2>
@@ -1371,7 +1432,7 @@
                   .map(
                     (p) => `<tr><td><strong>${esc(contactName(p))}</strong> ${p.role ? badge(p.role, p.role === 'Decision Maker' ? 'green' : 'gray') : ''} ${verificationBadge(p.verification)}<div class="sub">${esc(p.title)}</div>${p.notes ? `<div class="sub clamp" title="${esc(p.notes)}">${esc(p.notes)}</div>` : ''}</td>
                     <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}${p.mobile ? ' · ' + phoneLink(p.mobile, p.mobileDNC, '(m)') : ''}</div>${p.linkedin ? `<div class="sub"><a href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ↗</a></div>` : ''}</td>
-                    <td class="right nowrap"><button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
+                    <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Draft an email from a template">Email</button>` : ''}<button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
                   )
                   .join('')}</tbody></table>`
               : emptyState('No contacts yet.')
@@ -1652,6 +1713,7 @@
         <div><h1>${esc(d.name)}</h1><div class="head-badges">${assetBadge(d.assetClass)} ${badge(d.dealType, 'gray')} ${badge(d.stage, 'blue')} ${L.dealLXD(d) ? badge('LXD ' + L.fmtDate(L.dealLXD(d)), 'amber') : d.stage === 'Closed Won' ? badge('Add LXD', 'red') : ''}</div>
           ${d.partnerBrokers || d.otherBrokers ? `<div class="sub">With ${esc([d.partnerBrokers, d.otherBrokers].filter(Boolean).join(' · also '))}</div>` : ''}</div>
         <div class="actions">
+          <button class="btn" data-action="new" data-col="activities" data-company="${esc(d.companyId)}" data-deal="${esc(id)}" data-task="1">+ Task</button>
           <button class="btn" data-action="new" data-col="activities" data-company="${esc(d.companyId)}" data-deal="${esc(id)}">Log activity</button>
           ${d.stage === 'Closed Won' ? `<button class="btn" data-action="deal-to-comp" data-id="${esc(id)}">Save as comp</button>` : ''}
           <button class="btn" data-action="edit" data-col="deals" data-id="${esc(id)}">Edit</button>
@@ -1661,6 +1723,7 @@
       <div class="stepper">${L.DEAL_STAGES.map(
         (s) => `<button class="${s.name === d.stage ? 'on' : ''} ${s.name === 'Closed Lost' ? 'lost' : ''}" data-action="set-stage" data-id="${esc(id)}" data-stage="${esc(s.name)}">${esc(s.name)}</button>`
       ).join('')}</div>
+      ${tasksCard(openFollowUps().filter((a) => a.dealId === id), `data-company="${esc(d.companyId)}" data-deal="${esc(id)}"`)}
 
       <div class="grid3">
         <section class="card">
@@ -2013,7 +2076,9 @@
             <label>"Going stale" after (days)<input name="staleDays" type="number" value="${esc(s.staleDays)}" /></label>
             <label>House split % (firm keeps)<input name="houseSplitPct" type="number" step="0.1" value="${esc(s.houseSplitPct)}" /></label>
             <label>Daily outreach goal (Today list)<input name="outreachGoal" type="number" min="1" value="${esc(s.outreachGoal)}" /></label>
+            <label>Follow-up task after an initial email with no reply (days; 0 turns it off)<input name="followUpDays" type="number" min="0" value="${esc(s.followUpDays)}" /></label>
             <label>Social posts per week goal<input name="postsPerWeek" type="number" min="0" value="${esc(s.postsPerWeek)}" /></label>
+            <label>Your firm (for email templates)<input name="myFirm" value="${esc(s.myFirm)}" /></label>
             <label class="wide">Research team emails (for the quarterly stats request)<input name="researchTeam" value="${esc(s.researchTeam)}" placeholder="name@company.com, name@company.com" /></label>
             <div class="wide"><button class="btn primary" type="submit">Save settings</button></div>
           </form>
@@ -2128,7 +2193,7 @@
         break;
       }
       case 'textarea':
-        input = `<textarea id="${id}" name="${f.key}" rows="3"${req}>${esc(v)}</textarea>`;
+        input = `<textarea id="${id}" name="${f.key}" rows="${f.rows || 3}"${req}>${esc(v)}</textarea>`;
         break;
       case 'checkbox':
         return `<label class="check ${f.wide ? 'wide' : ''}" ${f.asset ? `data-asset="${f.asset}"` : ''}><input type="checkbox" name="${f.key}" ${v ? 'checked' : ''}/> ${esc(f.label)}</label>`;
@@ -2153,6 +2218,8 @@
         );
       case 'contacts':
         return { companyId: ctx.company || '' };
+      case 'templates':
+        return { step: 'Intro', active: true, body: 'Hi {FirstName},\n\n\n\nBest,\n{MyFirstName}' };
       case 'documents': {
         const d = S.get('deals', ctx.deal);
         return { kind: 'LOI', date: today, dealId: ctx.deal || '', companyId: ctx.company || (d ? d.companyId : '') };
@@ -2175,7 +2242,7 @@
         };
       }
       case 'activities':
-        return { type: 'Call', date: today, companyId: ctx.company || '', contactId: ctx.contact || '', dealId: ctx.deal || '', done: false };
+        return { type: ctx.task ? 'Task' : 'Call', date: ctx.task ? L.addDays(today, 1) : today, companyId: ctx.company || (S.get('deals', ctx.deal) || {}).companyId || '', contactId: ctx.contact || '', dealId: ctx.deal || '', done: false };
       case 'properties': {
         const d = S.get('deals', ctx.deal);
         return { dealId: ctx.deal, status: 'Identified', rateBasis: d ? d.rateBasis : '' };
@@ -2184,18 +2251,75 @@
     return {};
   }
 
+  // ----- draft email from a template -----
+
+  function draftContext(companyId, contactId) {
+    const c = S.get('companies', companyId) || {};
+    const p = S.get('contacts', contactId) || {};
+    const deal = S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
+    const st = S.settings();
+    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, today: L.todayISO() };
+  }
+
+  function openDraft(companyId, contactId, step) {
+    const c = S.get('companies', companyId);
+    if (!c) return;
+    const people = S.all('contacts').filter((p) => p.companyId === companyId && p.email);
+    const templates = S.all('templates').filter((t) => t.active !== false);
+    const contact = S.get('contacts', contactId) || people.slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker'))[0] || null;
+    const suggested = (step && templates.find((t) => t.step === step)) || L.suggestTemplate(templates, c, { today: L.todayISO(), lastTouch: lastTouchMap()[companyId] });
+    const dlg = $('#modal');
+    dlg.innerHTML = `<form method="dialog" id="draft-form" data-company="${esc(companyId)}">
+      <header><h2>Draft email to ${esc(c.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      ${
+        !templates.length
+          ? `<p class="hint">No templates yet. Add them under Marketing → Email templates.</p>`
+          : !people.length
+            ? `<p class="hint">No contact with an email address at ${esc(c.name)} yet. Add one first.</p>`
+            : `<div class="form-grid">
+          <label>To<select name="contact">${options(people.map((p) => ({ value: p.id, label: contactName(p) + ' <' + p.email + '>' })), contact && contact.id)}</select></label>
+          <label>Template<select name="template">${options(templates.map((t) => ({ value: t.id, label: t.name + ' (' + t.step + ')' })), suggested && suggested.id)}</select></label>
+          <label class="wide">Subject<input name="subject" /></label>
+          <label class="wide">Body<textarea name="body" rows="14"></textarea></label>
+          <p class="hint wide">Anything in [brackets] is missing from the CRM. Fill it in here, or on the company, before sending.</p>
+        </div>`
+      }
+      <footer><span class="spacer"></span>
+        ${templates.length && people.length ? '<button type="button" class="btn" data-action="copy-draft">Copy text</button><a class="btn primary" id="draft-open" href="#">Open in Outlook</a>' : '<button type="button" class="btn" data-action="close-modal">Close</button>'}
+      </footer>
+    </form>`;
+    dlg.showModal();
+    if (templates.length && people.length) fillDraft();
+  }
+
+  function fillDraft() {
+    const f = $('#draft-form');
+    const t = S.get('templates', f.elements.template.value);
+    const ctx = draftContext(f.dataset.company, f.elements.contact.value);
+    f.elements.subject.value = L.fillTemplate(t.subject, ctx);
+    f.elements.body.value = L.fillTemplate(t.body, ctx);
+    updateDraftLink();
+  }
+  function updateDraftLink() {
+    const f = $('#draft-form');
+    const p = S.get('contacts', f.elements.contact.value);
+    $('#draft-open').href = L.mailtoLink(p ? p.email : '', f.elements.subject.value, f.elements.body.value);
+  }
+
   function openForm(col, id, ctx) {
     ctx = ctx || {};
     const existing = id ? S.get(col, id) : null;
     const rec = existing ? Object.assign({}, existing) : defaultsFor(col, ctx);
     const dlg = $('#modal');
-    const fields = FIELDS[col];
+    const task = col === 'activities' && rec.type === 'Task';
+    if (task) rec.date = activityDue(rec) || rec.date;
+    const fields = task ? TASK_FIELDS : FIELDS[col];
     const contextAsset = col === 'properties' ? (S.get('deals', rec.dealId) || {}).assetClass : '';
-    dlg.innerHTML = `<form method="dialog" id="record-form" data-col="${col}" data-id="${esc(existing ? existing.id : '')}" data-context-asset="${esc(contextAsset || '')}">
-      <header><h2>${existing ? 'Edit' : 'New'} ${LABELS[col]}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+    dlg.innerHTML = `<form method="dialog" id="record-form" data-col="${col}" data-id="${esc(existing ? existing.id : '')}" data-context-asset="${esc(contextAsset || '')}"${task ? ' data-task="1"' : ''}>
+      <header><h2>${existing ? 'Edit' : 'New'} ${task ? 'task' : LABELS[col]}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
       <div class="form-grid">${fields.map((f) => fieldHTML(f, rec)).join('')}</div>
       <footer>
-        ${col === 'activities' && !existing ? '<label class="check"><input type="checkbox" name="__another" /> Save & schedule next touch</label>' : ''}
+        ${col === 'activities' && !existing && !task ? '<label class="check"><input type="checkbox" name="__another" /> Save & schedule next touch</label>' : ''}
         <span class="spacer"></span>
         <button type="button" class="btn" data-action="close-modal">Cancel</button>
         <button type="submit" class="btn primary">Save</button>
@@ -2226,7 +2350,7 @@
 
   function readForm(form, col) {
     const rec = {};
-    FIELDS[col].forEach((f) => {
+    (form.dataset.task ? TASK_FIELDS : FIELDS[col]).forEach((f) => {
       if (f.section) return;
       const el = form.elements[f.key];
       if (!el) return;
@@ -2235,6 +2359,7 @@
       else rec[f.key] = el.value.trim();
     });
     if (form.elements.dealId && col === 'properties') rec.dealId = form.elements.dealId.value;
+    if (form.dataset.task) rec.followUpDate = rec.date;
     return rec;
   }
 
@@ -2250,6 +2375,7 @@
     if (col === 'deals' && rec.stage === 'Closed Won' && (!form.dataset.id || S.get('deals', form.dataset.id).stage !== 'Closed Won')) setTimeout(celebrate, 200);
     const wasSecured = col === 'companies' && form.dataset.id && L.leadStage(S.get('companies', form.dataset.id)) === 'Secured Lead';
     const saved = S.upsert(col, rec);
+    if (col === 'activities') runWorkflows();
     if (col === 'companies' && !wasSecured && L.leadStage(saved) === 'Secured Lead' && createDealForLead(saved.id)) toast('Secured! Created a deal in Intro Call.');
     if (col === 'deals' && saved.inPortfolioSheet && S.settings().sheetSyncUrl) setTimeout(() => syncSheet(false), 0);
     const touched = col === 'companies' ? saved : col === 'contacts' ? S.get('companies', saved.companyId) : col === 'activities' ? S.get('companies', saved.companyId) : null;
@@ -2704,6 +2830,14 @@
   // ---------- events ----------
 
   document.addEventListener('click', (e) => {
+    if (e.target.id === 'draft-open') {
+      // Remember which template this email came from, so it's tagged when HubSpot logs it (or when you tap ✓ Emailed).
+      const f = $('#draft-form');
+      const t = S.get('templates', f.elements.template.value);
+      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : '', pendingTemplateAt: L.todayISO() });
+      setTimeout(() => $('#modal').close(), 300);
+      return;
+    }
     const actionEl = e.target.closest('[data-action]');
     if (actionEl && actionEl.tagName === 'TR' && e.target.closest('a')) return; // a link inside a clickable row
     if (actionEl) {
@@ -2711,7 +2845,7 @@
       switch (d.action) {
         case 'new':
           e.preventDefault();
-          return openForm(d.col, null, { company: d.company, contact: d.contact, deal: d.deal, list: d.list });
+          return openForm(d.col, null, { company: d.company, contact: d.contact, deal: d.deal, list: d.list, task: d.task });
         case 'edit':
           e.preventDefault();
           return openForm(d.col, d.id);
@@ -2754,11 +2888,13 @@
         case 'log-touch': {
           const c = S.get('companies', d.company);
           const today = L.todayISO();
-          S.upsert('activities', { type: d.type, date: today, companyId: c.id, contactId: d.contact || '', subject: d.type === 'Call' ? 'Called' : 'Emailed', leadStageAtSend: L.leadStage(c) }, { silent: true });
-          const patch = Object.assign({ id: c.id, lastContacted: today }, sharedListTouch(c));
+          const tpl = d.type === 'Email' && c.pendingTemplate ? c.pendingTemplate : '';
+          S.upsert('activities', { type: d.type, date: today, companyId: c.id, contactId: d.contact || '', subject: d.type === 'Call' ? 'Called' : 'Emailed', template: tpl, leadStageAtSend: L.leadStage(c) }, { silent: true });
+          const patch = Object.assign({ id: c.id, lastContacted: today }, sharedListTouch(c), tpl ? { pendingTemplate: '' } : {});
           if (L.leadStage(c) === 'New') patch.leadStage = 'Initial Outreach';
           S.upsert('companies', patch);
           if (c.sharedList) setTimeout(() => syncSharedList(c.sharedList, false), 300);
+          runWorkflows();
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
         }
         case 'sync-list':
@@ -2776,6 +2912,14 @@
           e.preventDefault();
           navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
           return;
+        case 'draft-email':
+          e.preventDefault();
+          return openDraft(d.company, d.contact, d.step);
+        case 'copy-draft': {
+          const f = $('#draft-form');
+          navigator.clipboard.writeText('Subject: ' + f.elements.subject.value + '\n\n' + f.elements.body.value).then(() => toast('Copied. Paste it into Outlook.'));
+          return;
+        }
         case 'toggle-coach':
           state.coach.open = !state.coach.open;
           saveUIState();
@@ -2948,10 +3092,12 @@
     render();
   }
   document.addEventListener('input', (e) => {
+    if (e.target.closest('#draft-form') && ['subject', 'body'].includes(e.target.name)) updateDraftLink();
     if (e.target.type === 'search') onFilterChange(e);
   });
   document.addEventListener('change', (e) => {
     if (e.target.dataset.filter && e.target.type !== 'search') onFilterChange(e);
+    if (e.target.closest('#draft-form') && ['template', 'contact'].includes(e.target.name)) fillDraft();
     if (e.target.dataset.leadTemp) S.upsert('companies', { id: e.target.dataset.leadTemp, leadTemp: e.target.value });
     if (e.target.dataset.leadStage) setLeadStage(e.target.dataset.leadStage, e.target.value);
     const form = e.target.closest('#record-form');
@@ -2966,7 +3112,7 @@
       e.preventDefault();
       const fd = new FormData(e.target);
       const patch = {};
-      fd.forEach((v, k) => (patch[k] = ['brokerName', 'homeMarket', 'sheetSyncUrl', 'sheetSyncKey', 'researchTeam', 'hubspotBridgeUrl', 'hubspotBridgeKey'].includes(k) ? String(v).trim() : Number(v)));
+      fd.forEach((v, k) => (patch[k] = ['brokerName', 'homeMarket', 'sheetSyncUrl', 'sheetSyncKey', 'researchTeam', 'hubspotBridgeUrl', 'hubspotBridgeKey', 'myFirm'].includes(k) ? String(v).trim() : Number(v)));
       S.saveSettings(patch);
       toast('Settings saved.');
       if (e.target.id === 'settings-form-hubspot' && patch.hubspotBridgeUrl) syncHubSpot(true);
@@ -3146,6 +3292,7 @@
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
       hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
+      runWorkflows();
       if (manual) toast('HubSpot synced: ' + hubspotStatus + '.');
     } catch (err) {
       hubspotStatus = 'Last attempt failed: ' + err.message;
@@ -3183,6 +3330,7 @@
           since = data.next[type];
         }
       }
+      runWorkflows();
       hubspotStatus = `full history loaded: ${totals.added} new, ${totals.updated} updated` + (totals.skipped ? `, ${totals.skipped} not matched to a CRM company` : '');
       toast('HubSpot ' + hubspotStatus + '.');
       render();
@@ -3209,6 +3357,7 @@
   // Data loads asynchronously from IndexedDB; start once it's in memory.
   S.ready.then(() => {
     ensureGenerated();
+    runWorkflows();
     render();
     syncHubSpot(false);
     syncAllLists();

@@ -629,3 +629,63 @@ test('planHubSpotSync fills in the full text of emails already in the CRM', () =
   assert.equal(plan.activities[0].body, 'Hi Ann,\n\nFull email.');
   assert.equal(plan.activities[0].notes, undefined, 'the summary is kept');
 });
+
+test('fillTemplate fills placeholders and flags missing values', () => {
+  const out = L.fillTemplate('Hi {FirstName}, {Company} at {Building} expires {LeaseExpiration} ({MonthsToExpiration} mo). {Suite} {Unknown} -{MyFirstName}, {MyFirm}', {
+    company: { name: 'Acme', building: 'Tower Place 100', leaseExpiration: '2027-03-31' },
+    contact: { firstName: 'Ann' },
+    me: { name: 'Sam Lee', firm: 'Firm Co' },
+    today: '2026-10-20',
+  });
+  assert.equal(out, 'Hi Ann, Acme at Tower Place 100 expires March 2027 (5 mo). [Suite] {Unknown} -Sam, Firm Co');
+});
+
+test('suggestTemplate picks follow-up, lease expiration or intro', () => {
+  const t = [
+    { id: 'i', step: 'Intro' },
+    { id: 'l', step: 'Lease expiration' },
+    { id: 'f', step: 'Follow-up' },
+  ];
+  const today = '2026-10-20';
+  assert.equal(L.suggestTemplate(t, { leadStage: 'New' }, { today }).id, 'i');
+  assert.equal(L.suggestTemplate(t, { leadStage: 'New', leaseExpiration: '2027-06-30' }, { today }).id, 'l');
+  assert.equal(L.suggestTemplate(t, { leadStage: 'Initial Outreach' }, { today, lastTouch: '2026-10-01' }).id, 'f');
+  assert.equal(L.mailtoLink('a@b.com', 'Hi & bye', 'Line 1\nLine 2'), 'mailto:a@b.com?subject=Hi%20%26%20bye&body=Line%201%0ALine%202');
+});
+
+test('an email sent after drafting from a template is tagged with it', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Acme', pendingTemplate: 'Lease expiration', pendingTemplateAt: '2026-10-19' }],
+    contacts: [],
+    deals: [],
+    activities: [],
+  };
+  const plan = L.planHubSpotSync({ emails: [{ id: '5', properties: { hs_email_direction: 'EMAIL', hs_email_subject: 'Quick question', hs_timestamp: '2026-10-20T15:00:00Z' }, companies: ['1'] }] }, data);
+  assert.equal(plan.activities[0].template, 'Lease expiration');
+  assert.equal(plan.companies[0].pendingTemplate, '');
+});
+
+test('an initial email creates a follow-up task a week later, which closes itself on a reply', () => {
+  const data = {
+    companies: [{ id: 'a', name: 'Acme' }, { id: 'b', name: 'Beta' }, { id: 'c', name: 'Cove' }, { id: 'd', name: 'Dune' }],
+    contacts: [{ id: 'p', companyId: 'a', firstName: 'Ann' }],
+    deals: [{ id: 'x', companyId: 'd', stage: 'Touring' }],
+    activities: [
+      { id: 'e1', type: 'Email', date: '2026-10-14', companyId: 'a', contactId: 'p', subject: 'Tower Place' },
+      { id: 'e0', type: 'Email', date: '2026-09-30', companyId: 'b', subject: 'Earlier' },
+      { id: 'e2', type: 'Email', date: '2026-10-15', companyId: 'b', subject: 'Second touch' },
+      { id: 'e3', type: 'Email', date: '2026-10-01', companyId: 'c', subject: 'Before the workflow started' },
+      { id: 'e4', type: 'Email', date: '2026-10-16', companyId: 'd', subject: 'Deal email' },
+    ],
+  };
+  const opts = { today: '2026-10-20', since: '2026-10-10' };
+  const plan = L.planFollowUpTasks(data, opts);
+  assert.deepEqual(plan.add.map((t) => [t.id, t.followUpDate, t.subject]), [['wf-fu-a-2026-10-14', '2026-10-21', 'Send follow-up email to Ann at Acme']]);
+  assert.deepEqual(L.planFollowUpTasks(data, Object.assign({ created: ['wf-fu-a-2026-10-14'] }, opts)).add, []);
+
+  data.activities.push(plan.add[0], { id: 'r1', type: 'Email', inbound: true, date: '2026-10-18', companyId: 'a', subject: 'Reply: Tower Place' });
+  const next = L.planFollowUpTasks(data, opts);
+  assert.deepEqual(next.add, []);
+  assert.equal(next.complete.length, 1);
+  assert.match(next.complete[0].notes, /Closed automatically: they replied on/);
+});
