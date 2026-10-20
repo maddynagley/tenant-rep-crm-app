@@ -2878,8 +2878,8 @@
     if (!st.hubspotBridgeUrl || !st.hubspotBridgeKey || hubspotSyncing) return;
     hubspotSyncing = true;
     try {
-      // Overlap by 10 minutes so nothing modified mid-sync is missed; re-applying is harmless.
-      const since = st.hubspotLastSync ? st.hubspotLastSync - 600000 : Date.now() - 7 * 864e5;
+      // Automatic syncs overlap the last one by 10 minutes; "Sync now" re-checks the past week. Re-applying is harmless.
+      const since = st.hubspotLastSync && !manual ? st.hubspotLastSync - 600000 : Date.now() - 7 * 864e5;
       const url = st.hubspotBridgeUrl + (st.hubspotBridgeUrl.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(st.hubspotBridgeKey) + '&since=' + since;
       const data = await (await fetch(url)).json();
       if (!data.ok) throw new Error(data.error || 'Sync failed');
@@ -2888,7 +2888,8 @@
       plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
       plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
       const added = S.all('activities').length - before;
-      hubspotStatus = `${added} new, ${plan.activities.length - added} updated` + (plan.skipped ? `, ${plan.skipped} not matched to a company` : '');
+      const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       if (manual) toast('HubSpot synced: ' + hubspotStatus + '.');
     } catch (err) {
