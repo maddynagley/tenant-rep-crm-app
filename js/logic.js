@@ -603,9 +603,10 @@
       const p = rec.properties || {};
       const inbound = p.hs_email_direction === 'INCOMING_EMAIL';
       const addrs = emails(inbound ? p.hs_email_from_email : p.hs_email_to_email);
-      const companyId = resolve(rec, addrs);
-      if (!companyId) return skipped++;
       const id = 'hs-em-' + rec.id;
+      // An email already in the CRM keeps its company even if HubSpot has no association for it.
+      const companyId = resolve(rec, addrs) || (existing[id] && existing[id].companyId) || '';
+      if (!companyId) return skipped++;
       const date = hsDate(p.hs_timestamp);
       const opens = parseNumber(p.hs_email_open_count) || 0;
       const replied = (parseNumber(p.hs_email_reply_count) || 0) > 0;
@@ -656,9 +657,9 @@
     // Notes you log in HubSpot. They're a record, not a touch, so they don't change last-contacted dates.
     (payload.notes || []).forEach((rec) => {
       const p = rec.properties || {};
-      const companyId = resolve(rec, []);
-      if (!companyId) return skipped++;
       const id = 'hs-nt-' + rec.id;
+      const companyId = resolve(rec, []) || (existing[id] && existing[id].companyId) || '';
+      if (!companyId) return skipped++;
       const body = stripHtml(p.hs_note_body);
       if (!body) return;
       const fields = { type: 'Note', date: hsDate(p.hs_timestamp), companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: body.length > 80 ? body.slice(0, 77).replace(/\s+\S*$/, '') + '…' : body, notes: body.slice(0, 600), source: 'HubSpot', done: true };

@@ -616,3 +616,16 @@ test('planHubSpotSync brings in HubSpot notes and honors deal links', () => {
   assert.equal(by['hs-em-5'].dealId, 'hs-dl-8');
   assert.deepEqual(plan.companies, [{ id: 'hs-co-1', lastContacted: '2026-10-19' }], 'notes are not touches');
 });
+
+test('planHubSpotSync fills in the full text of emails already in the CRM', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Acme' }],
+    contacts: [],
+    deals: [],
+    activities: [{ id: 'hs-em-5', type: 'Email', companyId: 'hs-co-1', date: '2026-05-01', notes: 'Summary', opens: 2 }],
+  };
+  const plan = L.planHubSpotSync({ emails: [{ id: '5', properties: { hs_email_direction: 'EMAIL', hs_email_text: 'Hi Ann,\r\n\r\nFull email.', hs_email_open_count: '2' }, companies: [] }] }, data);
+  assert.equal(plan.skipped, 0);
+  assert.equal(plan.activities[0].body, 'Hi Ann,\n\nFull email.');
+  assert.equal(plan.activities[0].notes, undefined, 'the summary is kept');
+});
