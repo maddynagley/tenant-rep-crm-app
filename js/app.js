@@ -1724,7 +1724,9 @@
     else if (f.view === 'board') {
       body = `<div class="board">${stages
         .map((stage) => {
-          const inStage = deals.filter((d) => d.stage === stage);
+          // Newest to the stage first (deals from before this was tracked fall back to when they were added).
+          const since = (d) => d.stageChangedAt || d.createdAt || '';
+          const inStage = deals.filter((d) => d.stage === stage).sort((a, b) => since(b).localeCompare(since(a)));
           const total = inStage.reduce((t, d) => t + L.estimatedCommission(d).myShare, 0);
           return `<div class="col" data-stage="${esc(stage)}">
             <div class="col-head"><strong>${esc(stage)}</strong><span class="muted">${inStage.length} · ${L.fmtMoney(total, true)}</span></div>

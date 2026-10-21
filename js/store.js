@@ -165,6 +165,8 @@
     let existing = rec.id ? get(col, rec.id) : null;
     // touch:false records sync bookkeeping without counting as a user edit.
     const stamp = opts && opts.touch === false ? {} : { updatedAt: now };
+    // Deals remember when they entered their current stage, so the board shows the newest arrivals first.
+    if (col === 'deals' && rec.stage && (!existing || existing.stage !== rec.stage)) stamp.stageChangedAt = now;
     if (existing) {
       Object.assign(existing, rec, stamp);
     } else {
