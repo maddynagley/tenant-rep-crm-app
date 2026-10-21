@@ -710,3 +710,47 @@ test('a template written for a building is suggested first for its tenants', () 
   assert.equal(L.suggestTemplate(t, { leadStage: 'New', building: 'Tower Place' }, { today: '2026-10-20' }).id, 'i');
   assert.equal(L.suggestTemplate(t, { leadStage: 'Initial Outreach', building: 'Piedmont Center' }, { today: '2026-10-20', lastTouch: '2026-10-01' }).id, 'f');
 });
+
+test('companies and contacts new in HubSpot are added; existing ones only get blanks filled', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Acme', hubspotId: '1', industry: 'Legal', hubspotUrl: 'https://app.hubspot.com/contacts/999/record/0-2/1' }, { id: 'c2', name: 'Beta Labs, Inc.', website: 'https://www.betalabs.com' }],
+    contacts: [{ id: 'p1', companyId: 'hs-co-1', firstName: 'Ann', email: 'ann@acme.com', title: '' }],
+    deals: [],
+    activities: [],
+    hubspotSkip: ['co-9'],
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const plan = L.planHubSpotSync(
+    {
+      companies: [
+        { id: '1', properties: { name: 'Acme', industry: 'COMPUTER_SOFTWARE', submarket: 'Uptown' } },
+        { id: '2', properties: { name: 'Beta Labs', domain: 'betalabs.com', lease_expiration: '2027-06-30' } },
+        { id: '3', properties: { name: 'Zipline', domain: 'flyzipline.com', city: 'Atlanta', state: 'GA', createdate: today + 'T12:00:00Z' } },
+        { id: '9', properties: { name: 'Deleted Co' } },
+      ],
+      contacts: [
+        { id: '11', properties: { firstname: 'Ann', email: 'ANN@acme.com', jobtitle: 'COO' } },
+        { id: '12', properties: { firstname: 'Raj', lastname: 'Patel', email: 'raj@flyzipline.com', hs_linkedin_url: 'https://linkedin.com/in/raj' }, companies: ['3'] },
+        { id: '13', properties: { firstname: 'Bo', email: 'bo@betalabs.com' } },
+        { id: '14', properties: { firstname: 'No', email: 'no@nowhere.com' } },
+      ],
+    },
+    data
+  );
+  const co = (id) => plan.companies.find((c) => c.id === id);
+  assert.deepEqual(co('hs-co-1'), { id: 'hs-co-1', submarket: 'Uptown' });
+  assert.equal(co('c2').hubspotId, '2');
+  assert.equal(co('c2').leaseExpiration, '2027-06-30');
+  assert.equal(co('c2').name, undefined);
+  assert.equal(co('hs-co-3').leadStage, 'New');
+  assert.equal(co('hs-co-3').city, 'Atlanta, GA');
+  assert.equal(co('hs-co-3').hubspotUrl, 'https://app.hubspot.com/contacts/999/record/0-2/3');
+  assert.equal(co('hs-co-9'), undefined);
+  assert.deepEqual(plan.created, { companies: 1, contacts: 2 });
+  const ct = (id) => plan.contacts.find((c) => c.id === id);
+  assert.equal(ct('p1').title, 'COO');
+  assert.equal(ct('hs-ct-12').companyId, 'hs-co-3');
+  assert.equal(ct('hs-ct-13').companyId, 'c2');
+  assert.equal(ct('hs-ct-14'), undefined);
+  assert.equal(plan.skipped, 1);
+});

@@ -615,6 +615,94 @@
       return '';
     };
 
+    // New and updated companies and contacts in HubSpot (e.g. sent there by the ZoomInfo extension). New ones
+    // are added; ones already in the CRM only get blanks filled, so your edits here always win. A company
+    // matches by HubSpot ID, then website domain, then name; a contact by HubSpot ID, then email.
+    const skip = new Set((data.hubspotSkip || []).map(String));
+    const portal = (data.companies.map((c) => /\/contacts\/(\d+)\//.exec(c.hubspotUrl || '')).find(Boolean) || [])[1];
+    const hsUrl = (type, id) => (portal ? `https://app.hubspot.com/contacts/${portal}/record/${type}/${id}` : '');
+    const domainOf = (url) => String(url || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0];
+    const nameKey = (n) => String(n || '').toLowerCase().replace(/[.,]/g, '').replace(/\b(inc|llc|lp|llp|ltd|corp|corporation|company|co|pc|pllc)\b/g, '').replace(/\s+/g, ' ').trim();
+    const byWebsite = {};
+    const byName = {};
+    data.companies.forEach((c) => {
+      if (domainOf(c.website)) byWebsite[domainOf(c.website)] = c.id;
+      if (nameKey(c.name)) byName[nameKey(c.name)] = c.id;
+    });
+    let skipped = 0;
+    const recordPatches = { companies: [], contacts: [] };
+    const created = { companies: 0, contacts: 0 };
+    const fillBlanks = (col, current, fields) => {
+      const patch = { id: current.id };
+      Object.keys(fields).forEach((k) => {
+        if (fields[k] !== '' && fields[k] !== undefined && fields[k] !== null && (current[k] === undefined || current[k] === null || current[k] === '')) patch[k] = fields[k];
+      });
+      if (Object.keys(patch).length > 1) recordPatches[col].push(patch);
+    };
+    (payload.companies || []).forEach((rec) => {
+      const p = rec.properties || {};
+      if (!p.name || skip.has('co-' + rec.id)) return;
+      const website = p.website || (p.domain ? 'https://' + p.domain : '');
+      const fields = {
+        name: String(p.name).trim(),
+        website,
+        industry: String(p.industry || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()),
+        address: p.address || '',
+        city: [p.city, p.state].filter(Boolean).join(', '),
+        submarket: p.submarket || '',
+        sfOccupied: parseNumber(p.square_footage) || '',
+        headcount: parseNumber(p.numberofemployees) || '',
+        leaseExpiration: hsDate(p.lease_expiration),
+        hubspotId: String(rec.id),
+        hubspotUrl: hsUrl('0-2', rec.id),
+      };
+      const cid = companies['hs-co-' + rec.id] ? 'hs-co-' + rec.id : byHubspotId[String(rec.id)] || byWebsite[domainOf(website)] || byName[nameKey(p.name)];
+      if (cid && companies[cid]) {
+        fillBlanks('companies', companies[cid], fields);
+        byHubspotId[String(rec.id)] = cid;
+        return;
+      }
+      const fresh = hsDate(p.createdate) >= addDays(todayISO(), -30);
+      const c = Object.assign({ id: 'hs-co-' + rec.id }, fields, { status: 'Target', priority: 'B', growthSignal: 'Unknown', source: 'HubSpot', leadStage: fresh ? 'New' : undefined });
+      if (!c.leadStage) delete c.leadStage;
+      companies[c.id] = c;
+      byHubspotId[String(rec.id)] = c.id;
+      if (domainOf(website)) byWebsite[domainOf(website)] = c.id;
+      byName[nameKey(c.name)] = c.id;
+      recordPatches.companies.push(c);
+      created.companies++;
+    });
+    (payload.contacts || []).forEach((rec) => {
+      const p = rec.properties || {};
+      const email = String(p.email || '').trim().toLowerCase();
+      if ((!p.firstname && !p.lastname) || skip.has('ct-' + rec.id)) return;
+      const fields = {
+        firstName: String(p.firstname || '').trim() || String(p.lastname || '').trim(),
+        lastName: p.firstname ? String(p.lastname || '').trim() : '',
+        title: p.jobtitle || '',
+        email,
+        phone: p.phone || '',
+        mobile: p.mobilephone || '',
+        linkedin: p.hs_linkedin_url || '',
+        hubspotUrl: hsUrl('0-1', rec.id),
+      };
+      const current = contactsById['hs-ct-' + rec.id] || (email && byEmail[email]);
+      if (current) return fillBlanks('contacts', current, fields);
+      let companyId = '';
+      for (const id of rec.companies || []) if (!companyId) companyId = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[String(id)] || '';
+      const dom = email.split('@')[1];
+      if (!companyId && dom) companyId = byWebsite[dom] || byDomain[dom] || '';
+      if (!companyId || !companies[companyId]) return skipped++;
+      const contact = Object.assign({ id: 'hs-ct-' + rec.id, companyId }, fields, { source: 'HubSpot' });
+      contactsById[contact.id] = contact;
+      if (email) {
+        byEmail[email] = contact;
+        if (dom && !byDomain[dom]) byDomain[dom] = companyId;
+      }
+      recordPatches.contacts.push(contact);
+      created.contacts++;
+    });
+
     // A template drafted from the CRM in the last two weeks names the next email sent to that company.
     const usedTemplate = new Set();
     const pendingTemplate = (companyId, date) => {
@@ -628,7 +716,6 @@
     const touch = (cid, date) => {
       if (date && (!lastTouch[cid] || date > lastTouch[cid])) lastTouch[cid] = date;
     };
-    let skipped = 0;
     const replies = [];
 
     (payload.emails || []).forEach((rec) => {
@@ -729,7 +816,7 @@
       if (patch) Object.assign(patch, { pendingTemplate: '' });
       else companyPatches.push({ id: cid, pendingTemplate: '' });
     });
-    return { activities: upserts, companies: companyPatches, skipped };
+    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, created, skipped };
   }
 
   // ---------- shared prospect lists (two-way Google Sheet) ----------

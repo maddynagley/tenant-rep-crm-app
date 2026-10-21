@@ -25,6 +25,7 @@
     followUpDays: 7,
     workflowSince: '',
     workflowCreated: [],
+    hubspotSkip: [],
     postsPerWeek: 2,
     generatedIds: [],
     researchTeam: '',

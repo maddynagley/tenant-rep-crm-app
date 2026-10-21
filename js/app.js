@@ -2904,6 +2904,8 @@
           const rec = S.get(d.col, d.id);
           const what = d.col === 'companies' ? `"${rec.name}" and all of its contacts, deals and activity` : 'this ' + LABELS[d.col].toLowerCase();
           if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
+          const hs = d.col === 'companies' ? rec.hubspotId || (/^hs-co-(\d+)$/.exec(rec.id) || [])[1] : d.col === 'contacts' ? (/^hs-ct-(\d+)$/.exec(rec.id) || [])[1] : '';
+          if (hs) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat((d.col === 'companies' ? 'co-' : 'ct-') + hs) });
           S.remove(d.col, d.id);
           if (d.col === 'companies') location.hash = '#/companies';
           else if (d.col === 'deals') location.hash = '#/company/' + rec.companyId;
@@ -3334,13 +3336,14 @@
       const url = st.hubspotBridgeUrl + (st.hubspotBridgeUrl.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(st.hubspotBridgeKey) + '&since=' + since;
       const data = await (await fetch(url)).json();
       if (!data.ok) throw new Error(data.error || 'Sync failed');
-      const plan = L.planHubSpotSync(data, { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') });
+      const plan = L.planHubSpotSync(data, hubspotData());
       const before = S.all('activities').length;
       plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
-      plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
+      applyHubSpotRecords(plan);
       const added = S.all('activities').length - before;
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
-      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
+      if (!manual && (plan.created.companies || plan.created.contacts)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       runWorkflows();
       if (manual) toast('HubSpot synced: ' + hubspotStatus + '.');
@@ -3352,14 +3355,27 @@
       hubspotSyncing = false;
     }
   }
+  function hubspotData() {
+    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip };
+  }
+  function applyHubSpotRecords(plan) {
+    plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
+    (plan.contacts || []).forEach((c) => S.upsert('contacts', c, { silent: true, touch: false }));
+  }
+  function newRecordsNote(plan) {
+    const c = plan.created || {};
+    const parts = [c.companies ? `${c.companies} new compan${c.companies > 1 ? 'ies' : 'y'}` : '', c.contacts ? `${c.contacts} new contact${c.contacts > 1 ? 's' : ''}` : ''].filter(Boolean);
+    return parts.length ? ', ' + parts.join(' and ') : '';
+  }
   // One-time pull of everything HubSpot holds, type by type, in pages of up to 1,000.
   async function backfillHubSpot() {
     const st = S.settings();
     if (!st.hubspotBridgeUrl || hubspotSyncing) return;
     hubspotSyncing = true;
-    const totals = { added: 0, updated: 0, skipped: 0 };
+    const totals = { added: 0, updated: 0, skipped: 0, companies: 0, contacts: 0 };
     try {
-      for (const type of ['emails', 'notes', 'meetings', 'calls']) {
+      // Companies and contacts first, so the emails that follow can find them.
+      for (const type of ['companies', 'contacts', 'emails', 'notes', 'meetings', 'calls']) {
         let since = 0;
         for (let page = 0; page < 50; page++) {
           toast(`Loading HubSpot ${type}${page ? ' (page ' + (page + 1) + ')' : ''}…`);
@@ -3367,10 +3383,12 @@
           const data = await (await fetch(url)).json();
           if (!data.ok) throw new Error(data.error || 'Sync failed');
           if (data[type] === undefined) throw new Error('Update the HubSpot bridge script to the latest version first');
-          const plan = L.planHubSpotSync(data, { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') });
+          const plan = L.planHubSpotSync(data, hubspotData());
           const before = S.all('activities').length;
           plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
-          plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
+          applyHubSpotRecords(plan);
+          totals.companies += plan.created.companies;
+          totals.contacts += plan.created.contacts;
           S.saveSettings({});
           const added = S.all('activities').length - before;
           totals.added += added;
@@ -3381,7 +3399,7 @@
         }
       }
       runWorkflows();
-      hubspotStatus = `full history loaded: ${totals.added} new, ${totals.updated} updated` + (totals.skipped ? `, ${totals.skipped} not matched to a CRM company` : '');
+      hubspotStatus = `full history loaded: ${totals.added} new, ${totals.updated} updated` + newRecordsNote({ created: totals }) + (totals.skipped ? `, ${totals.skipped} not matched to a CRM company` : '');
       toast('HubSpot ' + hubspotStatus + '.');
       render();
     } catch (err) {

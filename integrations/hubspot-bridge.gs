@@ -2,7 +2,8 @@
  * Tenant Rep CRM – HubSpot bridge (Google Apps Script web app).
  *
  * Lets the CRM pick up emails (with opens and replies), notes, meetings and calls that HubSpot logs from
- * Outlook, without ever putting a HubSpot key in the browser. The HubSpot token stays in this
+ * Outlook, plus new and updated companies and contacts (e.g. ones the ZoomInfo extension sends to HubSpot),
+ * without ever putting a HubSpot key in the browser. The HubSpot token stays in this
  * script's properties; the CRM only holds the bridge URL and a sync key.
  *
  * Setup (once):
@@ -28,7 +29,17 @@ const TYPES = {
   notes: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_note_body'],
   meetings: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_meeting_title', 'hs_meeting_start_time', 'hs_meeting_outcome', 'hs_meeting_body'],
   calls: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_call_title', 'hs_call_body', 'hs_call_disposition', 'hs_call_direction', 'hs_call_duration'],
+  companies: [
+    'hs_lastmodifieddate', 'createdate', 'name', 'domain', 'website', 'industry', 'numberofemployees', 'address', 'city', 'state',
+    'submarket', 'square_footage', 'lease_expiration',
+  ],
+  contacts: ['lastmodifieddate', 'createdate', 'firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
 };
+
+// Contacts name their last-modified date differently from every other object.
+const MODIFIED = { contacts: 'lastmodifieddate' };
+// Which associations to read for each type.
+const LINKS = { companies: [], contacts: ['companies'] };
 
 function setup() {
   const props = PropertiesService.getScriptProperties();
@@ -67,12 +78,13 @@ function doGet(e) {
 }
 
 function fetchSince_(type, properties, since) {
+  const modified = MODIFIED[type] || 'hs_lastmodifieddate';
   const results = [];
   let after;
   do {
     const body = {
-      filterGroups: [{ filters: [{ propertyName: 'hs_lastmodifieddate', operator: 'GTE', value: String(since) }] }],
-      sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'ASCENDING' }],
+      filterGroups: [{ filters: [{ propertyName: modified, operator: 'GTE', value: String(since) }] }],
+      sorts: [{ propertyName: modified, direction: 'ASCENDING' }],
       properties: properties,
       limit: PAGE_SIZE,
     };
@@ -88,10 +100,8 @@ function fetchSince_(type, properties, since) {
     });
     after = page.paging && page.paging.next && page.paging.next.after;
   } while (after && results.length < MAX_PER_TYPE);
-  attachAssociations_(type, results, 'companies');
-  attachAssociations_(type, results, 'contacts');
-  attachAssociations_(type, results, 'deals');
-  const last = results.length ? results[results.length - 1].properties.hs_lastmodifieddate : null;
+  (LINKS[type] || ['companies', 'contacts', 'deals']).forEach(function (toType) { attachAssociations_(type, results, toType); });
+  const last = results.length ? results[results.length - 1].properties[modified] : null;
   return { items: results, more: Boolean(after), next: last ? new Date(last).getTime() : since };
 }
 
