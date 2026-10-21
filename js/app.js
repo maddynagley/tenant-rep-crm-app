@@ -164,7 +164,7 @@
       { key: 'targetSubmarkets', label: 'Target submarkets' },
       { key: 'targetOccupancy', label: 'Target occupancy', type: 'date' },
       { key: 'headcountTarget', label: 'Planned headcount', type: 'number', asset: 'Office' },
-      { key: 'parkingRatio', label: 'Parking (/1,000 SF)', type: 'number', step: '0.1' },
+      { key: 'parkingSpaces', label: 'Parking spaces needed', type: 'number' },
       { key: 'clearHeightMin', label: 'Min clear height (ft)', type: 'number', asset: 'Industrial' },
       { key: 'dockDoors', label: 'Dock doors', type: 'number', asset: 'Industrial' },
       { key: 'driveIns', label: 'Drive-in doors', type: 'number', asset: 'Industrial' },
@@ -248,7 +248,8 @@
       { key: 'landlord', label: 'Landlord / listing broker' },
       { key: 'tiAllowance', label: 'TI offered ($/SF)', type: 'number', step: '0.01' },
       { key: 'freeRentMonths', label: 'Free rent (months)', type: 'number' },
-      { key: 'parkingRatio', label: 'Parking (/1,000 SF)', type: 'number', step: '0.1' },
+      { key: 'parkingRatio', label: 'Parking ratio (/1,000 SF)', type: 'number', step: '0.1' },
+      { key: 'parkingSpaces', label: 'Parking spaces offered', type: 'number' },
       { key: 'clearHeight', label: 'Clear height (ft)', type: 'number', asset: 'Industrial' },
       { key: 'dockDoors', label: 'Dock doors', type: 'number', asset: 'Industrial' },
       { key: 'tourDate', label: 'Tour date', type: 'date' },
@@ -1578,6 +1579,18 @@
     </section>`;
   }
 
+  // Spaces a building offers (entered, or estimated from its ratio and the space's size) against what the deal needs.
+  function parkingCell(p, d) {
+    const ratio = L.parseNumber(p.parkingRatio);
+    const sf = L.parseNumber(p.availableSF);
+    const spaces = L.parseNumber(p.parkingSpaces) || (ratio && sf ? Math.floor((ratio * sf) / 1000) : null);
+    if (!spaces) return ratio ? esc(ratio) + '/1,000' : '';
+    const need = L.parseNumber(d.parkingSpaces);
+    const label = (L.parseNumber(p.parkingSpaces) ? '' : '~') + L.fmtNumber(spaces);
+    const title = L.parseNumber(p.parkingSpaces) ? 'Spaces offered' : `Estimated from ${ratio}/1,000 SF on ${L.fmtNumber(sf)} SF`;
+    return need && spaces < need ? `<span title="${esc(title)}">${badge(label + ' (need ' + L.fmtNumber(need) + ')', 'red')}</span>` : `<span title="${esc(title)}">${esc(label)}</span>`;
+  }
+
   function dealTermsCard(d) {
     const rate = d.finalRate ? '$' + Number(d.finalRate).toFixed(2) + ' ' + String(d.finalRateBasis || d.rateBasis || '').replace(/\s*\(.*\)/, '') : '';
     const rows = [
@@ -1791,7 +1804,7 @@
       ['Target submarkets', d.targetSubmarkets],
       ['Target occupancy', L.fmtDate(d.targetOccupancy)],
       ['Planned headcount', isOff ? L.fmtNumber(d.headcountTarget) : ''],
-      ['Parking', d.parkingRatio ? d.parkingRatio + ' / 1,000 SF' : ''],
+      ['Parking', d.parkingSpaces ? L.fmtNumber(d.parkingSpaces) + ' spaces' : d.parkingRatio ? d.parkingRatio + ' / 1,000 SF' : ''],
       ['Min clear height', isInd && d.clearHeightMin ? d.clearHeightMin + ' ft' : ''],
       ['Dock doors', isInd ? d.dockDoors : ''],
       ['Drive-ins', isInd ? d.driveIns : ''],
@@ -1871,7 +1884,7 @@
         <h2>Market survey & tours <button class="link more" data-action="new" data-col="properties" data-deal="${esc(id)}">+ Add property</button></h2>
         ${
           props.length
-            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Status</th><th class="right">Avail. SF</th><th class="right">Asking</th><th class="right">Est. yr-1 rent</th><th class="right">TI</th><th class="right">Free rent</th>${isInd ? '<th class="right">Clear</th><th class="right">Docks</th>' : ''}<th>Tour</th><th></th></tr></thead><tbody>
+            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Status</th><th class="right">Avail. SF</th><th class="right">Asking</th><th class="right">Est. yr-1 rent</th><th class="right">TI</th><th class="right">Free rent</th>${isInd ? '<th class="right">Clear</th><th class="right">Docks</th>' : ''}<th class="right">Parking</th><th>Tour</th><th></th></tr></thead><tbody>
           ${props
             .map((p) => {
               const sf = L.parseNumber(d.estSF) || L.parseNumber(p.availableSF) || 0;
@@ -1885,6 +1898,7 @@
                 <td class="right">${p.tiAllowance ? '$' + esc(p.tiAllowance) : ''}</td>
                 <td class="right">${p.freeRentMonths ? esc(p.freeRentMonths) + ' mo' : ''}</td>
                 ${isInd ? `<td class="right">${p.clearHeight ? esc(p.clearHeight) + "'" : ''}</td><td class="right">${esc(p.dockDoors)}</td>` : ''}
+                <td class="right nowrap">${parkingCell(p, d)}</td>
                 <td>${esc(L.fmtDate(p.tourDate))}</td>
                 <td class="right nowrap"><button class="icon-btn" data-action="edit" data-col="properties" data-id="${esc(p.id)}" title="Edit">✎</button><button class="icon-btn" data-action="delete" data-col="properties" data-id="${esc(p.id)}" title="Delete">✕</button></td></tr>`;
             })
