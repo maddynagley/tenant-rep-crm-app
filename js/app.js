@@ -384,6 +384,39 @@
   function activityDue(a) {
     return a.followUpDate || (a.type === 'Task' ? a.date : '');
   }
+  // Your own email domain, from your contact record (the one named like you in Settings).
+  function myEmailDomain() {
+    const me = String(S.settings().brokerName || '').trim().toLowerCase();
+    const p = me && S.all('contacts').find((c) => contactName(c).toLowerCase() === me && c.email);
+    return p ? p.email.split('@')[1] : '';
+  }
+
+  // Activities once pointed at a colleague cc'd on the email; only someone at the company counts.
+  function repairActivityContacts() {
+    S.all('activities').forEach((a) => {
+      const p = a.contactId && S.get('contacts', a.contactId);
+      if (a.contactId && a.companyId && (!p || p.companyId !== a.companyId)) S.upsert('activities', { id: a.id, contactId: '' }, { silent: true, touch: false });
+    });
+  }
+
+  // The contact to reach for a company: the given one if they work there, else the best one.
+  function reachContact(companyId, contactId) {
+    const p = S.get('contacts', contactId);
+    if (p && p.companyId === companyId) return p;
+    const rank = (c) => (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callableNumber(c) ? 2 : 0);
+    return S.all('contacts').filter((c) => c.companyId === companyId).sort((a, b) => rank(b) - rank(a))[0] || null;
+  }
+
+  // Call and email buttons for a task, follow-up or lead. `reply` is an email to answer in the same thread.
+  function contactButtons(companyId, contactId, opts) {
+    opts = opts || {};
+    const p = companyId && reachContact(companyId, contactId);
+    if (!p) return '';
+    const attrs = `data-company="${esc(companyId)}" data-contact="${esc(p.id)}"`;
+    return (callableNumber(p) ? `<button class="btn small" data-action="call-card" ${attrs}>Call ${esc(p.firstName)}</button>` : '') +
+      (p.email ? `<button class="btn small" data-action="draft-email" ${attrs}${opts.step ? ` data-step="${esc(opts.step)}"` : ''}${opts.reply ? ` data-reply="${esc(opts.reply)}"` : ''}>${esc(opts.emailLabel || 'Email ' + p.firstName)}</button>` : '');
+  }
+
   // Automatic follow-up tasks after an initial email (see L.planFollowUpTasks). Runs after every sync or logged touch.
   function runWorkflows() {
     const s = S.settings();
@@ -391,7 +424,7 @@
     const since = s.workflowSince || L.addDays(L.todayISO(), -7);
     const plan = L.planFollowUpTasks(
       { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') },
-      { days: s.followUpDays, since, created: s.workflowCreated }
+      { days: s.followUpDays, since, created: s.workflowCreated, internalDomain: myEmailDomain() }
     );
     plan.add.forEach((t) => S.upsert('activities', t, { silent: true }));
     plan.complete.forEach((t) => S.upsert('activities', t, { silent: true }));
@@ -690,7 +723,13 @@
           </div>
           ${badge(due < today ? 'Overdue · ' + L.fmtDate(due) : due === today ? 'Today' : L.fmtDate(due), cls)}
           ${/^q-research-/.test(a.id) ? researchMailLink(a.id.replace('q-research-', '')) : ''}
-          ${a.workflow === 'follow-up' ? `<button class="btn small" data-action="draft-email" data-company="${esc(a.companyId)}" data-contact="${esc(a.contactId || '')}" data-step="Follow-up">Draft follow-up</button>` : ''}
+          ${
+            a.workflow === 'follow-up'
+              ? contactButtons(a.companyId, a.contactId, { step: 'Follow-up', reply: a.workflowEmailId, emailLabel: 'Draft follow-up' })
+              : a.companyId && !/^q-research-/.test(a.id)
+                ? contactButtons(a.companyId, a.contactId, {})
+                : ''
+          }
           <button class="icon-btn" data-action="edit" data-col="activities" data-id="${esc(a.id)}" title="Edit">✎</button>
         </li>`;
       })
@@ -712,9 +751,8 @@
     const p = S.get('contacts', item.contactId);
     switch (item.channel) {
       case 'Call':
-        return `<a class="btn small" href="tel:${esc(callableNumber(p))}">Call ${esc(p.firstName)}</a>${p.email ? ` <button class="btn small" data-action="draft-email" data-company="${esc(item.companyId)}" data-contact="${esc(p.id)}">Draft email</button>` : ''}`;
       case 'Email':
-        return `<button class="btn small" data-action="draft-email" data-company="${esc(item.companyId)}" data-contact="${esc(p.id)}">Draft email to ${esc(p.firstName)}</button>`;
+        return contactButtons(item.companyId, p.id, item.kind === 'opened' ? { reply: item.activityId, step: 'Follow-up', emailLabel: 'Reply to ' + p.firstName } : { emailLabel: 'Draft email to ' + p.firstName });
       case 'LinkedIn':
         return `<a class="btn small" href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ${esc(p.firstName)}</a>`;
       default:
@@ -2311,7 +2349,34 @@
     return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, today: L.todayISO() };
   }
 
-  function openDraft(companyId, contactId, step) {
+  // Who to call and their numbers, with click-to-call, copy, and logging the call.
+  function openCallCard(companyId, contactId) {
+    const c = S.get('companies', companyId);
+    const p = reachContact(companyId, contactId);
+    if (!c || !p) return;
+    const others = S.all('contacts').filter((x) => x.companyId === companyId && x.id !== p.id && (x.phone || x.mobile));
+    const line = (label, num, dnc) =>
+      num
+        ? `<div class="call-line"><span class="muted">${label}</span>${dnc ? `<span class="call-num">${esc(num)}</span> ${badge('Do not call', 'red')}` : `<a class="call-num" href="tel:${esc(num)}">${esc(num)}</a><button type="button" class="btn small" data-action="copy-text" data-text="${esc(num)}">Copy</button>`}</div>`
+        : '';
+    const last = S.all('activities').filter((a) => a.companyId === companyId && a.date && a.date <= L.todayISO() && a.type !== 'Task').sort((a, b) => b.date.localeCompare(a.date))[0];
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" class="call-card">
+      <header><h2>Call ${esc(contactName(p))}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <p class="sub">${esc([p.title, c.name].filter(Boolean).join(' · '))}</p>
+      ${line('Office', p.phone, p.phoneDNC)}${line('Mobile', p.mobile, p.mobileDNC)}
+      ${last ? `<p class="hint">Last touch: ${esc(L.fmtDate(last.date))} · ${esc(last.type)} · ${esc(last.subject || '')}</p>` : ''}
+      ${others.length ? `<details><summary>Other people at ${esc(c.name)} (${others.length})</summary>${others.map((x) => `<div class="call-line"><span>${esc(contactName(x))}<span class="sub"> ${esc(x.title || '')}</span></span>${x.phone && !x.phoneDNC ? `<a href="tel:${esc(x.phone)}">${esc(x.phone)}</a>` : ''}${x.mobile && !x.mobileDNC ? ` <a href="tel:${esc(x.mobile)}">${esc(x.mobile)} (m)</a>` : ''}</div>`).join('')}</details>` : ''}
+      <footer><span class="spacer"></span>
+        ${p.email ? `<button type="button" class="btn" data-action="draft-email" data-company="${esc(companyId)}" data-contact="${esc(p.id)}">Email instead</button>` : ''}
+        <button type="button" class="btn primary" data-action="log-touch" data-type="Call" data-company="${esc(companyId)}" data-contact="${esc(p.id)}">✓ Called – log it</button>
+      </footer>
+    </form>`;
+    dlg.showModal();
+  }
+
+  function openDraft(companyId, contactId, step, replyId) {
     const c = S.get('companies', companyId);
     if (!c) return;
     const people = S.all('contacts').filter((p) => p.companyId === companyId && p.email);
@@ -2319,7 +2384,9 @@
     const contact = S.get('contacts', contactId) || people.slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker'))[0] || null;
     const suggested = (step && templates.find((t) => t.step === step)) || L.suggestTemplate(templates, c, { today: L.todayISO(), lastTouch: lastTouchMap()[companyId] });
     const dlg = $('#modal');
-    dlg.innerHTML = `<form method="dialog" id="draft-form" data-company="${esc(companyId)}">
+    const reply = S.get('activities', replyId);
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" id="draft-form" data-company="${esc(companyId)}" data-reply-subject="${esc(reply ? 'RE: ' + String(reply.subject || '').replace(/^(re|fw|fwd|reply):\s*/gi, '') : '')}">
       <header><h2>Draft email to ${esc(c.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
       ${
         !templates.length
@@ -2346,7 +2413,7 @@
     const f = $('#draft-form');
     const t = S.get('templates', f.elements.template.value);
     const ctx = draftContext(f.dataset.company, f.elements.contact.value);
-    f.elements.subject.value = L.fillTemplate(t.subject, ctx);
+    f.elements.subject.value = f.dataset.replySubject || L.fillTemplate(t.subject, ctx);
     f.elements.body.value = L.fillTemplate(t.body, ctx);
     updateDraftLink();
   }
@@ -2937,7 +3004,11 @@
           S.upsert('deals', patch);
           return toast('Stage → ' + d.stage);
         }
+        case 'copy-text':
+          navigator.clipboard.writeText(d.text).then(() => toast('Copied ' + d.text + '.'));
+          return;
         case 'log-touch': {
+          if ($('#modal').open) $('#modal').close();
           const c = S.get('companies', d.company);
           const today = L.todayISO();
           const tpl = d.type === 'Email' && c.pendingTemplate ? c.pendingTemplate : '';
@@ -2964,9 +3035,11 @@
           e.preventDefault();
           navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
           return;
+        case 'call-card':
+          return openCallCard(d.company, d.contact);
         case 'draft-email':
           e.preventDefault();
-          return openDraft(d.company, d.contact, d.step);
+          return openDraft(d.company, d.contact, d.step, d.reply);
         case 'copy-draft': {
           const f = $('#draft-form');
           navigator.clipboard.writeText('Subject: ' + f.elements.subject.value + '\n\n' + f.elements.body.value).then(() => toast('Copied. Paste it into Outlook.'));
@@ -3430,6 +3503,7 @@
     navigator.storage.persist().then((ok) => (storageProtected = ok), () => {});
   S.ready.then(() => {
     ensureGenerated();
+    repairActivityContacts();
     runWorkflows();
     render();
     syncHubSpot(false);

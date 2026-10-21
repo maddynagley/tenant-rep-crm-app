@@ -754,3 +754,19 @@ test('companies and contacts new in HubSpot are added; existing ones only get bl
   assert.equal(ct('hs-ct-14'), undefined);
   assert.equal(plan.skipped, 1);
 });
+
+test('follow-up tasks name a contact at the company, never a colleague on cc', () => {
+  const data = {
+    companies: [{ id: 'a', name: 'Acme' }, { id: 'us', name: 'Our firm' }],
+    contacts: [{ id: 'me', companyId: 'us', firstName: 'Sam', email: 'sam@ourfirm.com' }, { id: 'ann', companyId: 'a', firstName: 'Ann', email: 'ann@acme.com' }],
+    deals: [],
+    activities: [
+      { id: 'e1', type: 'Email', date: '2026-10-14', companyId: 'a', contactId: 'me', subject: 'Hello' },
+      { id: 'e2', type: 'Email', date: '2026-10-14', companyId: 'us', contactId: 'me', subject: 'Internal' },
+      { id: 'old', type: 'Task', workflow: 'follow-up', workflowEmailId: 'x', followUpDate: '2026-10-25', companyId: 'a', contactId: 'me', subject: 'Send follow-up email to Sam at Acme' },
+    ],
+  };
+  const plan = L.planFollowUpTasks(data, { today: '2026-10-20', since: '2026-10-10', internalDomain: 'ourfirm.com' });
+  assert.deepEqual(plan.add.map((t) => [t.companyId, t.contactId, t.subject]), [['a', 'ann', 'Send follow-up email to Ann at Acme']]);
+  assert.deepEqual(plan.complete, [{ id: 'old', contactId: 'ann', subject: 'Send follow-up email to Ann at Acme' }]);
+});

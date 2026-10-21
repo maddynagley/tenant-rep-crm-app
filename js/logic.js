@@ -609,9 +609,11 @@
       for (const a of addrs) if (byDomain[a.split('@')[1]]) return byDomain[a.split('@')[1]];
       return '';
     };
-    const contactFor = (rec, addrs) => {
-      for (const id of rec.contacts || []) if (contactsById['hs-ct-' + id]) return 'hs-ct-' + id;
-      for (const a of addrs) if (byEmail[a]) return byEmail[a].id;
+    // Only a contact at the email's company counts: colleagues you cc are associated in HubSpot too.
+    const contactFor = (rec, addrs, companyId) => {
+      const at = (p) => p && (!companyId || p.companyId === companyId);
+      for (const id of rec.contacts || []) if (at(contactsById['hs-ct-' + id])) return 'hs-ct-' + id;
+      for (const a of addrs) if (at(byEmail[a])) return byEmail[a].id;
       return '';
     };
 
@@ -735,6 +737,8 @@
         if (body && existing[id].body !== body) patch.body = body;
         if (!existing[id].dealId && dealFor(existing[id].companyId, rec)) patch.dealId = dealFor(existing[id].companyId, rec);
         if (replied && !RESPONDED.includes(existing[id].outcome)) patch.outcome = 'Replied';
+        const was = contactsById[existing[id].contactId];
+        if (existing[id].contactId && (!was || was.companyId !== existing[id].companyId)) patch.contactId = contactFor(rec, addrs, existing[id].companyId);
         upserts.push(patch);
       } else {
         upserts.push({
@@ -743,7 +747,7 @@
           date,
           companyId,
           dealId: dealFor(companyId, rec),
-          contactId: contactFor(rec, addrs),
+          contactId: contactFor(rec, addrs, companyId),
           subject: (inbound ? 'Reply: ' : '') + (p.hs_email_subject || '(no subject)'),
           template: inbound ? '' : pendingTemplate(companyId, date) || guessTemplate(p.hs_email_subject),
           opens: inbound ? '' : opens,
@@ -781,7 +785,7 @@
       if (!companyId) return skipped++;
       const body = stripHtml(p.hs_note_body);
       if (!body) return;
-      const fields = { type: 'Note', date: hsDate(p.hs_timestamp), companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: body.length > 80 ? body.slice(0, 77).replace(/\s+\S*$/, '') + '…' : body, notes: body.slice(0, 600), source: 'HubSpot', done: true };
+      const fields = { type: 'Note', date: hsDate(p.hs_timestamp), companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, [], companyId), subject: body.length > 80 ? body.slice(0, 77).replace(/\s+\S*$/, '') + '…' : body, notes: body.slice(0, 600), source: 'HubSpot', done: true };
       if (!existing[id]) upserts.push(Object.assign({ id }, fields));
       else if (existing[id].notes !== fields.notes) upserts.push({ id, subject: fields.subject, notes: fields.notes });
     });
@@ -792,7 +796,7 @@
       if (!companyId) return skipped++;
       const date = hsDate(p.hs_meeting_start_time || p.hs_timestamp);
       const id = 'hs-mt-' + rec.id;
-      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
+      if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, [], companyId), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
       if (date <= todayISO()) touch(companyId, date);
     });
 
@@ -804,7 +808,7 @@
       const id = 'hs-cl-' + rec.id;
       const outcome = CALL_DISPOSITIONS[p.hs_call_disposition] || '';
       if (existing[id]) upserts.push({ id, outcome: existing[id].outcome || outcome });
-      else upserts.push({ id, type: 'Call', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, []), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
+      else upserts.push({ id, type: 'Call', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, [], companyId), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });
       touch(companyId, date);
     });
 
@@ -1384,6 +1388,14 @@
     const contacts = {};
     (data.contacts || []).forEach((p) => (contacts[p.id] = p));
     const openDeal = new Set(data.deals.filter((d) => OPEN_STAGES.includes(d.stage)).map((d) => d.companyId));
+    // The email's contact if they work there, else the company's best contact.
+    const contactAt = (id, companyId) =>
+      (contacts[id] && contacts[id].companyId === companyId && contacts[id]) ||
+      (data.contacts || []).filter((p) => p.companyId === companyId).sort((a, b) => contactRank(b) - contactRank(a))[0] ||
+      null;
+    // Emails among colleagues (a company whose people share your email domain) aren't prospecting.
+    const own = String(opts.internalDomain || '').toLowerCase();
+    const internal = new Set(own ? (data.contacts || []).filter((p) => String(p.email || '').toLowerCase().endsWith('@' + own)).map((p) => p.companyId) : []);
     const byCompany = {};
     data.activities.forEach((a) => {
       if (a.companyId && a.date && ['Email', 'Call', 'Meeting'].includes(a.type)) (byCompany[a.companyId] = byCompany[a.companyId] || []).push(a);
@@ -1398,13 +1410,13 @@
     data.activities.forEach((e) => {
       if (e.type !== 'Email' || e.inbound || !e.companyId || !e.date || e.date < since || e.date > today) return;
       const c = companies[e.companyId];
-      if (!c || openDeal.has(c.id) || e.dealId) return;
+      if (!c || openDeal.has(c.id) || e.dealId || internal.has(c.id)) return;
       const id = 'wf-fu-' + c.id + '-' + e.date;
       if (seen.has(id) || created.has(id)) return;
       const prior = (byCompany[c.id] || []).some((a) => a.id !== e.id && a.date < e.date && a.date >= addDays(e.date, -60));
       if (prior || RESPONDED.includes(e.outcome) || nextTouch(e)) return;
       seen.add(id);
-      const p = contacts[e.contactId];
+      const p = contactAt(e.contactId, c.id);
       const due = addDays(e.date, days);
       add.push({
         id,
@@ -1412,7 +1424,7 @@
         date: due,
         followUpDate: due,
         companyId: c.id,
-        contactId: e.contactId || '',
+        contactId: p ? p.id : '',
         subject: 'Send follow-up email to ' + (p && p.firstName ? p.firstName + ' at ' : '') + c.name,
         notes: `Automatic: no reply yet to "${String(e.subject || '').replace(/^Reply: /, '')}" sent ${fmtDate(e.date)}.`,
         workflow: 'follow-up',
@@ -1427,7 +1439,13 @@
       if (t.workflow !== 'follow-up' || t.done) return;
       const e = emails[t.workflowEmailId] || { id: t.workflowEmailId, companyId: t.companyId, date: addDays(t.followUpDate, -days) };
       const next = nextTouch(e);
-      if (!next) return;
+      if (!next) {
+        const p = contactAt(t.contactId, t.companyId);
+        const c = companies[t.companyId];
+        if (c && (p ? p.id : '') !== (t.contactId || ''))
+          complete.push({ id: t.id, contactId: p ? p.id : '', subject: 'Send follow-up email to ' + (p && p.firstName ? p.firstName + ' at ' : '') + c.name });
+        return;
+      }
       const how = next.inbound ? 'they replied' : next.type === 'Email' ? 'you followed up' : 'you ' + (next.type === 'Call' ? 'called' : 'met');
       complete.push({ id: t.id, done: true, notes: (t.notes ? t.notes + '\n' : '') + `Closed automatically: ${how} on ${fmtDate(next.date)}.` });
     });
@@ -1491,7 +1509,7 @@
       .filter((a) => companies[a.companyId] && !doNotContact(companies[a.companyId]) && !snoozed(companies[a.companyId]) && touches[a.companyId] === a.date)
       .sort((a, b) => (parseNumber(b.opens) || 0) - (parseNumber(a.opens) || 0) || b.date.localeCompare(a.date))
       .map((a) => {
-        const contact = data.contacts.find((p) => p.id === a.contactId) || bestContact(a.companyId);
+        const contact = data.contacts.find((p) => p.id === a.contactId && p.companyId === a.companyId) || bestContact(a.companyId);
         const n = parseNumber(a.opens);
         return {
           kind: 'opened',
