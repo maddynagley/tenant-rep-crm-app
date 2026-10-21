@@ -291,6 +291,10 @@
     { key: 'address', label: 'Address' },
     { key: 'submarket', label: 'Submarket', list: () => distinct('companies', 'submarket').concat(distinct('comps', 'submarket')) },
     { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES },
+    { key: 'city', label: 'City' },
+    { key: 'landlord', label: 'Landlord' },
+    { key: 'yearBuilt', label: 'Year built', type: 'number' },
+    { key: 'clearHeight', label: 'Clear height (ft)', type: 'number', asset: 'Industrial' },
     { key: 'tenant', label: 'Tenant' },
     { key: 'dealType', label: 'Deal type', type: 'select', options: L.DEAL_TYPES },
     { key: 'sf', label: 'RSF', type: 'number' },
@@ -1119,7 +1123,7 @@
     const rights = S.all('criticalDates');
     const q = f.q.trim().toLowerCase();
     const comps = S.all('comps')
-      .filter((c) => !q || [c.building, c.address, c.submarket, c.tenant, c.notes].join(' ').toLowerCase().includes(q))
+      .filter((c) => !q || [c.building, c.address, c.city, c.submarket, c.tenant, c.landlord, c.notes].join(' ').toLowerCase().includes(q))
       .filter((c) => matchesAsset(c.assetClass, f.asset))
       .sort((a, b) => (b.signedDate || b.commencement || '').localeCompare(a.signedDate || a.commencement || ''));
     const head = '<thead><tr><th>Date</th><th>What</th><th>Client</th><th></th></tr></thead>';
@@ -1135,7 +1139,7 @@
       ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th><th>Source</th></tr></thead><tbody>${comps
           .map(
             (c) => `<tr class="clickable" data-action="edit" data-col="comps" data-id="${esc(c.id)}">
-            <td><strong>${esc(c.building)}</strong>${c.confidential ? ' ' + badge('Confidential', 'red') : ''}<div class="sub">${esc([c.address, c.submarket].filter(Boolean).join(' · '))}</div></td>
+            <td><strong>${esc(c.building)}</strong>${c.confidential ? ' ' + badge('Confidential', 'red') : ''}<div class="sub">${esc([c.address, c.city, c.submarket].filter(Boolean).join(' · '))}</div>${c.clearHeight || c.yearBuilt || c.landlord ? `<div class="sub">${esc([c.clearHeight ? c.clearHeight + "' clear" : '', c.yearBuilt ? 'Built ' + c.yearBuilt : '', c.landlord ? 'LL: ' + c.landlord : ''].filter(Boolean).join(' · '))}</div>` : ''}</td>
             <td>${esc(c.tenant)}</td><td>${assetBadge(c.assetClass)}</td><td>${esc(c.dealType)}</td>
             <td class="right">${esc(L.fmtNumber(c.sf))}</td><td class="nowrap">${esc(L.fmtDate(c.signedDate))}</td>
             <td class="right">${c.termMonths ? esc(c.termMonths) + ' mo' : ''}</td>
