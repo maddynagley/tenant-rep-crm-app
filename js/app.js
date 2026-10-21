@@ -301,6 +301,7 @@
     { key: 'signedDate', label: 'Lease signed', type: 'date' },
     { key: 'commencement', label: 'Commencement', type: 'date' },
     { key: 'termMonths', label: 'Term (months)', type: 'number' },
+    { key: 'leaseExpiration', label: 'Lease expiration (if known; otherwise estimated from the term)', type: 'date' },
     { key: 'startingRent', label: 'Starting rent ($/SF)', type: 'number', step: '0.01' },
     { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
     { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
@@ -1116,6 +1117,16 @@
       ${list.length ? criticalDatesTable(list, false) : emptyState('Track renewal and termination options, expansion rights, ROFO/ROFR and other deadlines from the lease. You\'ll get a reminder on Today before each notice deadline.', `<button class="btn" data-action="new" data-col="criticalDates" ${attrs}>+ Critical date</button>`)}</section>`;
   }
 
+  // Estimated expirations show the year with "~"; known ones show the month.
+  function compLXDCell(c) {
+    const x = L.compLXD(c);
+    if (!x) return '';
+    const d = L.parseISODate(x.date);
+    return x.estimated
+      ? `<span title="Estimated: signed ${esc(L.fmtDate(c.signedDate))}, about 2 months to commencement, then a ${esc(c.termMonths)}-month term">~${d.getFullYear()}</span>`
+      : esc(d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }));
+  }
+
   function viewComps() {
     const f = state.comps;
     const today = L.todayISO();
@@ -1136,7 +1147,7 @@
         <p class="hint">Renewal, termination, expansion and contraction options, ROFO/ROFR and other rights for any tenant: clients, prospects or companies you're watching.</p>
         ${rights.length ? criticalDatesTable(rights, true) : emptyState('None tracked yet. Add them here or from a company page.')}</section>`;
     const compTable = comps.length
-      ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th><th>Source</th></tr></thead><tbody>${comps
+      ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th><th>LXD</th><th>Source</th></tr></thead><tbody>${comps
           .map(
             (c) => `<tr class="clickable" data-action="edit" data-col="comps" data-id="${esc(c.id)}">
             <td><strong>${esc(c.building)}</strong>${c.confidential ? ' ' + badge('Confidential', 'red') : ''}<div class="sub">${esc([c.address, c.city, c.submarket].filter(Boolean).join(' · '))}</div>${c.clearHeight || c.yearBuilt || c.landlord ? `<div class="sub">${esc([c.clearHeight ? c.clearHeight + "' clear" : '', c.yearBuilt ? 'Built ' + c.yearBuilt : '', c.landlord ? 'LL: ' + c.landlord : ''].filter(Boolean).join(' · '))}</div>` : ''}</td>
@@ -1145,7 +1156,7 @@
             <td class="right">${c.termMonths ? esc(c.termMonths) + ' mo' : ''}</td>
             <td class="right nowrap">${c.startingRent ? '$' + esc(Number(c.startingRent).toFixed(2)) + ' <span class="muted">' + esc(String(c.rateBasis || '').replace(/\s*\(.*\)/, '')) + '</span>' : ''}</td>
             <td class="right">${c.escalationPct ? esc(c.escalationPct) + '%' : ''}</td><td class="right">${c.freeRentMonths ? esc(c.freeRentMonths) + ' mo' : ''}</td>
-            <td class="right">${c.tiAllowance ? '$' + esc(c.tiAllowance) : ''}</td><td>${esc(c.source)}</td></tr>`
+            <td class="right">${c.tiAllowance ? '$' + esc(c.tiAllowance) : ''}</td><td class="nowrap">${compLXDCell(c)}</td><td>${esc(c.source)}</td></tr>`
           )
           .join('')}</tbody></table></div>`
       : emptyState('No comps yet. Open a closed deal and tap "Save as comp", or add one by hand.', '<button class="btn primary" data-action="new" data-col="comps">+ Comp</button>');

@@ -801,3 +801,10 @@ test('merging a duplicate company moves its records and keeps its HubSpot ID poi
   const plan = L.planHubSpotSync({ emails: [{ id: '9', properties: { hs_email_direction: 'EMAIL', hs_email_subject: 'Hi', hs_timestamp: '2026-10-20T15:00:00Z' }, companies: ['2'] }] }, data);
   assert.equal(plan.activities[0].companyId, 'keep');
 });
+
+test('a comp lease expiration comes from the entered date, commencement + term, or an estimate from signing', () => {
+  assert.deepEqual(L.compLXD({ leaseExpiration: '2031-05-31' }), { date: '2031-05-31', estimated: false });
+  assert.deepEqual(L.compLXD({ commencement: '2026-03-01', termMonths: 64 }), { date: '2031-06-30', estimated: false });
+  assert.deepEqual(L.compLXD({ signedDate: '2026-01-01', termMonths: 87 }), { date: '2033-05-31', estimated: true });
+  assert.equal(L.compLXD({ signedDate: '2026-01-01' }), null);
+});

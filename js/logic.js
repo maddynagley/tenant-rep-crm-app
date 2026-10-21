@@ -498,6 +498,18 @@
     return addDays(toISODate(new Date(start.getFullYear(), start.getMonth() + term, start.getDate())), -1);
   }
 
+  // When a comp's lease likely ends: the entered expiration, else commencement + term, else the signing date
+  // plus about two months to commencement + term (an estimate, good to the year).
+  function compLXD(c) {
+    if (c.leaseExpiration) return { date: c.leaseExpiration, estimated: false };
+    const term = parseNumber(c.termMonths);
+    const start = parseISODate(c.commencement) || parseISODate(c.signedDate);
+    if (!start || !term) return null;
+    const lead = c.commencement ? 0 : 2;
+    const end = addDays(toISODate(new Date(start.getFullYear(), start.getMonth() + lead + term, start.getDate())), -1);
+    return { date: end, estimated: !c.commencement };
+  }
+
   // Research request for a quarter's one-pager stats, listing every piece that needs numbers.
   function researchRequestEmail(quarter, marketing, opts) {
     opts = opts || {};
@@ -2193,6 +2205,7 @@
     moveInPostIdeas,
     isCoworking,
     dealLXD,
+    compLXD,
     researchRequestEmail,
     coachTips,
     TEMPLATE_STEPS,
