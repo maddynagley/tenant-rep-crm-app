@@ -357,3 +357,12 @@ dialog .form-grid { padding: 16px 18px; overflow-y: auto; }
 .email-full summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
 .email-body { overflow-wrap: anywhere; word-break: break-word; max-width: 100%; margin-top: 6px; padding: 10px 12px; background: var(--gray-soft); border-radius: 8px; font-size: 13px; max-height: 420px; overflow-y: auto; }
 .tbl.compact td { overflow-wrap: anywhere; }
+
+/* searchable company / contact / deal pickers */
+.ref-box { position: relative; }
+.ref-box .ref-search { width: 100%; }
+.ref-menu { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 24px rgba(40, 11, 15, 0.14); padding: 4px; }
+.ref-menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 6px; font: inherit; color: var(--text); cursor: pointer; }
+.ref-menu button:hover, .ref-menu button.on { background: var(--bg); }
+.ref-menu .ref-new { color: var(--accent); font-weight: 600; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; }
+.ref-menu .ref-empty { padding: 8px 10px; color: var(--muted, #8a8178); font-size: 13px; }

@@ -571,6 +571,7 @@
     data.companies.forEach((c) => {
       companies[c.id] = c;
       if (c.hubspotId) byHubspotId[String(c.hubspotId)] = c.id;
+      (c.mergedHubspotIds || []).forEach((id) => (byHubspotId[String(id)] = c.id));
     });
     const contactsById = {};
     const byEmail = {};
@@ -1365,6 +1366,32 @@
   const FOLLOW_UP_DAYS = { 'Initial Outreach': 7, 'Follow Up': 14, Engaged: 10 };
   const TEMP_RANK = { Hot: 0, Warm: 1, '': 2, Cold: 3 };
 
+  // Merging a duplicate company into another: everything tied to it moves over, the kept company gains any
+  // details it was missing plus the duplicate's name as an alias, and the duplicate's HubSpot ID points here.
+  function planCompanyMerge(data, fromId, toId) {
+    const from = data.companies.find((c) => c.id === fromId);
+    const to = data.companies.find((c) => c.id === toId);
+    if (!from || !to || fromId === toId) return null;
+    const patch = { id: to.id };
+    Object.keys(from).forEach((k) => {
+      if (['id', 'name', 'createdAt', 'updatedAt', 'aliases', 'mergedHubspotIds', 'hubspotId', 'hubspotUrl'].includes(k)) return;
+      const v = from[k];
+      if (v !== '' && v !== null && v !== undefined && (to[k] === '' || to[k] === null || to[k] === undefined)) patch[k] = v;
+    });
+    const aliases = String(to.aliases || '').split(/\s*;\s*/).filter(Boolean);
+    [from.name].concat(String(from.aliases || '').split(/\s*;\s*/)).forEach((n) => n && !aliases.includes(n) && n !== to.name && aliases.push(n));
+    patch.aliases = aliases.join('; ');
+    const ids = (to.mergedHubspotIds || []).concat(from.mergedHubspotIds || []);
+    if (from.hubspotId && !to.hubspotId) Object.assign(patch, { hubspotId: String(from.hubspotId), hubspotUrl: from.hubspotUrl || '' });
+    else if (from.hubspotId) ids.push(String(from.hubspotId));
+    if (ids.length) patch.mergedHubspotIds = ids.filter((x, i) => ids.indexOf(x) === i);
+    const moves = {};
+    ['contacts', 'deals', 'activities', 'documents', 'criticalDates'].forEach((col) => {
+      moves[col] = (data[col] || []).filter((r) => r.companyId === fromId).map((r) => ({ id: r.id, companyId: toId }));
+    });
+    return { company: patch, moves, remove: fromId };
+  }
+
   // You and your colleagues (anyone at your email domain) are never the client contact to reach.
   function isColleague(p, domain) {
     return Boolean(p && domain && String(p.email || '').toLowerCase().endsWith('@' + String(domain).toLowerCase()));
@@ -2142,6 +2169,7 @@
     quarterEndOf,
     quarterlyTasks,
     clientTouchpoints,
+    planCompanyMerge,
     isColleague,
     criticalDatePoints,
     CRITICAL_DATE_KINDS,

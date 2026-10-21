@@ -1474,6 +1474,7 @@
           <button class="btn" data-action="new" data-col="contacts" data-company="${esc(id)}">+ Contact</button>
           <button class="btn" data-action="new" data-col="deals" data-company="${esc(id)}">+ Deal</button>
           <button class="btn" data-action="edit" data-col="companies" data-id="${esc(id)}">Edit</button>
+          <button class="btn" data-action="merge-company" data-company="${esc(id)}" title="Merge this duplicate into another company">Merge</button>
           <button class="btn danger" data-action="delete" data-col="companies" data-id="${esc(id)}">Delete</button>
         </div>
       </div>
@@ -1512,7 +1513,7 @@
 
       <div class="grid2">
         <section class="card">
-          <h2>Contacts <button class="link more" data-action="new" data-col="contacts" data-company="${esc(id)}">+ Add</button></h2>
+          <h2>Contacts <button class="link more" data-action="link-contact" data-company="${esc(id)}">+ Add</button></h2>
           ${
             contacts.length
               ? `<table class="tbl compact"><tbody>${contacts
@@ -1522,7 +1523,7 @@
                     <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Draft an email from a template">Email</button>` : ''}<button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
                   )
                   .join('')}</tbody></table>`
-              : emptyState('No contacts yet.')
+              : emptyState('No contacts yet.', `<button class="btn" data-action="link-contact" data-company="${esc(id)}">+ Add a contact</button>`)
           }
         </section>
         <section class="card">
@@ -2274,10 +2275,12 @@
         input = `<select id="${id}" name="${f.key}"${req}>${options(f.options, v, '')}</select>`;
         break;
       case 'ref': {
+        // A search box over a hidden select: type to filter, or add a new contact or company by name.
         const opts = refOptions(f, rec);
-        input = `<select id="${id}" name="${f.key}"${req} ${f.filterBy ? `data-filter-by="${f.filterBy}"` : ''}><option value=""></option>${opts
+        const cur = opts.find((o) => o.value === v);
+        input = `<div class="ref-box"><input id="${id}" class="ref-search" data-ref="${f.ref}"${f.noCreate ? ' data-no-create="1"' : ''}${f.exclude ? ` data-exclude="${esc(f.exclude)}"` : ''} autocomplete="off" placeholder="Type to search…" value="${esc(cur ? cur.label : '')}"${req}/><div class="ref-menu" hidden></div><select name="${f.key}" hidden ${f.filterBy ? `data-filter-by="${f.filterBy}"` : ''}><option value=""></option>${opts
           .map((o) => `<option value="${esc(o.value)}" ${o.company ? `data-company="${esc(o.company)}"` : ''} ${o.value === v ? 'selected' : ''}>${esc(o.label)}</option>`)
-          .join('')}</select>`;
+          .join('')}</select></div>`;
         break;
       }
       case 'textarea':
@@ -2465,6 +2468,139 @@
       });
       if (sel.selectedOptions[0] && sel.selectedOptions[0].hidden) sel.value = '';
     });
+    $$('.ref-box', form).forEach(syncRefText);
+  }
+
+  // ----- searchable company / contact / deal pickers -----
+
+  function syncRefText(box) {
+    const sel = box.querySelector('select');
+    box.querySelector('.ref-search').value = sel.value && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : '';
+  }
+
+  function renderRefMenu(input) {
+    const box = input.closest('.ref-box');
+    const sel = box.querySelector('select');
+    const menu = box.querySelector('.ref-menu');
+    const typed = input.value.trim();
+    const current = sel.value && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : '';
+    const q = typed === current ? '' : typed.toLowerCase();
+    const all = [...sel.options].filter((o) => o.value && !o.hidden && o.value !== input.dataset.exclude);
+    const hits = all.filter((o) => !q || o.textContent.toLowerCase().includes(q)).slice(0, 40);
+    const exact = all.some((o) => o.textContent.trim().toLowerCase() === q);
+    const form = input.closest('form');
+    const company = form && form.querySelector('select[name=companyId]');
+    let create = '';
+    // Someone saved under another company (e.g. a duplicate) can be moved here instead of re-entered.
+    const elsewhere = q && input.dataset.ref === 'contacts' && company && company.value ? [...sel.options].filter((o) => o.value && o.hidden && o.textContent.toLowerCase().includes(q)).slice(0, 10) : [];
+    if (elsewhere.length)
+      create += `<div class="ref-empty">Saved under another company:</div>` + elsewhere.map((o) => `<button type="button" data-ref-move="${esc(o.value)}">${esc(o.textContent)}<span class="sub"> · ${esc(companyName(o.dataset.company))} → move to ${esc(companyName(company.value))}</span></button>`).join('');
+    if (input.dataset.noCreate) {
+      /* picking only */
+    } else if (q && !exact && input.dataset.ref === 'companies') create = `<button type="button" class="ref-new" data-ref-create="companies">+ Add "${esc(typed)}" as a new company</button>`;
+    else if (q && !exact && input.dataset.ref === 'contacts')
+      create += company && company.value
+        ? `<button type="button" class="ref-new" data-ref-create="contacts">+ Add "${esc(typed)}" as a new contact at ${esc(companyName(company.value))}</button>`
+        : '<div class="ref-empty">Pick a company first to add a new contact.</div>';
+    menu.innerHTML =
+      hits.map((o) => `<button type="button" data-ref-pick="${esc(o.value)}" class="${o.value === sel.value ? 'on' : ''}">${esc(o.textContent)}${input.dataset.ref !== 'companies' && o.dataset.company && !(company && company.value) ? `<span class="sub"> · ${esc(companyName(o.dataset.company))}</span>` : ''}</button>`).join('') +
+      (!hits.length && !create ? '<div class="ref-empty">No matches.</div>' : '') +
+      create;
+    menu.hidden = false;
+  }
+
+  function pickRef(box, value) {
+    const sel = box.querySelector('select');
+    sel.value = value;
+    box.querySelector('.ref-menu').hidden = true;
+    syncRefText(box);
+    // Picking a contact or deal with no company chosen yet fills in its company.
+    const form = box.closest('form');
+    const company = form && form.querySelector('select[name=companyId]');
+    const opt = sel.selectedOptions[0];
+    if (company && company !== sel && !company.value && opt && opt.dataset.company) {
+      company.value = opt.dataset.company;
+      company.dispatchEvent(new Event('change', { bubbles: true }));
+      sel.value = value;
+      syncRefText(box);
+    }
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function moveContactHere(box, contactId) {
+    const p = S.get('contacts', contactId);
+    const companyId = box.closest('form').querySelector('select[name=companyId]').value;
+    if (!p || !companyId || !confirm(`Move ${contactName(p)} from ${companyName(p.companyId)} to ${companyName(companyId)}?`)) return;
+    S.upsert('contacts', { id: p.id, companyId });
+    const opt = box.querySelector(`select option[value="${CSS.escape(p.id)}"]`);
+    opt.dataset.company = companyId;
+    opt.hidden = false;
+    pickRef(box, p.id);
+    toast(`Moved ${contactName(p)} to ${companyName(companyId)}.`);
+  }
+
+  // Attach a contact already in the CRM to this company, or add a new one by name.
+  function openLinkContact(companyId) {
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" id="link-contact-form">
+      <header><h2>Add a contact to ${esc(companyName(companyId))}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="form-grid"><select name="companyId" hidden><option value="${esc(companyId)}" selected></option></select>
+        ${fieldHTML({ key: 'contactId', label: 'Search your contacts by name', type: 'ref', ref: 'contacts', filterBy: 'companyId', wide: true }, {})}
+        <p class="hint wide">Type a name. Someone saved under another company (for example a duplicate like "raymondjames.com") can be moved here. If they aren't in the CRM yet, add them by name and fill in the rest on their contact record.</p>
+      </div>
+      <footer><span class="spacer"></span><button type="button" class="btn" data-action="new" data-col="contacts" data-company="${esc(companyId)}">New contact form</button><button type="button" class="btn primary" data-action="close-modal">Done</button></footer>
+    </form>`;
+    syncFormDependencies(dlg.querySelector('form'));
+    dlg.showModal();
+    dlg.querySelector('.ref-search').focus();
+  }
+
+  // Merge a duplicate company into another and delete the duplicate.
+  function openMerge(companyId) {
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" id="merge-form" data-from="${esc(companyId)}">
+      <header><h2>Merge ${esc(companyName(companyId))} into another company</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="form-grid">
+        ${fieldHTML({ key: 'targetId', label: 'Keep this company', type: 'ref', ref: 'companies', required: true, noCreate: true, exclude: companyId, wide: true }, {})}
+        <p class="hint wide">Its contacts, deals, emails, tasks, documents and critical dates move to the company you keep, which also picks up any details it's missing. "${esc(companyName(companyId))}" is saved as an alias, and HubSpot activity for it will land on the kept company. Then this duplicate is deleted.</p>
+      </div>
+      <footer><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Merge</button></footer>
+    </form>`;
+    dlg.showModal();
+    dlg.querySelector('.ref-search').focus();
+  }
+
+  function mergeCompanies(fromId, toId) {
+    const all = (col) => S.all(col);
+    const m = L.planCompanyMerge({ companies: all('companies'), contacts: all('contacts'), deals: all('deals'), activities: all('activities'), documents: all('documents'), criticalDates: all('criticalDates') }, fromId, toId);
+    if (!m) return;
+    const from = S.get('companies', fromId);
+    Object.keys(m.moves).forEach((col) => m.moves[col].forEach((r) => S.upsert(col, r, { silent: true })));
+    S.upsert('companies', m.company, { silent: true });
+    if (from.hubspotId) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat('co-' + from.hubspotId) });
+    S.remove('companies', fromId);
+    $('#modal').close();
+    location.hash = '#/company/' + toId;
+    const n = Object.keys(m.moves).reduce((t, col) => t + m.moves[col].length, 0);
+    toast(`Merged ${from.name} into ${companyName(toId)} (${n} records moved).`);
+  }
+
+  function createRef(box, kind) {
+    const name = box.querySelector('.ref-search').value.trim();
+    const sel = box.querySelector('select');
+    let rec;
+    if (kind === 'companies') rec = S.upsert('companies', { name, status: 'Target', priority: 'B', growthSignal: 'Unknown', source: 'Manual' });
+    else {
+      const companyId = box.closest('form').querySelector('select[name=companyId]').value;
+      const parts = name.split(/\s+/);
+      rec = S.upsert('contacts', { companyId, firstName: parts[0], lastName: parts.slice(1).join(' ') });
+    }
+    const label = kind === 'companies' ? rec.name : contactName(rec);
+    sel.insertAdjacentHTML('beforeend', `<option value="${esc(rec.id)}" ${rec.companyId ? `data-company="${esc(rec.companyId)}"` : ''}>${esc(label)}</option>`);
+    pickRef(box, rec.id);
+    toast(`Added ${label}. ${kind === 'contacts' ? 'Open the company page to add their email and phone.' : ''}`);
   }
 
   function readForm(form, col) {
@@ -3037,6 +3173,10 @@
           e.preventDefault();
           navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
           return;
+        case 'link-contact':
+          return openLinkContact(d.company);
+        case 'merge-company':
+          return openMerge(d.company);
         case 'call-card':
           return openCallCard(d.company, d.contact);
         case 'draft-email':
@@ -3218,7 +3358,40 @@
     saveUIState();
     render();
   }
+  document.addEventListener('focusin', (e) => {
+    if (e.target.classList && e.target.classList.contains('ref-search')) {
+      e.target.select();
+      renderRefMenu(e.target);
+    }
+  });
+  document.addEventListener('focusout', (e) => {
+    if (!(e.target.classList && e.target.classList.contains('ref-search'))) return;
+    const box = e.target.closest('.ref-box');
+    setTimeout(() => {
+      if (box.contains(document.activeElement)) return;
+      box.querySelector('.ref-menu').hidden = true;
+      const sel = box.querySelector('select');
+      if (!e.target.value.trim() && sel.value) {
+        sel.value = '';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      syncRefText(box);
+    }, 150);
+  });
+  document.addEventListener('mousedown', (e) => {
+    const pick = e.target.closest('[data-ref-pick]');
+    const create = e.target.closest('[data-ref-create]');
+    const move = e.target.closest('[data-ref-move]');
+    if (!pick && !create && !move) return;
+    e.preventDefault();
+    const box = e.target.closest('.ref-box');
+    if (pick) pickRef(box, pick.dataset.refPick);
+    else if (create) createRef(box, create.dataset.refCreate);
+    else moveContactHere(box, move.dataset.refMove);
+  });
+
   document.addEventListener('input', (e) => {
+    if (e.target.classList.contains('ref-search')) renderRefMenu(e.target);
     if (e.target.closest('#draft-form') && ['subject', 'body'].includes(e.target.name)) updateDraftLink();
     if (e.target.type === 'search') onFilterChange(e);
   });
@@ -3232,7 +3405,12 @@
   });
 
   document.addEventListener('submit', (e) => {
-    if (e.target.id === 'record-form') {
+    if (e.target.id === 'merge-form') {
+      e.preventDefault();
+      const to = e.target.querySelector('select[name=targetId]').value;
+      if (!to) return toast('Pick the company to keep.');
+      if (confirm(`Merge ${companyName(e.target.dataset.from)} into ${companyName(to)}? This can't be undone.`)) mergeCompanies(e.target.dataset.from, to);
+    } else if (e.target.id === 'record-form') {
       e.preventDefault();
       saveForm(e.target);
     } else if (e.target.id === 'settings-form' || e.target.id === 'settings-form-sync' || e.target.id === 'settings-form-hubspot') {
@@ -3305,6 +3483,22 @@
 
   // Keyboard: "/" focuses the search box on list pages.
   document.addEventListener('keydown', (e) => {
+    if (e.target.classList && e.target.classList.contains('ref-search')) {
+      const menu = e.target.closest('.ref-box').querySelector('.ref-menu');
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const first = !menu.hidden && menu.querySelector('[data-ref-pick], [data-ref-create]');
+        if (first) first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        return;
+      }
+      if (e.key === 'Escape' && !menu.hidden) {
+        e.preventDefault();
+        e.stopPropagation();
+        menu.hidden = true;
+        syncRefText(e.target.closest('.ref-box'));
+        return;
+      }
+    }
     if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !$('#modal').open) {
       const s = $('#view input[type=search]');
       if (s) {

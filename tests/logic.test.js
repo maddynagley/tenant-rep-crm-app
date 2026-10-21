@@ -780,3 +780,24 @@ test('follow-up tasks name a contact at the company, never a colleague on cc', (
     { id: 'old2', contactId: '', subject: 'Send follow-up email to Beta' },
   ]);
 });
+
+test('merging a duplicate company moves its records and keeps its HubSpot ID pointing at the kept one', () => {
+  const data = {
+    companies: [
+      { id: 'keep', name: 'Marnic (Raymond James)', hubspotId: '1', website: '' },
+      { id: 'dup', name: 'raymondjames.com', hubspotId: '2', website: 'https://raymondjames.com', industry: 'Finance' },
+    ],
+    contacts: [{ id: 'jay', companyId: 'dup', firstName: 'Jay' }],
+    deals: [],
+    activities: [{ id: 'e', companyId: 'dup', date: '2026-10-14' }, { id: 'f', companyId: 'keep', date: '2026-10-15' }],
+    criticalDates: [],
+  };
+  const m = L.planCompanyMerge(data, 'dup', 'keep');
+  assert.deepEqual(m.company, { id: 'keep', website: 'https://raymondjames.com', industry: 'Finance', aliases: 'raymondjames.com', mergedHubspotIds: ['2'] });
+  assert.deepEqual(m.moves.contacts, [{ id: 'jay', companyId: 'keep' }]);
+  assert.deepEqual(m.moves.activities, [{ id: 'e', companyId: 'keep' }]);
+  data.companies[0] = Object.assign({}, data.companies[0], m.company);
+  data.companies.splice(1, 1);
+  const plan = L.planHubSpotSync({ emails: [{ id: '9', properties: { hs_email_direction: 'EMAIL', hs_email_subject: 'Hi', hs_timestamp: '2026-10-20T15:00:00Z' }, companies: ['2'] }] }, data);
+  assert.equal(plan.activities[0].companyId, 'keep');
+});
