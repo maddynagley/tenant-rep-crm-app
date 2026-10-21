@@ -66,6 +66,7 @@
       { key: 'aliases', label: 'Also known as (brands, subsidiaries; comma separated)', wide: true },
       { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES, required: true },
       { key: 'industry', label: 'Industry', list: () => distinct('companies', 'industry') },
+      { key: 'relationship', label: 'Relationship (only tenants show as leads)', type: 'select', options: L.RELATIONSHIPS },
       { key: 'status', label: 'Status', type: 'select', options: L.COMPANY_STATUSES },
       { key: 'leadStage', label: 'Lead stage', type: 'select', options: L.LEAD_STAGES },
       { key: 'leadTemp', label: 'Lead temperature', type: 'select', options: L.LEAD_TEMPS },
@@ -125,6 +126,7 @@
       { key: 'companyId', label: 'Company', type: 'ref', ref: 'companies', required: true },
       { key: 'title', label: 'Title' },
       { key: 'role', label: 'Role in decision', type: 'select', options: ['Decision Maker', 'Influencer', 'Gatekeeper', 'Champion', 'Other'] },
+      { key: 'keyContact', label: '★ Main point of contact (emails and calls go to them first)', type: 'checkbox' },
       { key: 'email', label: 'Email', type: 'email' },
       { key: 'phone', label: 'Office phone', type: 'tel' },
       { key: 'mobile', label: 'Mobile', type: 'tel' },
@@ -405,7 +407,7 @@
     const p = S.get('contacts', contactId);
     const own = myEmailDomain();
     if (p && p.companyId === companyId && !L.isColleague(p, own)) return p;
-    const rank = (c) => (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callableNumber(c) ? 2 : 0);
+    const rank = (c) => (c.keyContact ? 10 : 0) + (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callableNumber(c) ? 2 : 0);
     return S.all('contacts').filter((c) => c.companyId === companyId && !L.isColleague(c, own)).sort((a, b) => rank(b) - rank(a))[0] || null;
   }
 
@@ -1426,7 +1428,7 @@
     if (!c) return emptyState('Company not found. <a href="#/companies">Back to list</a>');
     const touches = lastTouchMap();
     const { score, breakdown } = L.prospectScore(c, { lastActivityDate: touches[c.id] });
-    const contacts = S.all('contacts').filter((x) => x.companyId === id);
+    const contacts = S.all('contacts').filter((x) => x.companyId === id).sort((a, b) => !!b.keyContact - !!a.keyContact);
     const deals = S.all('deals').filter((x) => x.companyId === id);
     const acts = S.all('activities')
       .filter((x) => x.companyId === id)
@@ -1465,7 +1467,7 @@
       <div class="crumbs"><a href="#/companies">Companies</a> /</div>
       <div class="page-head">
         <div><h1>${esc(c.name)}</h1>
-          <div class="head-badges">${assetBadge(c.assetClass)} ${statusBadge(c.status)} ${leadBadge(c)} ${c.priority ? badge('Priority ' + c.priority, 'prio') : ''} ${scoreChip(score)}</div>
+          <div class="head-badges">${!L.isProspect(c) ? badge(c.relationship, 'blue') + ' ' : ''}${assetBadge(c.assetClass)} ${statusBadge(c.status)} ${leadBadge(c)} ${c.priority ? badge('Priority ' + c.priority, 'prio') : ''} ${scoreChip(score)}</div>
         </div>
         <div class="actions">
           <button class="btn primary" data-action="draft-email" data-company="${esc(id)}">Draft email</button>
@@ -1518,7 +1520,7 @@
             contacts.length
               ? `<table class="tbl compact"><tbody>${contacts
                   .map(
-                    (p) => `<tr><td><strong>${esc(contactName(p))}</strong> ${p.role ? badge(p.role, p.role === 'Decision Maker' ? 'green' : 'gray') : ''} ${verificationBadge(p.verification)}<div class="sub">${esc(p.title)}</div>${p.notes ? `<div class="sub clamp" title="${esc(p.notes)}">${esc(p.notes)}</div>` : ''}</td>
+                    (p) => `<tr><td><button class="star ${p.keyContact ? 'on' : ''}" data-action="toggle-key" data-id="${esc(p.id)}" title="${p.keyContact ? 'Main point of contact' : 'Make main point of contact'}">${p.keyContact ? '★' : '☆'}</button><strong>${esc(contactName(p))}</strong> ${p.role ? badge(p.role, p.role === 'Decision Maker' ? 'green' : 'gray') : ''} ${verificationBadge(p.verification)}<div class="sub">${esc(p.title)}</div>${p.notes ? `<div class="sub clamp" title="${esc(p.notes)}">${esc(p.notes)}</div>` : ''}</td>
                     <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}${p.mobile ? ' · ' + phoneLink(p.mobile, p.mobileDNC, '(m)') : ''}</div>${p.linkedin ? `<div class="sub"><a href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ↗</a></div>` : ''}</td>
                     <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Draft an email from a template">Email</button>` : ''}<button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
                   )
@@ -2386,7 +2388,7 @@
     if (!c) return;
     const people = S.all('contacts').filter((p) => p.companyId === companyId && p.email);
     const templates = S.all('templates').filter((t) => t.active !== false);
-    const contact = S.get('contacts', contactId) || people.slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker'))[0] || null;
+    const contact = S.get('contacts', contactId) || people.slice().sort((a, b) => !!b.keyContact - !!a.keyContact || (b.role === 'Decision Maker') - (a.role === 'Decision Maker'))[0] || null;
     const suggested = (step && templates.find((t) => t.step === step)) || L.suggestTemplate(templates, c, { today: L.todayISO(), lastTouch: lastTouchMap()[companyId] });
     const dlg = $('#modal');
     const reply = S.get('activities', replyId);
@@ -2492,6 +2494,9 @@
     const company = form && form.querySelector('select[name=companyId]');
     let create = '';
     // Someone saved under another company (e.g. a duplicate) can be moved here instead of re-entered.
+    const otherDeals = q && input.dataset.ref === 'deals' && company && company.value ? [...sel.options].filter((o) => o.value && o.hidden && o.textContent.toLowerCase().includes(q)).slice(0, 10) : [];
+    if (otherDeals.length)
+      create += `<div class="ref-empty">Deals for other companies:</div>` + otherDeals.map((o) => `<button type="button" data-ref-pick="${esc(o.value)}">${esc(o.textContent)}<span class="sub"> · ${esc(companyName(o.dataset.company))}</span></button>`).join('');
     const elsewhere = q && input.dataset.ref === 'contacts' && company && company.value ? [...sel.options].filter((o) => o.value && o.hidden && o.textContent.toLowerCase().includes(q)).slice(0, 10) : [];
     if (elsewhere.length)
       create += `<div class="ref-empty">Saved under another company:</div>` + elsewhere.map((o) => `<button type="button" data-ref-move="${esc(o.value)}">${esc(o.textContent)}<span class="sub"> · ${esc(companyName(o.dataset.company))} → move to ${esc(companyName(company.value))}</span></button>`).join('');
@@ -3173,6 +3178,14 @@
           e.preventDefault();
           navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
           return;
+        case 'toggle-key': {
+          // One main point of contact per company.
+          const p = S.get('contacts', d.id);
+          const on = !p.keyContact;
+          S.all('contacts').filter((x) => x.companyId === p.companyId && x.keyContact && x.id !== p.id).forEach((x) => S.upsert('contacts', { id: x.id, keyContact: false }, { silent: true }));
+          S.upsert('contacts', { id: p.id, keyContact: on });
+          return toast(on ? `${contactName(p)} is now the main point of contact.` : `${contactName(p)} is no longer the main point of contact.`);
+        }
         case 'link-contact':
           return openLinkContact(d.company);
         case 'merge-company':

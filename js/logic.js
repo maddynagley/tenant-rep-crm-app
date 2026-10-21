@@ -44,8 +44,16 @@
     return Boolean(company && (company.doNotContact === true || company.doNotContact === 'true'));
   }
 
+  // Who a company is to you. Only tenants are prospects; landlords, brokers, partners and vendors are kept
+  // for reference (and can be tied to a deal) but never show up as leads or outreach.
+  const RELATIONSHIPS = ['Tenant / prospect', 'Landlord / ownership', 'Broker', 'Referral partner', 'Vendor', 'Internal'];
+  function isProspect(company) {
+    return !company || !company.relationship || company.relationship === 'Tenant / prospect';
+  }
+
   // A company's lead stage: set explicitly, or inferred from its status. Clients without one aren't leads.
   function leadStage(company) {
+    if (!isProspect(company)) return '';
     if (LEAD_STAGES.includes(company.leadStage)) return company.leadStage;
     return LEAD_FROM_STATUS[company.status] || '';
   }
@@ -1378,9 +1386,9 @@
       const v = from[k];
       if (v !== '' && v !== null && v !== undefined && (to[k] === '' || to[k] === null || to[k] === undefined)) patch[k] = v;
     });
-    const aliases = String(to.aliases || '').split(/\s*;\s*/).filter(Boolean);
-    [from.name].concat(String(from.aliases || '').split(/\s*;\s*/)).forEach((n) => n && !aliases.includes(n) && n !== to.name && aliases.push(n));
-    patch.aliases = aliases.join('; ');
+    const aliases = String(to.aliases || '').split(/\s*,\s*/).filter(Boolean);
+    [from.name].concat(String(from.aliases || '').split(/\s*,\s*/)).forEach((n) => n && !aliases.includes(n) && n !== to.name && aliases.push(n));
+    patch.aliases = aliases.join(', ');
     const ids = (to.mergedHubspotIds || []).concat(from.mergedHubspotIds || []);
     if (from.hubspotId && !to.hubspotId) Object.assign(patch, { hubspotId: String(from.hubspotId), hubspotUrl: from.hubspotUrl || '' });
     else if (from.hubspotId) ids.push(String(from.hubspotId));
@@ -1399,7 +1407,7 @@
 
   function contactRank(c) {
     const callable = (c.phone && !c.phoneDNC) || (c.mobile && !c.mobileDNC);
-    return (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callable ? 2 : 0) + (c.verification === 'Web-verified' ? 1 : 0);
+    return (c.keyContact ? 10 : 0) + (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callable ? 2 : 0) + (c.verification === 'Web-verified' ? 1 : 0);
   }
 
   // How to reach a company's best contact: call (never a Do-Not-Call number), email, or find someone first.
@@ -1453,7 +1461,7 @@
     data.activities.forEach((e) => {
       if (e.type !== 'Email' || e.inbound || !e.companyId || !e.date || e.date < since || e.date > today) return;
       const c = companies[e.companyId];
-      if (!c || openDeal.has(c.id) || e.dealId || internal.has(c.id)) return;
+      if (!c || openDeal.has(c.id) || e.dealId || internal.has(c.id) || !isProspect(c)) return;
       const id = 'wf-fu-' + c.id + '-' + e.date;
       if (seen.has(id) || created.has(id)) return;
       const prior = (byCompany[c.id] || []).some((a) => a.id !== e.id && a.date < e.date && a.date >= addDays(e.date, -60));
@@ -1545,12 +1553,12 @@
 
     // Shared-list companies are yours to work only when you lead them (or share the lead).
     const mine = (c) => !c.sharedList || (!c.listRemoved && (c.listLead === 'Both' || (Boolean(opts.initials) && c.listLead === opts.initials)));
-    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c) && mine(c));
+    const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c) && isProspect(c) && mine(c));
 
     // Opened but unanswered emails from the last 3 weeks, where nothing has happened since: follow up while it's warm.
     const opened = data.activities
       .filter((a) => a.type === 'Email' && (parseNumber(a.opens) || 0) > 0 && !responded(a) && a.date && a.date >= addDays(today, -21) && a.date <= today)
-      .filter((a) => companies[a.companyId] && !doNotContact(companies[a.companyId]) && !snoozed(companies[a.companyId]) && touches[a.companyId] === a.date)
+      .filter((a) => companies[a.companyId] && !doNotContact(companies[a.companyId]) && isProspect(companies[a.companyId]) && !snoozed(companies[a.companyId]) && touches[a.companyId] === a.date)
       .sort((a, b) => (parseNumber(b.opens) || 0) - (parseNumber(a.opens) || 0) || b.date.localeCompare(a.date))
       .map((a) => {
         const contact = data.contacts.find((p) => p.id === a.contactId && p.companyId === a.companyId && !isColleague(p, opts.internalDomain)) || bestContact(a.companyId);
@@ -2169,6 +2177,8 @@
     quarterEndOf,
     quarterlyTasks,
     clientTouchpoints,
+    RELATIONSHIPS,
+    isProspect,
     planCompanyMerge,
     isColleague,
     criticalDatePoints,
