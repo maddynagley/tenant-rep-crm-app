@@ -366,6 +366,11 @@
     const r = rangeLabel(low, d.sfMax, fmtNumber) || (parseNumber(d.actualSF) !== null ? fmtNumber(d.actualSF) : '');
     return r ? r + ' RSF' : '';
   }
+  // The office portion of an industrial requirement (part warehouse, part office).
+  function dealOfficeLabel(d) {
+    const r = rangeLabel(d.officeSfMin, d.officeSfMax, fmtNumber);
+    return r ? r + ' SF office' : '';
+  }
   function dealBudgetLabel(d) {
     const r = rangeLabel(d.budgetRate, d.budgetRateMax, (n) => '$' + Number(n).toFixed(2).replace(/\.00$/, ''));
     return r ? r + '/SF' + (d.rateBasis ? ' ' + String(d.rateBasis).replace(/\s*\(.*\)/, '') : '') : '';
@@ -2173,6 +2178,7 @@
     dailyPlan,
     rangeLabel,
     dealSizeLabel,
+    dealOfficeLabel,
     dealBudgetLabel,
     quarterEndOf,
     quarterlyTasks,

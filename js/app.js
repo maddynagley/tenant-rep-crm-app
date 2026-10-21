@@ -156,8 +156,10 @@
       { key: 'dealType', label: 'Deal type', type: 'select', options: L.DEAL_TYPES },
       { key: 'assetClass', label: 'Asset class', type: 'select', options: L.ASSET_CLASSES, required: true },
       { key: 'stage', label: 'Stage', type: 'select', options: L.DEAL_STAGES.map((s) => s.name) },
-      { key: 'sfMin', label: 'SF min', type: 'number' },
-      { key: 'sfMax', label: 'SF max', type: 'number' },
+      { key: 'sfMin', label: 'SF min (total)', type: 'number' },
+      { key: 'sfMax', label: 'SF max (total)', type: 'number' },
+      { key: 'officeSfMin', label: 'Office SF needed – min (part of the total)', type: 'number', asset: 'Industrial' },
+      { key: 'officeSfMax', label: 'Office SF needed – max', type: 'number', asset: 'Industrial' },
       { key: 'estSF', label: 'Est. deal SF (for commission)', type: 'number' },
       { key: 'targetSubmarkets', label: 'Target submarkets' },
       { key: 'targetOccupancy', label: 'Target occupancy', type: 'date' },
@@ -197,6 +199,7 @@
       { key: 'finalOtherTerms', label: 'Other key terms (security deposit, parking, signage…)', type: 'textarea', wide: true },
       { section: 'Closed deal results (for your portfolio metrics)' },
       { key: 'actualSF', label: 'Final SF', type: 'number' },
+      { key: 'actualOfficeSF', label: 'Final office SF (part of the total)', type: 'number', asset: 'Industrial' },
       { key: 'totalLeaseValue', label: 'Total rent $ (total consideration)', type: 'number' },
       { key: 'firmCommission', label: 'Gross commission – firm ($)', type: 'number' },
       { key: 'commissionEarned', label: 'Gross commission – my share ($)', type: 'number' },
@@ -238,7 +241,8 @@
       { key: 'address', label: 'Address' },
       { key: 'submarket', label: 'Submarket', list: () => distinct('companies', 'submarket').concat(distinct('properties', 'submarket')) },
       { key: 'status', label: 'Status', type: 'select', options: L.PROPERTY_STATUSES },
-      { key: 'availableSF', label: 'Available SF', type: 'number' },
+      { key: 'availableSF', label: 'Available SF (total)', type: 'number' },
+      { key: 'officeSF', label: 'Office SF in the space', type: 'number', asset: 'Industrial' },
       { key: 'askingRate', label: 'Asking rent ($/SF)', type: 'number', step: '0.01' },
       { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
       { key: 'landlord', label: 'Landlord / listing broker' },
@@ -1580,7 +1584,7 @@
       ['Lease executed', L.fmtDate(d.closedDate)],
       ['Commencement', L.fmtDate(d.leaseCommencement)],
       ['Lease expiration (LXD)', L.fmtDate(L.dealLXD(d)) + (d.newLeaseExpiration || !L.dealLXD(d) ? '' : ' (calculated)')],
-      ['Size', L.dealSizeLabel(d)],
+      ['Size', L.dealSizeLabel(d) + (d.actualOfficeSF ? ' · ' + L.fmtNumber(d.actualOfficeSF) + ' SF office' : '')],
       ['Starting rent', rate],
       ['Term', d.finalTermMonths ? d.finalTermMonths + ' months' : ''],
       ['Escalations', d.finalEscalationPct ? d.finalEscalationPct + '% / yr' : ''],
@@ -1717,7 +1721,7 @@
                 return `<a class="deal-card" draggable="true" data-deal="${esc(d.id)}" href="#/deal/${esc(d.id)}">
                   <div class="dc-title">${esc(d.name)}</div>
                   <div class="sub">${esc(companyName(d.companyId))}${d.partnerBrokers ? ' · with ' + esc(d.partnerBrokers) : ''}</div>
-                  <div class="dc-meta">${assetBadge(d.assetClass)} ${L.dealSizeLabel(d) ? `<span>${esc(L.dealSizeLabel(d))}</span>` : badge('Add RSF', 'amber')}</div>
+                  <div class="dc-meta">${assetBadge(d.assetClass)} ${L.dealSizeLabel(d) ? `<span>${esc(L.dealSizeLabel(d))}${L.dealOfficeLabel(d) ? ' · ' + esc(L.dealOfficeLabel(d)) : ''}</span>` : badge('Add RSF', 'amber')}</div>
                   <div class="dc-meta"><strong>${L.fmtMoney(est.myShare, true)}</strong><span class="muted">${L.dealProbability(d)}%</span>${d.targetClose ? `<span class="muted">${esc(L.fmtDate(d.targetClose))}</span>` : ''}</div>
                 </a>`;
               })
@@ -1734,7 +1738,7 @@
             const est = L.estimatedCommission(d);
             return `<tr data-href="#/deal/${esc(d.id)}"><td><strong>${esc(d.name)}</strong><div class="sub">${esc(companyName(d.companyId))}</div></td>
               <td>${esc(d.dealType)}</td><td>${assetBadge(d.assetClass)}</td><td>${esc(d.stage)}</td>
-              <td class="right nowrap">${esc(L.dealSizeLabel(d)) || badge('Add RSF', 'amber')}</td>
+              <td class="right nowrap">${esc(L.dealSizeLabel(d)) || badge('Add RSF', 'amber')}${L.dealOfficeLabel(d) ? `<div class="sub">${esc(L.dealOfficeLabel(d))}</div>` : ''}</td>
               <td class="right">${L.fmtMoney(est.aggregateValue, true)}</td>
               <td class="right">${L.fmtMoney(est.myShare)}</td>
               <td class="right">${L.dealProbability(d)}%</td>
@@ -1781,6 +1785,7 @@
     const reqs = [
       ['Deal type', d.dealType],
       ['Size', L.dealSizeLabel(d) || 'RSF not set yet'],
+      ...(L.dealOfficeLabel(d) ? [['Office portion', L.dealOfficeLabel(d)]] : []),
       ['Budget', L.dealBudgetLabel(d)],
       ['Est. deal SF', L.fmtNumber(d.estSF)],
       ['Target submarkets', d.targetSubmarkets],
@@ -1874,7 +1879,7 @@
               const cls = { Selected: 'green', Shortlisted: 'green', Rejected: 'red', 'Proposal Received': 'blue', Toured: 'amber' }[p.status] || 'gray';
               return `<tr class="${p.status === 'Rejected' ? 'dim' : ''}"><td><strong>${esc(p.building)}</strong><div class="sub">${esc([p.address, p.submarket].filter(Boolean).join(' · '))}</div>${p.notes ? `<div class="sub pre">${esc(p.notes)}</div>` : ''}</td>
                 <td>${badge(p.status, cls)}</td>
-                <td class="right">${esc(L.fmtNumber(p.availableSF))}</td>
+                <td class="right">${esc(L.fmtNumber(p.availableSF))}${p.officeSF ? `<div class="sub">${esc(L.fmtNumber(p.officeSF))} office</div>` : ''}</td>
                 <td class="right nowrap">${p.askingRate ? '$' + esc(p.askingRate) + '<span class="sub"> ' + esc(rateUnit(p.rateBasis)) + '</span>' : ''}</td>
                 <td class="right">${yr1 ? L.fmtMoney(yr1) : ''}</td>
                 <td class="right">${p.tiAllowance ? '$' + esc(p.tiAllowance) : ''}</td>
