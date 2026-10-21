@@ -610,8 +610,13 @@
       return '';
     };
     // Only a contact at the email's company counts: colleagues you cc are associated in HubSpot too.
+    const ownDomains = new Set(data.internalDomain ? [String(data.internalDomain).toLowerCase()] : []);
+    (payload.emails || []).forEach((r) => {
+      const p = r.properties || {};
+      if (p.hs_email_direction === 'EMAIL') emails(p.hs_email_from_email).forEach((a) => ownDomains.add(a.split('@')[1]));
+    });
     const contactFor = (rec, addrs, companyId) => {
-      const at = (p) => p && (!companyId || p.companyId === companyId);
+      const at = (p) => p && (!companyId || p.companyId === companyId) && !ownDomains.has(String(p.email || '').toLowerCase().split('@')[1]);
       for (const id of rec.contacts || []) if (at(contactsById['hs-ct-' + id])) return 'hs-ct-' + id;
       for (const a of addrs) if (at(byEmail[a])) return byEmail[a].id;
       return '';
@@ -738,7 +743,7 @@
         if (!existing[id].dealId && dealFor(existing[id].companyId, rec)) patch.dealId = dealFor(existing[id].companyId, rec);
         if (replied && !RESPONDED.includes(existing[id].outcome)) patch.outcome = 'Replied';
         const was = contactsById[existing[id].contactId];
-        if (existing[id].contactId && (!was || was.companyId !== existing[id].companyId)) patch.contactId = contactFor(rec, addrs, existing[id].companyId);
+        if (existing[id].contactId && (!was || was.companyId !== existing[id].companyId || ownDomains.has(String(was.email || '').toLowerCase().split('@')[1]))) patch.contactId = contactFor(rec, addrs, existing[id].companyId);
         upserts.push(patch);
       } else {
         upserts.push({
@@ -1360,6 +1365,11 @@
   const FOLLOW_UP_DAYS = { 'Initial Outreach': 7, 'Follow Up': 14, Engaged: 10 };
   const TEMP_RANK = { Hot: 0, Warm: 1, '': 2, Cold: 3 };
 
+  // You and your colleagues (anyone at your email domain) are never the client contact to reach.
+  function isColleague(p, domain) {
+    return Boolean(p && domain && String(p.email || '').toLowerCase().endsWith('@' + String(domain).toLowerCase()));
+  }
+
   function contactRank(c) {
     const callable = (c.phone && !c.phoneDNC) || (c.mobile && !c.mobileDNC);
     return (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callable ? 2 : 0) + (c.verification === 'Web-verified' ? 1 : 0);
@@ -1389,13 +1399,19 @@
     (data.contacts || []).forEach((p) => (contacts[p.id] = p));
     const openDeal = new Set(data.deals.filter((d) => OPEN_STAGES.includes(d.stage)).map((d) => d.companyId));
     // The email's contact if they work there, else the company's best contact.
+    const own = opts.internalDomain;
     const contactAt = (id, companyId) =>
-      (contacts[id] && contacts[id].companyId === companyId && contacts[id]) ||
-      (data.contacts || []).filter((p) => p.companyId === companyId).sort((a, b) => contactRank(b) - contactRank(a))[0] ||
+      (contacts[id] && contacts[id].companyId === companyId && !isColleague(contacts[id], own) && contacts[id]) ||
+      (data.contacts || []).filter((p) => p.companyId === companyId && !isColleague(p, own)).sort((a, b) => contactRank(b) - contactRank(a))[0] ||
       null;
-    // Emails among colleagues (a company whose people share your email domain) aren't prospecting.
-    const own = String(opts.internalDomain || '').toLowerCase();
-    const internal = new Set(own ? (data.contacts || []).filter((p) => String(p.email || '').toLowerCase().endsWith('@' + own)).map((p) => p.companyId) : []);
+    // Emails among colleagues (a company of two or more people at your email domain and nobody else) aren't prospecting.
+    const people = {};
+    (data.contacts || []).forEach((p) => {
+      const k = (people[p.companyId] = people[p.companyId] || { us: 0, them: 0 });
+      if (isColleague(p, own)) k.us++;
+      else if (p.email) k.them++;
+    });
+    const internal = new Set(Object.keys(people).filter((id) => people[id].us >= 2 && !people[id].them));
     const byCompany = {};
     data.activities.forEach((a) => {
       if (a.companyId && a.date && ['Email', 'Call', 'Meeting'].includes(a.type)) (byCompany[a.companyId] = byCompany[a.companyId] || []).push(a);
@@ -1442,8 +1458,9 @@
       if (!next) {
         const p = contactAt(t.contactId, t.companyId);
         const c = companies[t.companyId];
-        if (c && (p ? p.id : '') !== (t.contactId || ''))
-          complete.push({ id: t.id, contactId: p ? p.id : '', subject: 'Send follow-up email to ' + (p && p.firstName ? p.firstName + ' at ' : '') + c.name });
+        const subject = c && 'Send follow-up email to ' + (p && p.firstName ? p.firstName + ' at ' : '') + c.name;
+        if (c && ((p ? p.id : '') !== (t.contactId || '') || (/^Send follow-up email to /.test(t.subject || '') && t.subject !== subject)))
+          complete.push({ id: t.id, contactId: p ? p.id : '', subject });
         return;
       }
       const how = next.inbound ? 'they replied' : next.type === 'Email' ? 'you followed up' : 'you ' + (next.type === 'Call' ? 'called' : 'met');
@@ -1471,7 +1488,7 @@
     const companies = {};
     data.companies.forEach((c) => (companies[c.id] = c));
     const contactsBy = {};
-    data.contacts.forEach((c) => (contactsBy[c.companyId] = contactsBy[c.companyId] || []).push(c));
+    data.contacts.forEach((c) => !isColleague(c, opts.internalDomain) && (contactsBy[c.companyId] = contactsBy[c.companyId] || []).push(c));
     const bestContact = (id) => (contactsBy[id] || []).slice().sort((a, b) => contactRank(b) - contactRank(a))[0] || null;
 
     const tasks = data.activities
@@ -1509,7 +1526,7 @@
       .filter((a) => companies[a.companyId] && !doNotContact(companies[a.companyId]) && !snoozed(companies[a.companyId]) && touches[a.companyId] === a.date)
       .sort((a, b) => (parseNumber(b.opens) || 0) - (parseNumber(a.opens) || 0) || b.date.localeCompare(a.date))
       .map((a) => {
-        const contact = data.contacts.find((p) => p.id === a.contactId && p.companyId === a.companyId) || bestContact(a.companyId);
+        const contact = data.contacts.find((p) => p.id === a.contactId && p.companyId === a.companyId && !isColleague(p, opts.internalDomain)) || bestContact(a.companyId);
         const n = parseNumber(a.opens);
         return {
           kind: 'opened',
@@ -2125,6 +2142,7 @@
     quarterEndOf,
     quarterlyTasks,
     clientTouchpoints,
+    isColleague,
     criticalDatePoints,
     CRITICAL_DATE_KINDS,
     CRITICAL_DATE_STATUSES,

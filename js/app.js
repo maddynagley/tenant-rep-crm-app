@@ -386,6 +386,7 @@
   }
   // Your own email domain, from your contact record (the one named like you in Settings).
   function myEmailDomain() {
+    if (S.settings().myEmailDomain) return S.settings().myEmailDomain;
     const me = String(S.settings().brokerName || '').trim().toLowerCase();
     const p = me && S.all('contacts').find((c) => contactName(c).toLowerCase() === me && c.email);
     return p ? p.email.split('@')[1] : '';
@@ -395,23 +396,24 @@
   function repairActivityContacts() {
     S.all('activities').forEach((a) => {
       const p = a.contactId && S.get('contacts', a.contactId);
-      if (a.contactId && a.companyId && (!p || p.companyId !== a.companyId)) S.upsert('activities', { id: a.id, contactId: '' }, { silent: true, touch: false });
+      if (a.contactId && a.companyId && (!p || p.companyId !== a.companyId || L.isColleague(p, myEmailDomain()))) S.upsert('activities', { id: a.id, contactId: '' }, { silent: true, touch: false });
     });
   }
 
   // The contact to reach for a company: the given one if they work there, else the best one.
   function reachContact(companyId, contactId) {
     const p = S.get('contacts', contactId);
-    if (p && p.companyId === companyId) return p;
+    const own = myEmailDomain();
+    if (p && p.companyId === companyId && !L.isColleague(p, own)) return p;
     const rank = (c) => (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callableNumber(c) ? 2 : 0);
-    return S.all('contacts').filter((c) => c.companyId === companyId).sort((a, b) => rank(b) - rank(a))[0] || null;
+    return S.all('contacts').filter((c) => c.companyId === companyId && !L.isColleague(c, own)).sort((a, b) => rank(b) - rank(a))[0] || null;
   }
 
   // Call and email buttons for a task, follow-up or lead. `reply` is an email to answer in the same thread.
   function contactButtons(companyId, contactId, opts) {
     opts = opts || {};
     const p = companyId && reachContact(companyId, contactId);
-    if (!p) return '';
+    if (!p) return companyId ? `<a class="btn small" href="#/company/${esc(companyId)}" title="No contact saved for this company yet">Find a contact</a>` : '';
     const attrs = `data-company="${esc(companyId)}" data-contact="${esc(p.id)}"`;
     return (callableNumber(p) ? `<button class="btn small" data-action="call-card" ${attrs}>Call ${esc(p.firstName)}</button>` : '') +
       (p.email ? `<button class="btn small" data-action="draft-email" ${attrs}${opts.step ? ` data-step="${esc(opts.step)}"` : ''}${opts.reply ? ` data-reply="${esc(opts.reply)}"` : ''}>${esc(opts.emailLabel || 'Email ' + p.firstName)}</button>` : '');
@@ -836,7 +838,7 @@
     const today = L.todayISO();
     const plan = L.dailyPlan(
       { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), criticalDates: S.all('criticalDates') },
-      { today, outreachGoal: s.outreachGoal, initials: myInitials() }
+      { today, outreachGoal: s.outreachGoal, initials: myInitials(), internalDomain: myEmailDomain() }
     );
     const touchedToday = S.all('activities').filter((a) => a.date === today && TOUCH_TYPES.includes(a.type)).length;
     const goal = Number(s.outreachGoal) || 10;
@@ -3409,6 +3411,9 @@
       const url = st.hubspotBridgeUrl + (st.hubspotBridgeUrl.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(st.hubspotBridgeKey) + '&since=' + since;
       const data = await (await fetch(url)).json();
       if (!data.ok) throw new Error(data.error || 'Sync failed');
+      // Learn your own email domain from the emails you send, so colleagues are never client contacts.
+      const sent = (data.emails || []).find((e) => e.properties && e.properties.hs_email_direction === 'EMAIL' && String(e.properties.hs_email_from_email || '').includes('@'));
+      if (sent && !st.myEmailDomain) S.saveSettings({ myEmailDomain: (/@([a-z0-9.-]+)/i.exec(sent.properties.hs_email_from_email) || [])[1].toLowerCase() });
       const plan = L.planHubSpotSync(data, hubspotData());
       const before = S.all('activities').length;
       plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
@@ -3429,7 +3434,7 @@
     }
   }
   function hubspotData() {
-    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip };
+    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain() };
   }
   function applyHubSpotRecords(plan) {
     plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));

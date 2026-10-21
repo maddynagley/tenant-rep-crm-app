@@ -26,6 +26,7 @@
     workflowSince: '',
     workflowCreated: [],
     hubspotSkip: [],
+    myEmailDomain: '',
     postsPerWeek: 2,
     generatedIds: [],
     researchTeam: '',
