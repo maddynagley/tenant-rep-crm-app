@@ -3179,6 +3179,8 @@
           e.preventDefault();
           navigator.clipboard.writeText(d.url).then(() => toast('Link copied. Paste it into your email to the client.'), () => prompt('Copy this link:', d.url));
           return;
+        case 'reload-app':
+          return S.flush().then(() => location.reload());
         case 'toggle-key': {
           // One main point of contact per company.
           const p = S.get('contacts', d.id);
@@ -3714,6 +3716,22 @@
   let storageProtected = null;
   if (navigator.storage && navigator.storage.persist)
     navigator.storage.persist().then((ok) => (storageProtected = ok), () => {});
+  // The published site carries its version; when a newer one is out, offer a reload so a cached page
+  // never hides new features.
+  function checkForUpdate() {
+    const mine = (document.querySelector('meta[name=app-version]') || {}).content;
+    if (!mine || mine === 'dev' || !/^https?:/.test(location.protocol)) return;
+    fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => {
+        if (v && v.version && v.version !== mine) $('#update-nag').hidden = false;
+      })
+      .catch(() => {});
+  }
+  checkForUpdate();
+  setInterval(checkForUpdate, 30 * 60000);
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && checkForUpdate());
+
   S.ready.then(() => {
     ensureGenerated();
     repairActivityContacts();
