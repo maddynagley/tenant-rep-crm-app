@@ -398,6 +398,29 @@
     return out;
   }
 
+  // Lease rights and options you track for any tenant, client or prospect.
+  const CRITICAL_DATE_KINDS = ['Renewal option', 'Termination option', 'Expansion option', 'Contraction option', 'ROFO', 'ROFR', 'Purchase option', 'Landlord relocation right', 'Rent abatement / step', 'Lease expiration', 'Other'];
+  const CRITICAL_DATE_STATUSES = ['Open', 'Exercised', 'Waived', 'Expired'];
+
+  // Reminder and deadline points for tracked lease rights. A reminder is due from `remindDays` before the
+  // notice deadline until the deadline passes, unless the right was exercised or waived.
+  function criticalDatePoints(items, opts) {
+    opts = opts || {};
+    const today = opts.today || todayISO();
+    const points = [];
+    (items || []).forEach((r) => {
+      if (!r.date || !r.companyId) return;
+      const closed = ['Exercised', 'Waived', 'Expired'].includes(r.status) || r.date < today;
+      const what = r.kind === 'Other' ? r.label || 'Critical date' : r.kind + (r.label ? ' (' + r.label + ')' : '');
+      const base = { dealId: r.dealId || '', companyId: r.companyId, criticalDateId: r.id, terms: r.terms || '' };
+      const lead = parseNumber(r.remindDays);
+      const remind = addDays(r.date, -(lead === null ? 90 : lead));
+      if (remind < r.date) points.push(Object.assign({ date: remind, kind: 'notice', label: `${what}: deadline ${fmtDate(r.date)}`, done: closed }, base));
+      points.push(Object.assign({ date: r.date, kind: r.kind === 'Lease expiration' ? 'expiration' : 'notice', label: `${what} deadline`, done: closed }, base));
+    });
+    return points;
+  }
+
   // For deals you closed yourself: check in after move-in, then keep up with the lease's critical dates.
   function clientTouchpoints(deals, opts) {
     opts = opts || {};
@@ -439,9 +462,10 @@
       const last = touches[p.companyId];
       p.done = p.checkIn ? Boolean(last && last >= addDays(p.date, -14)) : p.date < today;
     });
+    criticalDatePoints(opts.criticalDates, { today }).forEach((p) => points.push(p));
     points.sort((a, b) => a.date.localeCompare(b.date));
     return {
-      due: points.filter((p) => !p.done && p.date <= today && p.date >= addDays(today, -120) && (p.checkIn || p.kind === 'notice' || p.kind === 'planning')),
+      due: points.filter((p) => !p.done && p.date <= today && (p.criticalDateId || p.date >= addDays(today, -120)) && (p.checkIn || p.kind === 'notice' || p.kind === 'planning')),
       upcoming: points.filter((p) => p.date > today && p.date <= addDays(today, opts.horizonDays || 365)),
       all: points,
     };
@@ -1095,7 +1119,11 @@
     opts = opts || {};
     const active = templates.filter((t) => t.active !== false && t.active !== 'false');
     const byStep = (step) => active.find((t) => t.step === step);
+    // A template written for specific buildings wins for first touches to their tenants.
+    const where = [company.building, company.address].join(' ').toLowerCase();
+    const forBuilding = active.find((t) => String(t.buildings || '').split(',').some((b) => b.trim() && where.includes(b.trim().toLowerCase())));
     const stage = leadStage(company);
+    if (forBuilding && !(opts.lastTouch && ['Initial Outreach', 'Follow Up', 'Engaged'].includes(stage))) return forBuilding;
     const months = company.leaseExpiration ? monthsUntil(company.leaseExpiration, opts.today) : null;
     if (opts.lastTouch && ['Initial Outreach', 'Follow Up', 'Engaged'].includes(stage)) return byStep('Follow-up') || active[0] || null;
     if (months !== null && months >= 0 && months <= 30) return byStep('Lease expiration') || byStep('Intro') || active[0] || null;
@@ -1427,7 +1455,7 @@
     const newSlots = Math.min(fresh.length, Math.max(Math.ceil(goal / 3), goal - followUps.length));
     const outreach = followUps.slice(0, goal - newSlots).concat(fresh.slice(0, newSlots));
 
-    const care = clientTouchpoints(data.deals, { today, touches }).due.filter((p) => !snoozed(companies[p.companyId]));
+    const care = clientTouchpoints(data.deals, { today, touches, criticalDates: data.criticalDates }).due.filter((p) => !snoozed(companies[p.companyId]));
 
     const updates = [];
     openDeals.forEach((d) => {
@@ -1992,6 +2020,9 @@
     quarterEndOf,
     quarterlyTasks,
     clientTouchpoints,
+    criticalDatePoints,
+    CRITICAL_DATE_KINDS,
+    CRITICAL_DATE_STATUSES,
     moveInPostIdeas,
     isCoworking,
     dealLXD,

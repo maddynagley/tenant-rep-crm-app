@@ -7,7 +7,7 @@
   'use strict';
   const L = root.CRMLogic;
   const KEY = 'tenant-rep-crm.v1';
-  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps', 'documents', 'templates'];
+  const COLLECTIONS = ['companies', 'contacts', 'deals', 'activities', 'properties', 'marketing', 'comps', 'documents', 'templates', 'criticalDates'];
 
   const DEFAULT_SETTINGS = {
     brokerName: '',
@@ -187,6 +187,7 @@
       db.deals = db.deals.filter((d) => d.companyId !== id);
       db.contacts = db.contacts.filter((c) => c.companyId !== id);
       db.activities = db.activities.filter((a) => a.companyId !== id);
+      db.criticalDates = db.criticalDates.filter((r) => r.companyId !== id);
     }
     if (col === 'deals') {
       db.properties = db.properties.filter((p) => p.dealId !== id);
@@ -204,7 +205,7 @@
   }
 
   // A merged record that doesn't exist yet must be whole; partial updates for missing records are dropped.
-  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'], documents: ['name'], templates: ['name'] };
+  const REQUIRED = { companies: ['name'], contacts: ['companyId', 'firstName'], deals: ['companyId', 'name'], activities: ['date'], properties: ['dealId'], marketing: ['title'], comps: ['building'], documents: ['name'], templates: ['name'], criticalDates: ['companyId', 'kind'] };
   function isComplete(col, rec) {
     return REQUIRED[col].every((k) => rec[k]);
   }

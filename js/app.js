@@ -311,16 +311,30 @@
     { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
   ];
 
+  FIELDS.criticalDates = [
+    { key: 'companyId', label: 'Tenant / company', type: 'ref', ref: 'companies', required: true },
+    { key: 'dealId', label: 'Deal (optional)', type: 'ref', ref: 'deals', filterBy: 'companyId' },
+    { key: 'kind', label: 'Right / date', type: 'select', options: L.CRITICAL_DATE_KINDS },
+    { key: 'label', label: 'Details (e.g. "2nd renewal", "Suite 400", "Floor 12")' },
+    { key: 'date', label: 'Notice deadline / date', type: 'date' },
+    { key: 'remindDays', label: 'Remind me this many days before (default 90)', type: 'number' },
+    { key: 'status', label: 'Status', type: 'select', options: L.CRITICAL_DATE_STATUSES },
+    { key: 'source', label: 'Source (lease abstract, CoStar, tenant, landlord…)' },
+    { key: 'terms', label: "Terms (e.g. one 5-year renewal at 95% of FMV, 12 months' notice; fee = unamortized TI + 3 months' rent)", type: 'textarea', wide: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
+  ];
+
   FIELDS.templates = [
     { key: 'name', label: 'Template name (shows in Outreach results)', required: true, wide: true },
     { key: 'step', label: 'When to use it', type: 'select', options: L.TEMPLATE_STEPS },
     { key: 'active', label: 'Active (offered when drafting)', type: 'checkbox' },
+    { key: 'buildings', label: 'Suggest first for tenants at (buildings or addresses, comma-separated)', wide: true },
     { key: 'subject', label: 'Subject', wide: true },
     { key: 'body', label: 'Body', type: 'textarea', wide: true, rows: 14 },
     { key: 'notes', label: 'Notes (why it works, when to use it)', type: 'textarea', wide: true },
   ];
 
-  const LABELS = { templates: 'Email template', documents: 'Document', comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
+  const LABELS = { criticalDates: 'Critical date', templates: 'Email template', documents: 'Document', comps: 'Comp', marketing: 'Marketing item', companies: 'Company', contacts: 'Contact', deals: 'Deal', activities: 'Activity', properties: 'Survey Property' };
 
   // ---------- derived data helpers ----------
 
@@ -783,7 +797,7 @@
     if (!S.all('companies').length) return viewDashboard();
     const today = L.todayISO();
     const plan = L.dailyPlan(
-      { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') },
+      { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), criticalDates: S.all('criticalDates') },
       { today, outreachGoal: s.outreachGoal, initials: myInitials() }
     );
     const touchedToday = S.all('activities').filter((a) => a.date === today && TOUCH_TYPES.includes(a.type)).length;
@@ -820,8 +834,8 @@
       const c = S.get('companies', p.companyId);
       const d = S.get('deals', p.dealId);
       return `<li><div class="fu-body"><div><a href="#/company/${esc(p.companyId)}"><strong>${esc(c ? c.name : '')}</strong></a> ${badge(p.kind.replace('-', ' '), KIND_BADGE[p.kind])}</div>
-        <div class="sub">${esc(p.label)} · due ${esc(L.fmtDate(p.date))}${d ? ' · ' + esc(d.name) : ''}</div></div>
-        <div class="todo-actions">${touchButtons(p.companyId, '')}</div></li>`;
+        <div class="sub">${esc(p.label)} · due ${esc(L.fmtDate(p.date))}${d ? ' · ' + esc(d.name) : ''}${p.terms ? ' · ' + esc(p.terms) : ''}</div></div>
+        <div class="todo-actions">${p.criticalDateId ? `<button class="btn small" data-action="edit" data-col="criticalDates" data-id="${esc(p.criticalDateId)}">Update status</button>` : ''}${touchButtons(p.companyId, '')}</div></li>`;
     });
     const posts = S.all('marketing').filter((m) => m.kind === 'Social post');
     const postGoal = Number(s.postsPerWeek) || 0;
@@ -1018,15 +1032,44 @@
     const d = S.get('deals', p.dealId);
     return `<tr>
       <td class="nowrap">${esc(L.fmtDate(p.date))}</td>
-      <td>${badge(p.kind.replace('-', ' '), KIND_BADGE[p.kind])} ${esc(p.label)}</td>
-      <td>${linkCompany(p.companyId)}<div class="sub"><a href="#/deal/${esc(p.dealId)}">${esc(d ? d.name : '')}</a></div></td>
-      <td class="right nowrap">${actions ? touchButtons(p.companyId, '') : ''}</td></tr>`;
+      <td>${badge(p.kind.replace('-', ' '), KIND_BADGE[p.kind])} ${esc(p.label)}${p.terms ? `<div class="sub">${esc(p.terms)}</div>` : ''}</td>
+      <td>${linkCompany(p.companyId)}${d ? `<div class="sub"><a href="#/deal/${esc(p.dealId)}">${esc(d.name)}</a></div>` : ''}</td>
+      <td class="right nowrap">${p.criticalDateId ? `<button class="icon-btn" data-action="edit" data-col="criticalDates" data-id="${esc(p.criticalDateId)}" title="Edit">✎</button>` : ''}${actions ? touchButtons(p.companyId, '') : ''}</td></tr>`;
+  }
+
+  // Every lease right you track for a company (or all companies), open ones first.
+  function criticalDatesTable(list, showCompany) {
+    const order = (r) => (['Open', ''].includes(r.status || '') ? '0' : '1') + (r.date || '9999');
+    const today = L.todayISO();
+    return `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Deadline</th><th>Right</th>${showCompany ? '<th>Tenant</th>' : ''}<th>Terms</th><th>Status</th><th></th></tr></thead><tbody>${list
+      .slice()
+      .sort((a, b) => order(a).localeCompare(order(b)))
+      .map((r) => {
+        const open = !r.status || r.status === 'Open';
+        const soon = open && r.date && r.date >= today && r.date <= L.addDays(today, 365);
+        return `<tr>
+          <td class="nowrap">${r.date ? badge(L.fmtDate(r.date), !open ? 'gray' : r.date < today ? 'gray' : soon ? 'red' : 'amber') : '<span class="muted">No date</span>'}</td>
+          <td><strong>${esc(r.kind)}</strong>${r.label ? `<div class="sub">${esc(r.label)}</div>` : ''}</td>
+          ${showCompany ? `<td>${linkCompany(r.companyId)}</td>` : ''}
+          <td>${esc(r.terms || '')}${r.source ? `<div class="sub">Source: ${esc(r.source)}</div>` : ''}</td>
+          <td>${badge(r.status || 'Open', open ? 'blue' : 'gray')}</td>
+          <td class="right"><button class="icon-btn" data-action="edit" data-col="criticalDates" data-id="${esc(r.id)}" title="Edit">✎</button></td></tr>`;
+      })
+      .join('')}</tbody></table></div>`;
+  }
+
+  function criticalDatesCard(companyId, dealId) {
+    const list = S.all('criticalDates').filter((r) => r.companyId === companyId);
+    const attrs = `data-company="${esc(companyId)}"${dealId ? ` data-deal="${esc(dealId)}"` : ''}`;
+    return `<section class="card"><h2>Lease rights & critical dates <button class="link more" data-action="new" data-col="criticalDates" ${attrs}>+ Add</button></h2>
+      ${list.length ? criticalDatesTable(list, false) : emptyState('Track renewal and termination options, expansion rights, ROFO/ROFR and other deadlines from the lease. You\'ll get a reminder on Today before each notice deadline.', `<button class="btn" data-action="new" data-col="criticalDates" ${attrs}>+ Critical date</button>`)}</section>`;
   }
 
   function viewComps() {
     const f = state.comps;
     const today = L.todayISO();
-    const tp = L.clientTouchpoints(S.all('deals'), { today, touches: lastTouchMap(), horizonDays: 730 });
+    const tp = L.clientTouchpoints(S.all('deals'), { today, touches: lastTouchMap(), horizonDays: 730, criticalDates: S.all('criticalDates') });
+    const rights = S.all('criticalDates');
     const q = f.q.trim().toLowerCase();
     const comps = S.all('comps')
       .filter((c) => !q || [c.building, c.address, c.submarket, c.tenant, c.notes].join(' ').toLowerCase().includes(q))
@@ -1034,10 +1077,13 @@
       .sort((a, b) => (b.signedDate || b.commencement || '').localeCompare(a.signedDate || a.commencement || ''));
     const head = '<thead><tr><th>Date</th><th>What</th><th>Client</th><th></th></tr></thead>';
     const dates = `
-      <section class="card"><h2>Due now</h2><p class="hint">Check-ins with clients you closed (30 days after move-in, 6 months, then every year) and lease deadlines coming up. Logging a touch with the client clears a check-in.</p>
+      <section class="card"><h2>Due now</h2><p class="hint">Check-ins with clients you closed (30 days after move-in, 6 months, then every year) and lease deadlines coming up. Logging a touch with the client clears a check-in; marking a right Exercised or Waived clears its reminder.</p>
         ${tp.due.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${tp.due.map((p) => touchpointRow(p, true)).join('')}</tbody></table></div>` : emptyState('Nothing due.')}</section>
       <section class="card"><h2>Coming up (next 2 years)</h2>
-        ${tp.upcoming.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${tp.upcoming.map((p) => touchpointRow(p, false)).join('')}</tbody></table></div>` : emptyState('Add lease commencement, expiration and option dates to your closed deals to build this tracker.')}</section>`;
+        ${tp.upcoming.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${tp.upcoming.map((p) => touchpointRow(p, false)).join('')}</tbody></table></div>` : emptyState('Add lease rights below, or commencement, expiration and option dates to your closed deals, to build this tracker.')}</section>
+      <section class="card"><h2>Lease rights & options <span class="muted">${rights.length}</span> <button class="link more" data-action="new" data-col="criticalDates">+ Add</button></h2>
+        <p class="hint">Renewal, termination, expansion and contraction options, ROFO/ROFR and other rights for any tenant: clients, prospects or companies you're watching.</p>
+        ${rights.length ? criticalDatesTable(rights, true) : emptyState('None tracked yet. Add them here or from a company page.')}</section>`;
     const compTable = comps.length
       ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th><th>Source</th></tr></thead><tbody>${comps
           .map(
@@ -1054,7 +1100,7 @@
       : emptyState('No comps yet. Open a closed deal and tap "Save as comp", or add one by hand.', '<button class="btn primary" data-action="new" data-col="comps">+ Comp</button>');
     return `
       <div class="page-head"><h1>Comps & Critical Dates</h1>
-        <div class="actions"><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
+        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
       </div>
       <div class="toolbar">
         <div class="seg">
@@ -1422,6 +1468,7 @@
       </div>
       ${c.notes ? `<section class="card"><h2>Notes</h2><p class="pre">${esc(c.notes)}</p></section>` : ''}
       ${sharedListCard(c)}
+      ${criticalDatesCard(id)}
 
       <div class="grid2">
         <section class="card">
@@ -1724,6 +1771,7 @@
         (s) => `<button class="${s.name === d.stage ? 'on' : ''} ${s.name === 'Closed Lost' ? 'lost' : ''}" data-action="set-stage" data-id="${esc(id)}" data-stage="${esc(s.name)}">${esc(s.name)}</button>`
       ).join('')}</div>
       ${tasksCard(openFollowUps().filter((a) => a.dealId === id), `data-company="${esc(d.companyId)}" data-deal="${esc(id)}"`)}
+      ${S.all('criticalDates').some((r) => r.companyId === d.companyId) ? criticalDatesCard(d.companyId, id) : ''}
 
       <div class="grid3">
         <section class="card">
@@ -2057,7 +2105,7 @@
           <h2>Backup & restore</h2>
           <p>Your data lives in this browser only. Export a backup file regularly and keep it somewhere safe (e.g. OneDrive / Google Drive).
           Restore it on another computer to move your CRM.</p>
-          <p class="sub">${counts}<br/>Last backup: ${s.lastBackup ? esc(L.fmtDate(s.lastBackup)) : '<strong>never</strong>'}</p>
+          <p class="sub">${counts}<br/>Last backup: ${s.lastBackup ? esc(L.fmtDate(s.lastBackup)) : '<strong>never</strong>'}${storageProtected === null ? '' : `<br/>Protected from automatic browser clean-up: ${storageProtected ? 'yes' : 'not granted by this browser (bookmark the CRM to help), so keep backing up'}`}</p>
           <div class="actions">
             <button class="btn primary" data-action="export-json">Export backup</button>
             <button class="btn" data-action="pick-file" data-kind="backup">Restore backup…</button>
@@ -2218,6 +2266,8 @@
         );
       case 'contacts':
         return { companyId: ctx.company || '' };
+      case 'criticalDates':
+        return { companyId: ctx.company || (S.get('deals', ctx.deal) || {}).companyId || '', dealId: ctx.deal || '', kind: 'Renewal option', status: 'Open' };
       case 'templates':
         return { step: 'Intro', active: true, body: 'Hi {FirstName},\n\n\n\nBest,\n{MyFirstName}' };
       case 'documents': {
@@ -3355,6 +3405,11 @@
     render();
   });
   // Data loads asynchronously from IndexedDB; start once it's in memory.
+  // Ask the browser to keep the CRM's data even when the disk runs low. Chrome and Edge grant it to sites
+  // you use often or have bookmarked; it doesn't protect against clearing browsing data yourself.
+  let storageProtected = null;
+  if (navigator.storage && navigator.storage.persist)
+    navigator.storage.persist().then((ok) => (storageProtected = ok), () => {});
   S.ready.then(() => {
     ensureGenerated();
     runWorkflows();

@@ -689,3 +689,24 @@ test('an initial email creates a follow-up task a week later, which closes itsel
   assert.equal(next.complete.length, 1);
   assert.match(next.complete[0].notes, /Closed automatically: they replied on/);
 });
+
+test('tracked lease rights remind ahead of the notice deadline until exercised or past', () => {
+  const items = [
+    { id: 'r', companyId: 'a', kind: 'Renewal option', date: '2027-03-31', remindDays: 180, terms: 'One 5-yr renewal at 95% FMV' },
+    { id: 't', companyId: 'b', kind: 'Termination option', date: '2026-12-01' },
+    { id: 'x', companyId: 'c', kind: 'Expansion option', date: '2026-11-15', status: 'Exercised' },
+    { id: 'n', companyId: 'd', kind: 'ROFO' },
+  ];
+  const tp = L.clientTouchpoints([], { today: '2026-10-20', criticalDates: items });
+  assert.deepEqual(tp.due.map((p) => [p.criticalDateId, p.date]), [['r', '2026-10-02'], ['t', '2026-09-02']].sort((x, y) => x[1].localeCompare(y[1])));
+  assert.ok(tp.upcoming.some((p) => p.criticalDateId === 'r' && p.label === 'Renewal option deadline'));
+  assert.ok(!tp.due.some((p) => p.criticalDateId === 'x'));
+});
+
+test('a template written for a building is suggested first for its tenants', () => {
+  const t = [{ id: 'i', step: 'Intro' }, { id: 'p', step: 'Intro', buildings: 'Piedmont Center, 3525 Piedmont' }, { id: 'f', step: 'Follow-up' }];
+  assert.equal(L.suggestTemplate(t, { leadStage: 'New', building: 'Piedmont Center 5' }, { today: '2026-10-20' }).id, 'p');
+  assert.equal(L.suggestTemplate(t, { leadStage: 'New', address: '3525 Piedmont Rd NE' }, { today: '2026-10-20' }).id, 'p');
+  assert.equal(L.suggestTemplate(t, { leadStage: 'New', building: 'Tower Place' }, { today: '2026-10-20' }).id, 'i');
+  assert.equal(L.suggestTemplate(t, { leadStage: 'Initial Outreach', building: 'Piedmont Center' }, { today: '2026-10-20', lastTouch: '2026-10-01' }).id, 'f');
+});
