@@ -257,10 +257,39 @@
       Object.keys(incoming.settingsPatch || {}).forEach((k) => {
         if (!DEVICE_ONLY_SETTINGS.includes(k) && k !== 'sharedLists') db.settings[k] = incoming.settingsPatch[k];
       });
-      // An update file can also retire records (e.g. a duplicate deal merged into another).
-      COLLECTIONS.forEach((c) => ((incoming.remove && incoming.remove[c]) || []).forEach((id) => get(c, id) && remove(c, id, true)));
+      // Duplicate companies an update file folds into the real one.
+      (incoming.merge || []).forEach((m) => mergeCompanies(m.from, m.to, true));
+      // An update file can also retire records (e.g. a duplicate deal merged into another). HubSpot records
+      // removed this way stay removed on the next sync.
+      COLLECTIONS.forEach((c) =>
+        ((incoming.remove && incoming.remove[c]) || []).forEach((id) => {
+          if (!get(c, id)) return;
+          const hs = /^hs-(co|ct)-(\d+)$/.exec(id);
+          if (hs && ['companies', 'contacts'].includes(c)) db.settings.hubspotSkip = (db.settings.hubspotSkip || []).concat(hs[1] + '-' + hs[2]);
+          remove(c, id, true);
+        })
+      );
     }
     return persist();
+  }
+
+  // Fold a duplicate company into another (see L.planCompanyMerge) and delete the duplicate.
+  function mergeCompanies(fromId, toId, silent) {
+    const m = L.planCompanyMerge(db, fromId, toId);
+    if (!m) return null;
+    const from = get('companies', fromId);
+    let moved = 0;
+    Object.keys(m.moves).forEach((col) =>
+      m.moves[col].forEach((r) => {
+        Object.assign(get(col, r.id), r);
+        moved++;
+      })
+    );
+    Object.assign(get('companies', toId), m.company, { updatedAt: new Date().toISOString() });
+    if (from.hubspotId) db.settings.hubspotSkip = (db.settings.hubspotSkip || []).concat('co-' + from.hubspotId);
+    remove('companies', fromId, true);
+    if (!silent) persist();
+    return { name: from.name, moved };
   }
 
   function clearAll() {
@@ -349,6 +378,7 @@
     saveSettings,
     exportJSON,
     importJSON,
+    mergeCompanies,
     clearAll,
     onChange,
     loadSampleData,

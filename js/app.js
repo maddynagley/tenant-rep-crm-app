@@ -2578,18 +2578,11 @@
   }
 
   function mergeCompanies(fromId, toId) {
-    const all = (col) => S.all(col);
-    const m = L.planCompanyMerge({ companies: all('companies'), contacts: all('contacts'), deals: all('deals'), activities: all('activities'), documents: all('documents'), criticalDates: all('criticalDates') }, fromId, toId);
-    if (!m) return;
-    const from = S.get('companies', fromId);
-    Object.keys(m.moves).forEach((col) => m.moves[col].forEach((r) => S.upsert(col, r, { silent: true })));
-    S.upsert('companies', m.company, { silent: true });
-    if (from.hubspotId) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat('co-' + from.hubspotId) });
-    S.remove('companies', fromId);
+    const r = S.mergeCompanies(fromId, toId);
+    if (!r) return;
     $('#modal').close();
     location.hash = '#/company/' + toId;
-    const n = Object.keys(m.moves).reduce((t, col) => t + m.moves[col].length, 0);
-    toast(`Merged ${from.name} into ${companyName(toId)} (${n} records moved).`);
+    toast(`Merged ${r.name} into ${companyName(toId)} (${r.moved} records moved).`);
   }
 
   function createRef(box, kind) {
@@ -2848,9 +2841,12 @@
           if (data.mergeOnly) {
             // Add-on files (e.g. a batch of researched contacts) are never allowed to replace the whole CRM.
             const n = S.COLLECTIONS.map((c) => (data[c] || []).length).reduce((a, b) => a + b, 0);
-            if (!confirm(`Add ${n} records from "${file.name}" to your CRM? Existing records with the same ID are updated; nothing else changes.`)) return;
+            const merges = (data.merge || []).filter((m) => S.get('companies', m.from) && S.get('companies', m.to)).length;
+            const removes = S.COLLECTIONS.map((c) => ((data.remove && data.remove[c]) || []).filter((id) => S.get(c, id)).length).reduce((a, b) => a + b, 0);
+            const what = [n ? `update ${n} records` : '', merges ? `merge ${merges} duplicate compan${merges > 1 ? 'ies' : 'y'}` : '', removes ? `remove ${removes} duplicate record${removes > 1 ? 's' : ''}` : ''].filter(Boolean).join(', ');
+            if (!confirm(`From "${file.name}": ${what || 'nothing to change'}. Existing records with the same ID are updated; nothing else changes. Continue?`)) return;
             S.importJSON(text, 'merge');
-            return toast(`Added ${n} records.`);
+            return toast(`Done: ${what}.`);
           }
           const replace = confirm('Restore this backup?\n\nOK = REPLACE all current data with the backup.\nCancel = MERGE the backup into current data.');
           S.importJSON(text, replace ? 'replace' : 'merge');
