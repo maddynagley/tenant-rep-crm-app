@@ -21,8 +21,8 @@
   const UI_KEY = 'tenant-rep-crm.ui';
   const state = mergeUIState(
     {
-      companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', limit: 100, list: '', listStatus: '' },
-      leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', limit: 100 },
+      companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '' },
+      leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
       comps: { tab: 'dates', q: '', asset: 'All' },
@@ -545,6 +545,14 @@
         })
       )
       .join('');
+  }
+
+  // Table header that sorts its list: click once to sort, again to flip the direction.
+  function sortHead(scope, key, label, cls) {
+    const f = state[scope];
+    const on = f.sort === key;
+    const dir = on ? f.dir || (SORT_COLUMNS[scope][key].desc ? 'desc' : 'asc') : '';
+    return `<th class="sortable${on ? ' on' : ''}${cls ? ' ' + cls : ''}" data-action="sort-by" data-scope="${scope}" data-key="${key}" aria-sort="${dir ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}" title="Sort by ${esc(label.toLowerCase())}">${esc(label)}<span class="sort-arrow">${dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : ''}</span></th>`;
   }
 
   function assetTabs(current, scope) {
@@ -1200,6 +1208,36 @@
         .join('')}</ul>`;
   }
 
+  // ----- sortable columns (Companies and Leads) -----
+
+  const byName = (a, b) => a.c.name.localeCompare(b.c.name);
+  const rankIn = (list, v) => (v ? (list.indexOf(v) + 1 || list.length + 1) : '');
+  // Expirations more than 6 months past are likely stale data, so they sort after current ones.
+  const staleLXD = (r) => (r.c.leaseExpiration && r.c.leaseExpiration < L.addDays(L.todayISO(), -183) ? 1 : 0);
+  // Never touched counts as the longest since touch.
+  const lastTouchCol = { get: (r) => r.last || '0000' };
+  const SORT_COLUMNS = {
+    companies: {
+      score: { get: (r) => r.score, desc: true },
+      name: { get: (r) => r.c.name },
+      asset: { get: (r) => r.c.assetClass },
+      status: { get: (r) => rankIn(L.COMPANY_STATUSES, r.c.status) },
+      submarket: { get: (r) => r.c.submarket },
+      sf: { get: (r) => L.parseNumber(r.c.sfOccupied), desc: true },
+      expiration: { get: (r) => r.c.leaseExpiration, group: staleLXD },
+      lastTouch: lastTouchCol,
+    },
+    leads: {
+      name: { get: (r) => r.c.name },
+      stage: { get: (r) => rankIn(L.LEAD_STAGES, L.leadStage(r.c)) },
+      temp: { get: (r) => rankIn(L.LEAD_TEMPS, r.c.leadTemp) },
+      sf: { get: (r) => L.parseNumber(r.c.sfOccupied), desc: true },
+      expiration: { get: (r) => r.c.leaseExpiration, group: staleLXD },
+      lastTouch: lastTouchCol,
+      score: { get: (r) => r.score, desc: true },
+    },
+  };
+
   // ----- leads -----
 
   function leadList() {
@@ -1218,17 +1256,8 @@
         return !q || [c.name, c.aliases, c.industry, c.address, c.building, c.submarket, c.tags].join(' ').toLowerCase().includes(q);
       })
       .map((c) => ({ c, last: touches[c.id] || '', score: scoreOf(c, touches) }));
-    // Expirations more than 6 months past are likely stale data, so they sort after upcoming ones.
-    const staleBefore = L.addDays(L.todayISO(), -183);
-    const expKey = (c) => (!c.leaseExpiration ? '9999' : c.leaseExpiration < staleBefore ? '9998' + c.leaseExpiration : c.leaseExpiration);
-    const sorters = {
-      expiration: (a, b) => expKey(a.c).localeCompare(expKey(b.c)),
-      lastTouch: (a, b) => (a.last || '0000').localeCompare(b.last || '0000'),
-      score: (a, b) => b.score - a.score,
-      name: (a, b) => a.c.name.localeCompare(b.c.name),
-    };
-    rows.sort(sorters[f.sort] || sorters.expiration);
-    return { rows, counts, total: all.length };
+    const sorted = L.sortRows(rows, SORT_COLUMNS.leads, SORT_COLUMNS.leads[f.sort] ? f.sort : 'expiration', f.dir, byName);
+    return { rows: sorted, counts, total: all.length };
   }
 
   function viewLeads() {
@@ -1256,6 +1285,9 @@
             { value: 'lastTouch', label: 'Sort: Longest since touch' },
             { value: 'score', label: 'Sort: Prospect score' },
             { value: 'name', label: 'Sort: Name' },
+            { value: 'stage', label: 'Sort: Stage' },
+            { value: 'temp', label: 'Sort: Temperature' },
+            { value: 'sf', label: 'Sort: Size (SF)' },
           ],
           f.sort
         )}</select>
@@ -1264,7 +1296,7 @@
       ${
         rows.length
           ? `<div class="table-wrap"><table class="tbl">
-          <thead><tr><th>Company</th><th>Stage</th><th>Temp.</th><th class="right">RSF</th><th>Lease expiration</th><th>Last touch</th><th>Best contact</th></tr></thead>
+          <thead><tr>${sortHead('leads', 'name', 'Company')}${sortHead('leads', 'stage', 'Stage')}${sortHead('leads', 'temp', 'Temp.')}${sortHead('leads', 'sf', 'RSF', 'right')}${sortHead('leads', 'expiration', 'Lease expiration')}${sortHead('leads', 'lastTouch', 'Last touch')}<th>Best contact</th></tr></thead>
           <tbody>${shown
             .map(({ c, last }) => {
               const p = (contactsBy[c.id] || []).slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker') || Boolean(b.email) - Boolean(a.email))[0];
@@ -1313,15 +1345,7 @@
       return true;
     });
     const withScore = list.map((c) => ({ c, score: scoreOf(c, touches), last: touches[c.id] || '' }));
-    const sorters = {
-      score: (a, b) => b.score - a.score,
-      expiration: (a, b) => (a.c.leaseExpiration || '9999').localeCompare(b.c.leaseExpiration || '9999'),
-      sf: (a, b) => (L.parseNumber(b.c.sfOccupied) || 0) - (L.parseNumber(a.c.sfOccupied) || 0),
-      name: (a, b) => a.c.name.localeCompare(b.c.name),
-      lastTouch: (a, b) => (a.last || '0000').localeCompare(b.last || '0000'),
-    };
-    withScore.sort(sorters[f.sort] || sorters.score);
-    return withScore;
+    return L.sortRows(withScore, SORT_COLUMNS.companies, SORT_COLUMNS.companies[f.sort] ? f.sort : 'score', f.dir, byName);
   }
 
   function companyTabs() {
@@ -1417,6 +1441,9 @@
             { value: 'sf', label: 'Sort: Size (SF)' },
             { value: 'lastTouch', label: 'Sort: Longest since touch' },
             { value: 'name', label: 'Sort: Name' },
+            { value: 'status', label: 'Sort: Status' },
+            { value: 'submarket', label: 'Sort: Submarket' },
+            { value: 'asset', label: 'Sort: Asset' },
           ],
           f.sort
         )}</select>
@@ -1425,7 +1452,7 @@
       ${
         rows.length
           ? `<div class="table-wrap"><table class="tbl">
-          <thead><tr><th>Score</th><th>Company</th><th>Asset</th><th>Status</th><th>Submarket</th><th class="right">SF</th><th>Lease expiration</th><th>Last touch</th></tr></thead>
+          <thead><tr>${sortHead('companies', 'score', 'Score')}${sortHead('companies', 'name', 'Company')}${sortHead('companies', 'asset', 'Asset')}${sortHead('companies', 'status', 'Status')}${sortHead('companies', 'submarket', 'Submarket')}${sortHead('companies', 'sf', 'SF', 'right')}${sortHead('companies', 'expiration', 'Lease expiration')}${sortHead('companies', 'lastTouch', 'Last touch')}</tr></thead>
           <tbody>${shown
             .map(
               ({ c, score, last }) => `<tr data-href="#/company/${esc(c.id)}">
@@ -3166,6 +3193,15 @@
           S.upsert('activities', { id: a.id, done: !a.done });
           return toast('Follow-up completed.');
         }
+        case 'sort-by': {
+          const f = state[d.scope];
+          const col = SORT_COLUMNS[d.scope][d.key];
+          const cur = f.dir || (SORT_COLUMNS[d.scope][f.sort] && SORT_COLUMNS[d.scope][f.sort].desc ? 'desc' : 'asc');
+          f.dir = f.sort === d.key ? (cur === 'asc' ? 'desc' : 'asc') : col.desc ? 'desc' : 'asc';
+          f.sort = d.key;
+          saveUIState();
+          return render();
+        }
         case 'set-filter':
           if (actionEl.tagName === 'A') e.preventDefault();
           state[d.scope][d.key] = d.value;
@@ -3402,6 +3438,7 @@
     if (!el.dataset.filter) return;
     const [scope, key] = el.dataset.filter.split('.');
     state[scope][key] = el.type === 'checkbox' ? el.checked : el.value;
+    if (key === 'sort') state[scope].dir = '';
     if (scope === 'companies' || scope === 'leads') state[scope].limit = 100;
     saveUIState();
     render();

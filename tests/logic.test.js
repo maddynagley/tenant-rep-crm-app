@@ -808,3 +808,20 @@ test('a comp lease expiration comes from the entered date, commencement + term, 
   assert.deepEqual(L.compLXD({ signedDate: '2026-01-01', termMonths: 87 }), { date: '2033-05-31', estimated: true });
   assert.equal(L.compLXD({ signedDate: '2026-01-01' }), null);
 });
+
+test('sortRows: column sort in either direction, blanks last', () => {
+  const rows = [
+    { name: 'Acme', exp: '2028-06-30', sf: 5000 },
+    { name: 'Uptown', exp: '', sf: 12000 },
+    { name: 'Birch', exp: '2027-01-31', sf: null },
+  ];
+  const cols = { exp: { get: (r) => r.exp }, sf: { get: (r) => r.sf, desc: true } };
+  const names = (list) => list.map((r) => r.name);
+  assert.deepEqual(names(L.sortRows(rows, cols, 'exp', 'asc')), ['Birch', 'Acme', 'Uptown']);
+  assert.deepEqual(names(L.sortRows(rows, cols, 'exp', 'desc')), ['Acme', 'Birch', 'Uptown']);
+  assert.deepEqual(names(L.sortRows(rows, cols, 'sf')), ['Uptown', 'Acme', 'Birch']);
+  assert.deepEqual(names(L.sortRows(rows, cols, 'sf', 'asc')), ['Acme', 'Uptown', 'Birch']);
+  const grouped = { exp: { get: (r) => r.exp, group: (r) => (r.name === 'Acme' ? 1 : 0) } };
+  assert.deepEqual(names(L.sortRows(rows, grouped, 'exp', 'desc')), ['Birch', 'Acme', 'Uptown']);
+  assert.equal(rows[0].name, 'Acme', 'input not mutated');
+});

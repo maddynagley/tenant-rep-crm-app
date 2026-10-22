@@ -179,6 +179,9 @@ select.inline { height: 28px; font-size: 12px; padding: 0 4px; max-width: 150px;
 .tbl { width: 100%; border-collapse: collapse; }
 .tbl th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .tbl th.right { text-align: right; }
+.tbl th.sortable { cursor: pointer; user-select: none; }
+.tbl th.sortable:hover, .tbl th.sortable.on { color: var(--text); }
+.tbl th .sort-arrow { display: inline-block; width: 1em; margin-left: 3px; font-size: 9px; color: var(--accent); }
 .tbl td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .tbl tr:last-child td { border-bottom: 0; }
 .tbl.compact td { padding: 7px 6px; }

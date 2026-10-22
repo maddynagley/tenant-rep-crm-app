@@ -2159,6 +2159,29 @@
     return v === null ? '' : v.toLocaleString('en-US');
   }
 
+  // Sort table rows by a column. Each column is { get(row), desc?: true, group?(row) }:
+  // `desc` makes descending the column's first click, `group` ranks rows before values
+  // (e.g. stale dates after current ones). Blank values always sort last.
+  function sortRows(rows, columns, key, dir, tieBreak) {
+    const col = columns[key];
+    if (!col) return rows.slice();
+    const sign = (dir || (col.desc ? 'desc' : 'asc')) === 'desc' ? -1 : 1;
+    const blank = (v) => v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v));
+    return rows.slice().sort((a, b) => {
+      const va = col.get(a);
+      const vb = col.get(b);
+      if (blank(va) !== blank(vb)) return blank(va) ? 1 : -1;
+      const ga = col.group ? col.group(a) : 0;
+      const gb = col.group ? col.group(b) : 0;
+      if (ga !== gb) return ga - gb;
+      if (!blank(va)) {
+        const d = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
+        if (d) return sign * d;
+      }
+      return tieBreak ? tieBreak(a, b) : 0;
+    });
+  }
+
   function fmtDate(iso) {
     const d = parseISODate(iso);
     if (!d) return '';
@@ -2176,6 +2199,7 @@
   }
 
   return {
+    sortRows,
     ASSET_CLASSES,
     COMPANY_STATUSES,
     DEAL_TYPES,
