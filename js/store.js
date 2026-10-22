@@ -53,6 +53,10 @@
     out.deals.forEach((d) => {
       if (d.stage) d.stage = L.normalizeDealStage(d.stage);
     });
+    // Comps from colleagues are labeled with the firm's name.
+    out.comps.forEach((c) => {
+      if (c.source === 'Firm deal' && out.settings.myFirm) c.source = out.settings.myFirm;
+    });
     return out;
   }
 

@@ -307,7 +307,8 @@
     { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
     { key: 'freeRentMonths', label: 'Free rent (months)', type: 'number' },
     { key: 'tiAllowance', label: 'TI allowance ($/SF)', type: 'number', step: '0.01' },
-    { key: 'source', label: 'Source', type: 'select', options: ['My deal', 'Firm deal', 'Outside broker', 'CoStar', 'Research'] },
+    // Internal comps are labeled with your firm's name (Import / Settings → Your firm).
+    { key: 'source', label: 'Source', type: 'select', get options() { return ['My deal', S.settings().myFirm || 'My firm', 'Outside broker', 'CoStar', 'Research']; } },
     { key: 'confidential', label: 'Confidential (internal use only)', type: 'checkbox' },
     { key: 'notes', label: 'Notes', type: 'textarea', wide: true },
   ];
