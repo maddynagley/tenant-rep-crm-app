@@ -442,6 +442,29 @@
     return `<button class="mail-icon" data-action="draft-email" data-recommended="1" data-company="${esc(companyId)}" data-contact="${esc(to.id)}"${opts.deal ? ` data-deal="${esc(opts.deal)}"` : ''}${opts.reply ? ` data-reply="${esc(opts.reply)}"` : ''} title="Recommended follow-up email to ${esc(contactName(to))}" aria-label="Draft follow-up email"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/></svg></button>`;
   }
 
+  // Pencil-and-page button in a Notes card: opens a quick note that's added, dated, to the record's notes.
+  function noteIcon(col, id) {
+    return `<button class="mail-icon more" data-action="quick-note" data-col="${col}" data-id="${esc(id)}" title="Add a note" aria-label="Add a note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h3"/></svg></button>`;
+  }
+
+  function openQuickNote(col, id) {
+    const rec = S.get(col, id);
+    if (!rec) return;
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" id="quick-note-form" data-col="${col}" data-id="${esc(id)}">
+      <header><h2>Add a note to ${esc(rec.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="form-grid">
+        <label class="wide">Note<textarea name="note" rows="5" required placeholder="What happened, what's next…"></textarea></label>
+        <p class="hint wide">Saved at the top of the notes with today's date.</p>
+        ${rec.notes ? `<details class="wide"><summary>Earlier notes</summary><p class="pre">${esc(rec.notes)}</p></details>` : ''}
+      </div>
+      <footer><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Add note</button></footer>
+    </form>`;
+    dlg.showModal();
+    dlg.querySelector('textarea').focus();
+  }
+
   // Automatic follow-up tasks after an initial email (see L.planFollowUpTasks). Runs after every sync or logged touch.
   function runWorkflows() {
     const s = S.settings();
@@ -1578,7 +1601,7 @@
           <dl class="info">${info.map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('')}</dl>
         </section>
       </div>
-      ${c.notes ? `<section class="card"><h2>Notes</h2><p class="pre">${esc(c.notes)}</p></section>` : ''}
+      <section class="card"><h2>Notes ${noteIcon('companies', id)}</h2>${c.notes ? `<p class="pre">${esc(c.notes)}</p>` : '<p class="muted">No notes.</p>'}</section>
       ${sharedListCard(c)}
       ${criticalDatesCard(id)}
 
@@ -1936,9 +1959,10 @@
                   </tbody></table>
                   ${r.hasActuals ? '' : '<p class="hint">Edit the deal and fill in “Closed deal results” to record actual numbers.</p>'}`;
                 })()
-              : '<h2>Notes</h2>'
+              : `<h2>Notes ${noteIcon('deals', id)}</h2>`
           }
-          ${d.notes ? `<p class="pre">${esc(d.notes)}</p>` : d.stage === 'Closed Won' ? '' : '<p class="muted">No notes.</p>'}
+          ${d.stage === 'Closed Won' ? `<h2>Notes ${noteIcon('deals', id)}</h2>` : ''}
+          ${d.notes ? `<p class="pre">${esc(d.notes)}</p>` : '<p class="muted">No notes.</p>'}
           ${d.hubspotUrl ? `<p><a href="${esc(d.hubspotUrl)}" target="_blank" rel="noopener">Open in HubSpot ↗</a></p>` : ''}
         </section>
       </div>
@@ -3301,6 +3325,9 @@
           return openMerge(d.company);
         case 'call-card':
           return openCallCard(d.company, d.contact);
+        case 'quick-note':
+          e.preventDefault();
+          return openQuickNote(d.col, d.id);
         case 'draft-email':
           e.preventDefault();
           return openDraft(d.company, d.contact, d.step, d.reply, { recommended: Boolean(d.recommended), dealId: d.deal });
@@ -3538,6 +3565,16 @@
       const to = e.target.querySelector('select[name=targetId]').value;
       if (!to) return toast('Pick the company to keep.');
       if (confirm(`Merge ${companyName(e.target.dataset.from)} into ${companyName(to)}? This can't be undone.`)) mergeCompanies(e.target.dataset.from, to);
+    } else if (e.target.id === 'quick-note-form') {
+      e.preventDefault();
+      const f = e.target;
+      const note = f.elements.note.value.trim();
+      if (!note) return;
+      const rec = S.get(f.dataset.col, f.dataset.id);
+      const entry = L.fmtDate(L.todayISO()) + ': ' + note;
+      $('#modal').close();
+      S.upsert(f.dataset.col, { id: rec.id, notes: rec.notes ? entry + '\n\n' + rec.notes : entry });
+      toast('Note added.');
     } else if (e.target.id === 'record-form') {
       e.preventDefault();
       saveForm(e.target);
