@@ -146,6 +146,16 @@ main { margin: 52px 0 0 var(--nav-w); padding: 20px 24px 60px; max-width: 1400px
 .mail-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .mail-icon:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
 h2 .mail-icon { align-self: center; }
+h2 .icon-row { display: inline-flex; gap: 6px; align-self: center; }
+.notes-sub { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 14px 0 6px; }
+h2 + .notes-sub { margin-top: 4px; }
+h2.notes-after { margin-top: 18px; }
+ul.plain.added-notes { list-style: none; padding: 0; margin: 0; }
+.added-notes li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.added-notes li:last-child { border-bottom: 0; }
+.brief-body { padding: 4px 18px 8px; max-height: 65vh; overflow: auto; }
+.brief-body ul { margin: 0 0 6px; padding-left: 18px; }
+.brief-body li { margin: 3px 0; line-height: 1.45; }
 h1 .mail-icon { width: 30px; height: 30px; margin-left: 6px; vertical-align: 4px; }
 h1 .mail-icon svg { width: 17px; height: 17px; }
 .draft-to { display: flex; gap: 6px; align-items: center; }

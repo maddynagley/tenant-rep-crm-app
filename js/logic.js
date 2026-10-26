@@ -58,6 +58,9 @@
     return LEAD_FROM_STATUS[company.status] || '';
   }
 
+  // A deal's budget is a rate per RSF (the default) or a total monthly rent for the whole space.
+  const BUDGET_UNITS = ['Per RSF', 'Total per month'];
+  const isMonthlyTotal = (d) => d.budgetUnit === 'Total per month';
   const RATE_BASES = ['Full Service ($/SF/yr)', 'Modified Gross ($/SF/yr)', 'NNN ($/SF/yr)', 'NNN ($/SF/mo)', 'Gross ($/SF/mo)'];
 
   const ACTIVITY_TYPES = ['Call', 'Email', 'Meeting', 'Tour', 'LinkedIn', 'Pitch', 'Proposal', 'Note', 'Task'];
@@ -241,13 +244,15 @@
   }
 
   // Total rent over the term, with annual escalations, less free rent.
-  function aggregateLeaseValue({ sf, rate, rateBasis, termMonths, escalationPct, freeRentMonths }) {
-    sf = parseNumber(sf) || 0;
-    rate = parseNumber(rate) || 0;
+  // `monthlyRent` (a total for the space) takes the place of SF × rate when it's given.
+  function aggregateLeaseValue({ sf, rate, rateBasis, termMonths, escalationPct, freeRentMonths, monthlyRent }) {
+    monthlyRent = parseNumber(monthlyRent);
+    sf = monthlyRent ? 1 : parseNumber(sf) || 0;
+    rate = monthlyRent ? monthlyRent * 12 : parseNumber(rate) || 0;
     termMonths = parseNumber(termMonths) || 0;
     const esc = (parseNumber(escalationPct) || 0) / 100;
     const free = Math.min(parseNumber(freeRentMonths) || 0, termMonths);
-    const annualRate = isMonthlyRate(rateBasis) ? rate * 12 : rate;
+    const annualRate = !monthlyRent && isMonthlyRate(rateBasis) ? rate * 12 : rate;
     let total = 0;
     for (let month = 0; month < termMonths; month++) {
       if (month < free) continue;
@@ -262,6 +267,7 @@
       sf: deal.estSF || deal.sfMax || deal.sfMin,
       rate: deal.budgetRate,
       rateBasis: deal.rateBasis,
+      monthlyRent: isMonthlyTotal(deal) ? deal.budgetRate : '',
       termMonths: deal.termMonths,
       escalationPct: deal.escalationPct,
       freeRentMonths: deal.freeRentMonths,
@@ -372,8 +378,9 @@
     return r ? r + ' SF office' : '';
   }
   function dealBudgetLabel(d) {
-    const r = rangeLabel(d.budgetRate, d.budgetRateMax, (n) => '$' + Number(n).toFixed(2).replace(/\.00$/, ''));
-    return r ? r + '/SF' + (d.rateBasis ? ' ' + String(d.rateBasis).replace(/\s*\(.*\)/, '') : '') : '';
+    const monthly = isMonthlyTotal(d);
+    const r = rangeLabel(d.budgetRate, d.budgetRateMax, (n) => (monthly ? '$' + fmtNumber(n) : '$' + Number(n).toFixed(2).replace(/\.00$/, '')));
+    return r ? r + (monthly ? '/mo total' : '/SF') + (d.rateBasis ? ' ' + String(d.rateBasis).replace(/\s*\(.*\)/, '') : '') : '';
   }
 
   function quarterEndOf(iso) {
@@ -1300,6 +1307,97 @@
       body: fill('Hi {FirstName},\n\n' + lease + '\n\n' + ask + sign),
       why: 'A check-in; no earlier email to follow up on.',
     };
+  }
+
+  // The useful first lines of an email: no greeting, no quoted thread, no signature-length tail.
+  function emailSnippet(a, max) {
+    max = max || 180;
+    let t = String(a.body || a.notes || '').replace(/\r\n/g, '\n');
+    t = t.split(/\n\s*(?:On .{0,200}wrote:|From:|-{2,}\s*Original Message|>)/i)[0];
+    t = t.split(/\n\s*(?:best|best regards|kind regards|regards|thanks|thank you|cheers|sincerely)[,!.]?\s*(?:\n|$)/i)[0];
+    t = t.replace(/^\s*(hi|hello|hey|good (morning|afternoon))\b[^\n,]*,?\s*/i, '').replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max - 1).replace(/\s+\S*$/, '') + '…' : t;
+  }
+
+  // "Where things stand" on a deal or company, from its emails, notes, tasks and survey properties.
+  // data: { company, deal?, activities (this company's), properties (this deal's), contacts }. Returns
+  // { title, sections: [{ label, items: [text] }] } with empty sections left out.
+  function dealBrief(data, opts) {
+    const today = (opts && opts.today) || todayISO();
+    const c = data.company || {};
+    const d = data.deal || null;
+    const people = {};
+    (data.contacts || []).forEach((p) => (people[p.id] = p));
+    const who = (a) => {
+      const p = people[a.contactId];
+      return p ? [p.firstName, p.lastName].filter(Boolean).join(' ') : '';
+    };
+    const acts = (data.activities || []).filter((a) => a.date && (!d || !a.dealId || a.dealId === d.id));
+    const past = acts.filter((a) => a.type !== 'Task' && a.date <= today).sort((a, b) => b.date.localeCompare(a.date));
+    const emails = past.filter((a) => a.type === 'Email');
+    const sections = [];
+    const add = (label, items) => {
+      items = items.filter(Boolean);
+      if (items.length) sections.push({ label, items });
+    };
+
+    const status = [];
+    if (d) status.push(d.stage + (d.stageChangedAt ? ' since ' + fmtDate(String(d.stageChangedAt).slice(0, 10)) : ''));
+    else status.push([leadStage(c) && 'Lead: ' + leadStage(c), c.status].filter(Boolean).join(' · '));
+    const last = emails[0];
+    const subj = (a) => '"' + String(a.subject || '').replace(/^Reply:\s*/, '') + '"';
+    if (last && last.inbound) status.push((who(last) || 'They') + ' replied ' + fmtDate(last.date) + ' (' + subj(last) + '). Your move.');
+    else if (last && responded(last)) status.push('They replied to your ' + fmtDate(last.date) + ' email ' + subj(last) + '.');
+    else if (last) status.push('Waiting on them: you emailed ' + fmtDate(last.date) + ' ' + subj(last) + (parseNumber(last.opens) ? ', opened ' + parseNumber(last.opens) + 'x' : '') + ', no reply yet.');
+    if (past[0] && past[0] !== last) status.push('Last touch: ' + fmtDate(past[0].date) + ' · ' + past[0].type + ' · ' + (past[0].subject || ''));
+    if (!past.length) status.push('No activity logged yet.');
+    add('Where it stands', status);
+
+    add(
+      'Latest emails',
+      emails.slice(0, 3).map((a) => fmtDate(a.date) + (a.inbound ? ' · from ' + (who(a) || 'them') : ' · you') + ' · ' + subj(a) + (emailSnippet(a) ? ': ' + emailSnippet(a) : ''))
+    );
+
+    const myNotes = String((d || c).notes || '')
+      .split(/\n\s*\n/)
+      .map((t) => t.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 3);
+    const added = past.filter((a) => a.type === 'Note' || a.type === 'Meeting' || a.type === 'Call').slice(0, 3).map((a) => fmtDate(a.date) + ' · ' + a.type + ' · ' + (a.subject || '') + (a.notes && a.notes !== a.subject ? ': ' + emailSnippet({ notes: a.notes }, 160) : ''));
+    add('Latest notes', myNotes.concat(added));
+
+    add(
+      'Open tasks',
+      acts
+        .filter((a) => a.type === 'Task' && !a.done)
+        .sort((a, b) => (a.followUpDate || a.date).localeCompare(b.followUpDate || b.date))
+        .slice(0, 4)
+        .map((a) => (a.followUpDate || a.date) + ' ' + ((a.followUpDate || a.date) < today ? '(overdue) ' : '') + '· ' + a.subject)
+        .map((t) => t.replace(/^(\d{4}-\d{2}-\d{2})/, (m) => fmtDate(m)))
+    );
+
+    if (d) {
+      const props = data.properties || [];
+      const counts = {};
+      props.forEach((p) => (counts[p.status || 'Identified'] = (counts[p.status || 'Identified'] || 0) + 1));
+      add('Requirement', [
+        [dealSizeLabel(d), dealBudgetLabel(d), d.targetSubmarkets].filter(Boolean).join(' · '),
+        props.length ? props.length + ' buildings on the survey: ' + PROPERTY_STATUSES.filter((st) => counts[st]).map((st) => counts[st] + ' ' + st.toLowerCase()).join(', ') : '',
+      ]);
+      add('Key dates', [
+        d.targetOccupancy ? 'Target occupancy ' + fmtDate(d.targetOccupancy) : '',
+        d.targetClose ? 'Target execution ' + fmtDate(d.targetClose) : '',
+        d.repAgreementSigned ? (d.repAgreementExpires ? 'Rep agreement expires ' + fmtDate(d.repAgreementExpires) : '') : 'Rep agreement not signed',
+        c.leaseExpiration ? 'Current lease expires ' + fmtDate(c.leaseExpiration) : '',
+      ]);
+    } else {
+      add('Key dates', [c.leaseExpiration ? 'Lease expires ' + fmtDate(c.leaseExpiration) : '']);
+    }
+    return { title: d ? d.name : c.name, sections };
+  }
+
+  function briefText(brief) {
+    return [brief.title].concat(brief.sections.map((sec) => '\n' + sec.label + '\n' + sec.items.map((t) => '- ' + t).join('\n'))).join('\n');
   }
 
   function mailtoLink(to, subject, body) {
@@ -2286,6 +2384,9 @@
     fillTemplate,
     suggestTemplate,
     followUpDraft,
+    emailSnippet,
+    dealBrief,
+    briefText,
     mailtoLink,
     LIST_COMPANY_COLUMNS,
     planListSync,
@@ -2299,6 +2400,8 @@
     latestDataQuarter,
     collateralStale,
     RATE_BASES,
+    BUDGET_UNITS,
+    isMonthlyTotal,
     ACTIVITY_TYPES,
     planFollowUpTasks,
     PROPERTY_STATUSES,

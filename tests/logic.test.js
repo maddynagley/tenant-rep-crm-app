@@ -845,3 +845,39 @@ test('followUpDraft: deal stage, prior email, or a plain check-in', () => {
   assert.equal(closed.subject, 'Acme – checking in');
   assert.match(closed.body, /^Hi \[FirstName\],/);
 });
+
+test('budget as a total monthly rent', () => {
+  const d = { budgetUnit: 'Total per month', budgetRate: 5000, rateBasis: 'Full Service ($/SF/yr)', sfMax: 4000, termMonths: 36, escalationPct: 3, commissionPct: 4 };
+  const est = L.estimatedCommission(d);
+  assert.equal(Math.round(est.aggregateValue), Math.round(5000 * 12 * (1 + 1.03 + 1.0609)));
+  assert.equal(L.dealBudgetLabel(d), '$5,000/mo total Full Service');
+  const perSF = Object.assign({}, d, { budgetUnit: '', budgetRate: 30 });
+  assert.equal(Math.round(L.estimatedCommission(perSF).aggregateValue), Math.round(4000 * 30 * (1 + 1.03 + 1.0609)));
+  assert.equal(L.dealBudgetLabel(perSF), '$30/SF Full Service');
+});
+
+test('dealBrief: where things stand from emails, notes, tasks and survey', () => {
+  const company = { id: 'co1', name: 'Acme', leaseExpiration: '2027-06-30' };
+  const deal = { id: 'd1', companyId: 'co1', name: 'Acme HQ', stage: 'Touring', stageChangedAt: '2026-10-01T10:00:00Z', sfMin: 3000, sfMax: 4000, notes: 'Oct 20, 2026: Wants drive-in\n\nOct 1, 2026: Kickoff' };
+  const contacts = [{ id: 'p1', firstName: 'Pat', lastName: 'Lee' }];
+  const activities = [
+    { id: 'a1', type: 'Email', date: '2026-10-10', subject: 'Survey', opens: 2, outcome: 'Replied' },
+    { id: 'a2', type: 'Email', date: '2026-10-12', subject: 'Reply: Survey', inbound: true, contactId: 'p1', body: 'Hi Jordan,\nLet\'s tour the top two next week.\nThanks,\nPat\n\nOn Oct 10 you wrote:\n> old' },
+    { id: 'a3', type: 'Task', date: '2026-10-20', subject: 'Book tours' },
+    { id: 'a4', type: 'Note', date: '2026-10-05', subject: 'Call recap', notes: 'Needs 3 privates' },
+  ];
+  const properties = [{ status: 'Toured' }, { status: 'Toured' }, { status: 'Identified' }];
+  const b = L.dealBrief({ company, deal, activities, properties, contacts }, { today: '2026-10-26' });
+  const sec = (label) => (b.sections.find((s) => s.label === label) || { items: [] }).items.join(' | ');
+  assert.equal(b.title, 'Acme HQ');
+  assert.match(sec('Where it stands'), /Touring since Oct 1, 2026/);
+  assert.match(sec('Where it stands'), /Pat Lee replied Oct 12, 2026 \("Survey"\)\. Your move\./);
+  assert.match(sec('Latest emails'), /from Pat Lee · "Survey": Let's tour the top two next week\./);
+  assert.doesNotMatch(sec('Latest emails'), /old/);
+  assert.match(sec('Latest notes'), /^Oct 20, 2026: Wants drive-in/);
+  assert.match(sec('Latest notes'), /Note · Call recap: Needs 3 privates/);
+  assert.match(sec('Open tasks'), /Oct 20, 2026 \(overdue\) · Book tours/);
+  assert.match(sec('Requirement'), /3 buildings on the survey: 1 identified, 2 toured/);
+  assert.match(sec('Key dates'), /Rep agreement not signed/);
+  assert.match(L.briefText(b), /^Acme HQ\n\nWhere it stands\n- Touring/);
+});

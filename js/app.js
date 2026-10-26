@@ -172,8 +172,9 @@
       { key: 'power', label: 'Power (amps / volts)', asset: 'Industrial' },
       { key: 'requirements', label: 'Other requirements', type: 'textarea', wide: true },
       { section: 'Economics' },
-      { key: 'budgetRate', label: 'Target rent ($/SF) – low end, or the single number', type: 'number', step: '0.01' },
-      { key: 'budgetRateMax', label: 'Target rent ($/SF) – high end (if a range)', type: 'number', step: '0.01' },
+      { key: 'budgetUnit', label: 'Budget is', type: 'select', options: L.BUDGET_UNITS },
+      { key: 'budgetRate', label: 'Target rent ($/SF, or $/month total) – low end, or the single number', type: 'number', step: '0.01' },
+      { key: 'budgetRateMax', label: 'Target rent – high end (if a range)', type: 'number', step: '0.01' },
       { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
       { key: 'termMonths', label: 'Term (months)', type: 'number' },
       { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
@@ -444,7 +445,53 @@
 
   // Pencil-and-page button in a Notes card: opens a quick note that's added, dated, to the record's notes.
   function noteIcon(col, id) {
-    return `<button class="mail-icon more" data-action="quick-note" data-col="${col}" data-id="${esc(id)}" title="Add a note" aria-label="Add a note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h3"/></svg></button>`;
+    return `<button class="mail-icon" data-action="quick-note" data-col="${col}" data-id="${esc(id)}" title="Add a note" aria-label="Add a note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h3"/></svg></button>`;
+  }
+
+  // Notes card for a deal or company: your own notes, then notes added elsewhere (logged or synced from HubSpot).
+  function notesCard(col, rec, heading) {
+    const added = S.all('activities')
+      .filter((a) => a.type === 'Note' && (col === 'deals' ? a.dealId === rec.id || (a.companyId === rec.companyId && !a.dealId) : a.companyId === rec.id))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return `${heading === false ? '' : '<h2>Notes' + notesActions(col, rec.id) + '</h2>'}
+      <h3 class="notes-sub">My notes</h3>
+      ${rec.notes ? `<p class="pre">${esc(rec.notes)}</p>` : '<p class="muted">None yet. Use the page icon to add one.</p>'}
+      <h3 class="notes-sub">Added notes <span class="muted">${added.length || ''}</span></h3>
+      ${
+        added.length
+          ? `<ul class="plain added-notes">${added
+              .slice(0, 4)
+              .map((a) => `<li><span class="muted">${esc(L.fmtDate(a.date))}${a.source ? ' · ' + esc(a.source) : ''}</span> <a href="#" data-action="edit" data-col="activities" data-id="${esc(a.id)}">${esc(a.subject)}</a>${a.notes && a.notes !== a.subject ? `<div class="sub">${esc(L.emailSnippet({ notes: a.notes }, 220))}</div>` : ''}</li>`)
+              .join('')}${added.length > 4 ? `<li class="muted">+ ${added.length - 4} more in Activity</li>` : ''}</ul>`
+          : '<p class="muted">None. Notes you log as an activity, or from HubSpot, show here.</p>'
+      }`;
+  }
+  function notesActions(col, id) {
+    return `<span class="more icon-row"><button class="mail-icon" data-action="summarize" data-col="${col}" data-id="${esc(id)}" title="Summarize where things stand" aria-label="Summarize"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/><path d="M18 14l1 2.2 2.2 1-2.2 1L18 20.4l-1-2.2-2.2-1 2.2-1z"/></svg></button>${noteIcon(col, id)}</span>`;
+  }
+
+  function openBrief(col, id) {
+    const deal = col === 'deals' ? S.get('deals', id) : null;
+    const company = S.get('companies', deal ? deal.companyId : id);
+    if (!company) return;
+    const brief = L.dealBrief(
+      {
+        company,
+        deal,
+        activities: S.all('activities').filter((a) => a.companyId === company.id),
+        properties: deal ? S.all('properties').filter((p) => p.dealId === deal.id) : [],
+        contacts: S.all('contacts').filter((p) => p.companyId === company.id),
+      },
+      { today: L.todayISO() }
+    );
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" class="brief">
+      <header><h2>Where things stand: ${esc(brief.title)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="brief-body">${brief.sections.map((sec) => `<h3 class="notes-sub">${esc(sec.label)}</h3><ul>${sec.items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`).join('')}</div>
+      <footer><span class="spacer"></span><button type="button" class="btn" data-action="copy-text" data-text="${esc(L.briefText(brief))}">Copy summary</button><button type="button" class="btn primary" data-action="close-modal">Done</button></footer>
+    </form>`;
+    dlg.showModal();
   }
 
   function openQuickNote(col, id) {
@@ -1601,7 +1648,7 @@
           <dl class="info">${info.map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('')}</dl>
         </section>
       </div>
-      <section class="card"><h2>Notes ${noteIcon('companies', id)}</h2>${c.notes ? `<p class="pre">${esc(c.notes)}</p>` : '<p class="muted">No notes.</p>'}</section>
+      <section class="card">${notesCard('companies', c)}</section>
       ${sharedListCard(c)}
       ${criticalDatesCard(id)}
 
@@ -1930,7 +1977,7 @@
           <p class="sub">my share · ${L.fmtMoney((est.myShare * prob) / 100)} weighted at ${prob}%</p>
           <table class="tbl compact"><tbody>
             <tr><td>Deal SF</td><td class="right">${esc(L.fmtNumber(d.estSF || d.sfMax || d.sfMin) || '—')}</td></tr>
-            <tr><td>Rent</td><td class="right">${d.budgetRate ? '$' + esc(d.budgetRate) + esc(rateUnit(d.rateBasis)) : '—'}</td></tr>
+            <tr><td>Rent</td><td class="right">${d.budgetRate ? (L.isMonthlyTotal(d) ? '$' + esc(L.fmtNumber(d.budgetRate)) + '/mo total' : '$' + esc(d.budgetRate) + esc(rateUnit(d.rateBasis))) : '—'}</td></tr>
             <tr><td>Term</td><td class="right">${d.termMonths ? esc(d.termMonths) + ' mo' : '—'}</td></tr>
             <tr><td>Escalations</td><td class="right">${d.escalationPct ? esc(d.escalationPct) + '%/yr' : '—'}</td></tr>
             <tr><td>Free rent</td><td class="right">${d.freeRentMonths ? esc(d.freeRentMonths) + ' mo' : '—'}</td></tr>
@@ -1959,10 +2006,10 @@
                   </tbody></table>
                   ${r.hasActuals ? '' : '<p class="hint">Edit the deal and fill in “Closed deal results” to record actual numbers.</p>'}`;
                 })()
-              : `<h2>Notes ${noteIcon('deals', id)}</h2>`
+              : ''
           }
-          ${d.stage === 'Closed Won' ? `<h2>Notes ${noteIcon('deals', id)}</h2>` : ''}
-          ${d.notes ? `<p class="pre">${esc(d.notes)}</p>` : '<p class="muted">No notes.</p>'}
+          ${d.stage === 'Closed Won' ? `<h2 class="notes-after">Notes${notesActions('deals', id)}</h2>` : `<h2>Notes${notesActions('deals', id)}</h2>`}
+          ${notesCard('deals', d, false)}
           ${d.hubspotUrl ? `<p><a href="${esc(d.hubspotUrl)}" target="_blank" rel="noopener">Open in HubSpot ↗</a></p>` : ''}
         </section>
       </div>
@@ -3325,6 +3372,9 @@
           return openMerge(d.company);
         case 'call-card':
           return openCallCard(d.company, d.contact);
+        case 'summarize':
+          e.preventDefault();
+          return openBrief(d.col, d.id);
         case 'quick-note':
           e.preventDefault();
           return openQuickNote(d.col, d.id);
@@ -3574,7 +3624,7 @@
       const entry = L.fmtDate(L.todayISO()) + ': ' + note;
       $('#modal').close();
       S.upsert(f.dataset.col, { id: rec.id, notes: rec.notes ? entry + '\n\n' + rec.notes : entry });
-      toast('Note added.');
+      toast('Note added to My notes.');
     } else if (e.target.id === 'record-form') {
       e.preventDefault();
       saveForm(e.target);
