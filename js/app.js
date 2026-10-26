@@ -23,6 +23,7 @@
     {
       companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '' },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
+      sharedList: { sort: 'score', dir: '' },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
       comps: { tab: 'dates', q: '', asset: 'All' },
@@ -1236,6 +1237,16 @@
       lastTouch: lastTouchCol,
       score: { get: (r) => r.score, desc: true },
     },
+    sharedList: {
+      score: { get: (r) => L.parseNumber(r.c.research && r.c.research.score), desc: true },
+      name: { get: (r) => r.c.name },
+      status: { get: (r) => rankIn(LIST_STATUSES, r.c.listStatus || 'Researching') },
+      lead: { get: (r) => r.c.listLead },
+      contactedBy: { get: (r) => r.c.contactedBy },
+      contact: { get: (r) => (r.p ? contactName(r.p) : '') },
+      nextStep: { get: (r) => r.c.nextStepDate || r.c.nextStep },
+      lastTouch: { get: (r) => r.c.lastContacted || '0000' },
+    },
   };
 
   // ----- leads -----
@@ -1370,7 +1381,9 @@
     const rows = all
       .filter((c) => (f.listStatus ? (f.listStatus === 'Removed' ? c.listRemoved : !c.listRemoved && c.listStatus === f.listStatus) : !c.listRemoved))
       .filter((c) => !q || [c.name, c.industry, c.listNotes, c.nextStep, c.hqCity, c.usHQ].join(' ').toLowerCase().includes(q))
-      .sort((a, b) => (L.parseNumber(b.research && b.research.score) || 0) - (L.parseNumber(a.research && a.research.score) || 0) || a.name.localeCompare(b.name));
+      .map((c) => ({ c, p: c.listPrimaryContact ? S.get('contacts', c.listPrimaryContact) : null }));
+    const ls = state.sharedList;
+    const sorted = L.sortRows(rows, SORT_COLUMNS.sharedList, SORT_COLUMNS.sharedList[ls.sort] ? ls.sort : 'score', ls.dir, byName);
     const counts = {};
     all.forEach((c) => {
       const k = c.listRemoved ? 'Removed' : c.listStatus || 'Researching';
@@ -1391,9 +1404,8 @@
       </div>
       ${
         rows.length
-          ? `<div class="table-wrap"><table class="tbl"><thead><tr><th class="right">Score</th><th>Company</th><th>Status</th><th>Lead</th><th>Contacted by</th><th>Primary contact</th><th>Next step</th><th>Last touch</th></tr></thead><tbody>${rows
-              .map((c) => {
-                const p = c.listPrimaryContact ? S.get('contacts', c.listPrimaryContact) : null;
+          ? `<div class="table-wrap"><table class="tbl"><thead><tr>${sortHead('sharedList', 'score', 'Score', 'right')}${sortHead('sharedList', 'name', 'Company')}${sortHead('sharedList', 'status', 'Status')}${sortHead('sharedList', 'lead', 'Lead')}${sortHead('sharedList', 'contactedBy', 'Contacted by')}${sortHead('sharedList', 'contact', 'Primary contact')}${sortHead('sharedList', 'nextStep', 'Next step')}${sortHead('sharedList', 'lastTouch', 'Last touch')}</tr></thead><tbody>${sorted
+              .map(({ c, p }) => {
                 return `<tr data-href="#/company/${esc(c.id)}">
                   <td class="right">${c.research && c.research.score ? `<strong>${esc(c.research.score)}</strong>` : '<span class="muted">—</span>'}</td>
                   <td><strong>${esc(c.name)}</strong> ${c.listRemoved ? badge('Removed from shared list', 'red') : ''}<div class="sub">${esc([c.industry, [c.hqCity, c.hqState || c.hqCountry].filter(Boolean).join(', ')].filter(Boolean).join(' · '))}</div></td>
