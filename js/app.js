@@ -1321,7 +1321,7 @@
             .map(({ c, last }) => {
               const p = (contactsBy[c.id] || []).slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker') || Boolean(b.email) - Boolean(a.email))[0];
               return `<tr data-href="#/company/${esc(c.id)}">
-              <td><strong>${esc(c.name)}</strong> ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
+              <td><strong>${esc(c.name)}</strong> ${emailIcon(c.id, p ? p.id : '')} ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
               <td><select class="inline" data-lead-stage="${esc(c.id)}">${options(L.LEAD_STAGES, L.leadStage(c))}</select></td>
               <td><select class="inline" data-lead-temp="${esc(c.id)}">${options(L.LEAD_TEMPS, c.leadTemp, '—')}</select></td>
               <td class="right">${c.sfOccupied ? esc(L.fmtNumber(c.sfOccupied)) : '<span class="muted">—</span>'}</td>
