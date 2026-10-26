@@ -142,6 +142,13 @@ main { margin: 52px 0 0 var(--nav-w); padding: 20px 24px 60px; max-width: 1400px
 .link:hover { text-decoration: underline; }
 .icon-btn { background: none; border: 0; cursor: pointer; color: var(--muted); font-size: 14px; padding: 4px 6px; border-radius: 6px; line-height: 1; }
 .icon-btn:hover { background: var(--gray-soft); color: var(--text); text-decoration: none; }
+.mail-icon { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 26px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--accent); cursor: pointer; }
+.mail-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mail-icon:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+h1 .mail-icon { width: 30px; height: 30px; margin-left: 6px; vertical-align: 4px; }
+h1 .mail-icon svg { width: 17px; height: 17px; }
+.draft-to { display: flex; gap: 6px; align-items: center; }
+.draft-to select { flex: 1; min-width: 0; }
 input, select, textarea {
   font: inherit; color: var(--text); background: var(--panel);
   border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; min-height: 34px; width: 100%;

@@ -433,6 +433,15 @@
       (p.email ? `<button class="btn small" data-action="draft-email" ${attrs}${opts.step ? ` data-step="${esc(opts.step)}"` : ''}${opts.reply ? ` data-reply="${esc(opts.reply)}"` : ''}>${esc(opts.emailLabel || 'Email ' + p.firstName)}</button>` : '');
   }
 
+  // Envelope next to a company name: opens a recommended follow-up email, ready to copy or open in Outlook.
+  function emailIcon(companyId, contactId, opts) {
+    opts = opts || {};
+    const p = companyId && reachContact(companyId, contactId);
+    const to = p && p.email ? p : S.all('contacts').find((x) => x.companyId === companyId && x.email && !L.isColleague(x, myEmailDomain()));
+    if (!to) return '';
+    return `<button class="mail-icon" data-action="draft-email" data-recommended="1" data-company="${esc(companyId)}" data-contact="${esc(to.id)}"${opts.deal ? ` data-deal="${esc(opts.deal)}"` : ''}${opts.reply ? ` data-reply="${esc(opts.reply)}"` : ''} title="Recommended follow-up email to ${esc(contactName(to))}" aria-label="Draft follow-up email"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/></svg></button>`;
+  }
+
   // Automatic follow-up tasks after an initial email (see L.planFollowUpTasks). Runs after every sync or logged touch.
   function runWorkflows() {
     const s = S.settings();
@@ -872,7 +881,7 @@
       const p = S.get('contacts', item.contactId);
       return `<li>
         <div class="fu-body">
-          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${leadBadge(c)}</div>
+          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${emailIcon(c.id, item.contactId)} ${leadBadge(c)}</div>
           <div class="sub">${esc(item.why)}${p ? ' · ' + esc(contactName(p)) + (p.title ? ', ' + esc(p.title) : '') : ''}</div>
         </div>
         <div class="todo-actions">${reachLink(item)} ${touchButtons(c.id, item.contactId)}</div>
@@ -884,7 +893,7 @@
       const p = S.get('contacts', item.contactId);
       return `<li>
         <div class="fu-body">
-          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${leadBadge(c)}</div>
+          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${emailIcon(c.id, item.contactId, { reply: item.activityId })} ${leadBadge(c)}</div>
           <div class="sub">${esc(item.why)}${p ? ' · ' + esc(contactName(p)) : ''}</div>
         </div>
         <div class="todo-actions">${reachLink(item)}
@@ -913,7 +922,7 @@
     const dealItems = plan.deals.slice(0, 6).map(
       (item) => `<li>
         <div class="fu-body">
-          <div><a href="#/deal/${esc(item.dealId)}"><strong>${esc(item.title)}</strong></a> ${badge(item.stage, 'blue')}</div>
+          <div><a href="#/deal/${esc(item.dealId)}"><strong>${esc(item.title)}</strong></a> ${emailIcon(item.companyId, '', { deal: item.dealId })} ${badge(item.stage, 'blue')}</div>
           <div class="sub">${esc(item.why)}</div>
         </div>
         <div class="todo-actions"><button class="btn small" data-action="new" data-col="activities" data-company="${esc(item.companyId)}" data-deal="${esc(item.dealId)}">Log update</button>
@@ -1526,7 +1535,7 @@
     return `
       <div class="crumbs"><a href="#/companies">Companies</a> /</div>
       <div class="page-head">
-        <div><h1>${esc(c.name)}</h1>
+        <div><h1>${esc(c.name)} ${emailIcon(id, '')}</h1>
           <div class="head-badges">${!L.isProspect(c) ? badge(c.relationship, 'blue') + ' ' : ''}${assetBadge(c.assetClass)} ${statusBadge(c.status)} ${leadBadge(c)} ${c.priority ? badge('Priority ' + c.priority, 'prio') : ''} ${scoreChip(score)}</div>
         </div>
         <div class="actions">
@@ -1875,7 +1884,7 @@
     return `
       <div class="crumbs"><a href="#/pipeline">Pipeline</a> / ${linkCompany(d.companyId)} /</div>
       <div class="page-head">
-        <div><h1>${esc(d.name)}</h1><div class="head-badges">${assetBadge(d.assetClass)} ${badge(d.dealType, 'gray')} ${badge(d.stage, 'blue')} ${L.dealLXD(d) ? badge('LXD ' + L.fmtDate(L.dealLXD(d)), 'amber') : d.stage === 'Closed Won' ? badge('Add LXD', 'red') : ''}</div>
+        <div><h1>${esc(d.name)} ${emailIcon(d.companyId, '', { deal: id })}</h1><div class="head-badges">${assetBadge(d.assetClass)} ${badge(d.dealType, 'gray')} ${badge(d.stage, 'blue')} ${L.dealLXD(d) ? badge('LXD ' + L.fmtDate(L.dealLXD(d)), 'amber') : d.stage === 'Closed Won' ? badge('Add LXD', 'red') : ''}</div>
           ${d.partnerBrokers || d.otherBrokers ? `<div class="sub">With ${esc([d.partnerBrokers, d.otherBrokers].filter(Boolean).join(' · also '))}</div>` : ''}</div>
         <div class="actions">
           <button class="btn" data-action="new" data-col="activities" data-company="${esc(d.companyId)}" data-deal="${esc(id)}" data-task="1">+ Task</button>
@@ -2424,12 +2433,12 @@
 
   // ----- draft email from a template -----
 
-  function draftContext(companyId, contactId) {
+  function draftContext(companyId, contactId, dealId) {
     const c = S.get('companies', companyId) || {};
     const p = S.get('contacts', contactId) || {};
-    const deal = S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
+    const deal = S.get('deals', dealId) || S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
     const st = S.settings();
-    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, today: L.todayISO() };
+    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, deal, today: L.todayISO() };
   }
 
   // Who to call and their numbers, with click-to-call, copy, and logging the call.
@@ -2459,7 +2468,9 @@
     dlg.showModal();
   }
 
-  function openDraft(companyId, contactId, step, replyId) {
+  const REC_DRAFT = '__recommended';
+  function openDraft(companyId, contactId, step, replyId, opts) {
+    opts = opts || {};
     const c = S.get('companies', companyId);
     if (!c) return;
     const people = S.all('contacts').filter((p) => p.companyId === companyId && p.email);
@@ -2469,35 +2480,50 @@
     const dlg = $('#modal');
     const reply = S.get('activities', replyId);
     if (dlg.open) dlg.close();
-    dlg.innerHTML = `<form method="dialog" id="draft-form" data-company="${esc(companyId)}" data-reply-subject="${esc(reply ? 'RE: ' + String(reply.subject || '').replace(/^(re|fw|fwd|reply):\s*/gi, '') : '')}">
+    dlg.innerHTML = `<form method="dialog" id="draft-form" data-company="${esc(companyId)}" data-deal="${esc(opts.dealId || '')}" data-reply="${esc(reply ? reply.id : '')}" data-reply-subject="${esc(reply ? 'RE: ' + String(reply.subject || '').replace(/^(re|fw|fwd|reply):\s*/gi, '') : '')}">
       <header><h2>Draft email to ${esc(c.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
       ${
-        !templates.length
-          ? `<p class="hint">No templates yet. Add them under Marketing → Email templates.</p>`
-          : !people.length
-            ? `<p class="hint">No contact with an email address at ${esc(c.name)} yet. Add one first.</p>`
-            : `<div class="form-grid">
-          <label>To<select name="contact">${options(people.map((p) => ({ value: p.id, label: contactName(p) + ' <' + p.email + '>' })), contact && contact.id)}</select></label>
-          <label>Template<select name="template">${options(templates.map((t) => ({ value: t.id, label: t.name + ' (' + t.step + ')' })), suggested && suggested.id)}</select></label>
+        !people.length
+          ? `<p class="hint">No contact with an email address at ${esc(c.name)} yet. Add one first.</p>`
+          : `<div class="form-grid">
+          <label>To<span class="draft-to"><select name="contact">${options(people.map((p) => ({ value: p.id, label: contactName(p) + ' <' + p.email + '>' })), contact && contact.id)}</select><button type="button" class="btn small" data-action="copy-draft-to" title="Copy the email address">Copy</button></span></label>
+          <label>Template<select name="template">${options([{ value: REC_DRAFT, label: 'Recommended follow-up' }].concat(templates.map((t) => ({ value: t.id, label: t.name + ' (' + t.step + ')' }))), opts.recommended || !suggested ? REC_DRAFT : suggested.id)}</select></label>
+          <p class="hint wide" id="draft-why"></p>
           <label class="wide">Subject<input name="subject" /></label>
           <label class="wide">Body<textarea name="body" rows="14"></textarea></label>
           <p class="hint wide">Anything in [brackets] is missing from the CRM. Fill it in here, or on the company, before sending.</p>
         </div>`
       }
       <footer><span class="spacer"></span>
-        ${templates.length && people.length ? '<button type="button" class="btn" data-action="copy-draft">Copy text</button><a class="btn primary" id="draft-open" href="#">Open in Outlook</a>' : '<button type="button" class="btn" data-action="close-modal">Close</button>'}
+        ${people.length ? '<button type="button" class="btn" data-action="copy-draft">Copy text</button><a class="btn primary" id="draft-open" href="#">Open in Outlook</a>' : '<button type="button" class="btn" data-action="close-modal">Close</button>'}
       </footer>
     </form>`;
     dlg.showModal();
-    if (templates.length && people.length) fillDraft();
+    if (people.length) fillDraft();
   }
 
   function fillDraft() {
     const f = $('#draft-form');
-    const t = S.get('templates', f.elements.template.value);
-    const ctx = draftContext(f.dataset.company, f.elements.contact.value);
-    f.elements.subject.value = f.dataset.replySubject || L.fillTemplate(t.subject, ctx);
-    f.elements.body.value = L.fillTemplate(t.body, ctx);
+    const ctx = draftContext(f.dataset.company, f.elements.contact.value, f.dataset.deal);
+    let draft;
+    if (f.elements.template.value === REC_DRAFT) {
+      // The email being followed up: the one named, else the last one you sent them.
+      const lastEmail =
+        S.get('activities', f.dataset.reply) ||
+        S.all('activities')
+          .filter((a) => a.companyId === f.dataset.company && a.type === 'Email' && !a.inbound && a.date && a.date <= L.todayISO())
+          .sort((a, b) => b.date.localeCompare(a.date))[0];
+      draft = L.followUpDraft(Object.assign({ lastEmail }, ctx));
+      // A deal note starts its own thread; a prospect follow-up stays in the earlier one.
+      if (!(ctx.deal && L.OPEN_STAGES.includes(ctx.deal.stage)) && f.dataset.replySubject) draft.subject = f.dataset.replySubject;
+    } else {
+      const t = S.get('templates', f.elements.template.value);
+      draft = { subject: f.dataset.replySubject || L.fillTemplate(t.subject, ctx), body: L.fillTemplate(t.body, ctx), why: '' };
+    }
+    f.elements.subject.value = draft.subject;
+    f.elements.body.value = draft.body;
+    $('#draft-why').textContent = draft.why;
+    $('#draft-why').hidden = !draft.why;
     updateDraftLink();
   }
   function updateDraftLink() {
@@ -3166,7 +3192,7 @@
       // Remember which template this email came from, so it's tagged when HubSpot logs it (or when you tap ✓ Emailed).
       const f = $('#draft-form');
       const t = S.get('templates', f.elements.template.value);
-      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : '', pendingTemplateAt: L.todayISO() });
+      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : f.elements.template.value === REC_DRAFT ? 'Recommended follow-up' : '', pendingTemplateAt: L.todayISO() });
       setTimeout(() => $('#modal').close(), 300);
       return;
     }
@@ -3277,7 +3303,12 @@
           return openCallCard(d.company, d.contact);
         case 'draft-email':
           e.preventDefault();
-          return openDraft(d.company, d.contact, d.step, d.reply);
+          return openDraft(d.company, d.contact, d.step, d.reply, { recommended: Boolean(d.recommended), dealId: d.deal });
+        case 'copy-draft-to': {
+          const p = S.get('contacts', $('#draft-form').elements.contact.value);
+          if (p) navigator.clipboard.writeText(p.email).then(() => toast('Copied ' + p.email + '.'));
+          return;
+        }
         case 'copy-draft': {
           const f = $('#draft-form');
           navigator.clipboard.writeText('Subject: ' + f.elements.subject.value + '\n\n' + f.elements.body.value).then(() => toast('Copied. Paste it into Outlook.'));

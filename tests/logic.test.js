@@ -825,3 +825,23 @@ test('sortRows: column sort in either direction, blanks last', () => {
   assert.deepEqual(names(L.sortRows(rows, grouped, 'exp', 'desc')), ['Birch', 'Acme', 'Uptown']);
   assert.equal(rows[0].name, 'Acme', 'input not mutated');
 });
+
+test('followUpDraft: deal stage, prior email, or a plain check-in', () => {
+  const company = { name: 'Acme', building: 'Uptown Tower', submarket: 'Midtown', leaseExpiration: '2027-06-30' };
+  const contact = { firstName: 'Pat' };
+  const me = { name: 'Jordan Lee', firm: 'Firm' };
+  const today = '2026-10-26';
+  const viaEmail = L.followUpDraft({ company, contact, me, today, lastEmail: { subject: 'Re: Fw: Uptown Tower options', date: '2026-10-09', opens: 5 } });
+  assert.equal(viaEmail.subject, 'RE: Uptown Tower options');
+  assert.match(viaEmail.body, /^Hi Pat,/);
+  assert.match(viaEmail.body, /Following up on my note from Oct 9, 2026/);
+  assert.match(viaEmail.body, /Uptown Tower coming up in June 2027, there's still time/);
+  assert.match(viaEmail.body, /Best,\nJordan$/);
+  assert.match(viaEmail.why, /opened 5 times/);
+  const viaDeal = L.followUpDraft({ company, contact, me, today, deal: { name: 'Acme relocation', stage: 'Touring' } });
+  assert.equal(viaDeal.subject, 'Acme relocation – next steps');
+  assert.match(viaDeal.body, /Thanks for making the time to tour/);
+  const closed = L.followUpDraft({ company, contact: {}, me, today, deal: { name: 'Old', stage: 'Closed Won' } });
+  assert.equal(closed.subject, 'Acme – checking in');
+  assert.match(closed.body, /^Hi \[FirstName\],/);
+});

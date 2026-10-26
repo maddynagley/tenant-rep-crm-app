@@ -1252,6 +1252,56 @@
     return byStep('Intro') || active[0] || null;
   }
 
+  // A ready-to-send follow-up for a company, written from where things stand: the open deal's stage, or the last
+  // email you sent and the lease timing. ctx: { company, contact, me, deal, lastEmail, today, partner }.
+  // Returns { subject, body, why }. Missing details show as [brackets], like templates.
+  function followUpDraft(ctx) {
+    const c = ctx.company || {};
+    const deal = ctx.deal && OPEN_STAGES.includes(normalizeDealStage(ctx.deal.stage)) ? ctx.deal : null;
+    const last = ctx.lastEmail;
+    const months = c.leaseExpiration ? monthsUntil(c.leaseExpiration, ctx.today) : null;
+    const sign = '\n\nBest,\n{MyFirstName}';
+    const fill = (t) => fillTemplate(t, ctx);
+    const reSubject = (subj) => 'RE: ' + String(subj || '').replace(/^\s*((re|fw|fwd|reply)\s*:\s*)+/gi, '').trim();
+    if (deal) {
+      const stage = normalizeDealStage(deal.stage);
+      const lines = {
+        'Intro Call': 'Thanks again for the time to talk through your space plans. As a next step, I\'ll pull together a survey of options that fit what you described. Is there anything you\'d add to the requirement (size, location, budget or timing) before I send it over?',
+        'Market Survey': 'Following up on the market survey. Did any of the buildings stand out? I\'m happy to set up tours for the ones you like, or widen the search if nothing fits yet.',
+        Touring: 'Thanks for making the time to tour. I\'d love your take on the buildings we saw. If one or two rose to the top, I can request proposals from the landlords so we can compare real numbers.',
+        RFP: 'Quick update on the proposals: I\'m putting the landlord responses side by side so we can compare rent, concessions and total cost. Do you have time this week to walk through them together?',
+        LOI: 'Checking in on the LOI. Let me know if you have any questions on the terms, or anything you\'d like me to push back on before we respond to the landlord.',
+        'Lease Negotiation': 'Checking in on the lease. I\'m tracking the open points with the landlord and will keep things moving. Anything you\'d like me to raise in the next round?',
+      };
+      return {
+        subject: fill(deal.name ? deal.name + ' – next steps' : '{Company} – next steps'),
+        body: fill('Hi {FirstName},\n\n' + (lines[stage] || lines['Intro Call']) + sign),
+        why: 'Follow-up for the ' + stage + ' stage of ' + (deal.name || 'the deal') + '.',
+      };
+    }
+    const lease =
+      months !== null && months >= 0 && months <= 9
+        ? 'With your lease at {Building} coming up in {LeaseExpiration}, there\'s still time to line up good options, and the sooner we start, the more leverage you\'ll have with the landlord.'
+        : months !== null && months > 9 && months <= 18
+        ? 'With your lease at {Building} coming up in {LeaseExpiration}, you\'re inside the window when most tenants start planning, and starting early keeps your options and leverage open.'
+        : months !== null && months > 18 && months <= 36
+          ? 'Your lease at {Building} runs to {LeaseExpiration}. That\'s still a way out, but a quick look at the market now makes it easier to plan budget and timing.'
+          : 'I\'d love to hear how the space at {Building} is working for your team.';
+    const ask = 'Would you have 15 minutes next week for a quick call? I can share what we\'re seeing in {Submarket} (recent deals, rents and concessions), whether or not a move is on the table.';
+    if (last) {
+      return {
+        subject: reSubject(last.subject),
+        body: fill('Hi {FirstName},\n\nFollowing up on my note from ' + fmtDate(last.date) + '. ' + lease + '\n\n' + ask + sign),
+        why: 'Follow-up to your ' + fmtDate(last.date) + ' email' + (parseNumber(last.opens) ? ', opened ' + parseNumber(last.opens) + (parseNumber(last.opens) === 1 ? ' time' : ' times') : '') + '.',
+      };
+    }
+    return {
+      subject: fill('{Company} – checking in'),
+      body: fill('Hi {FirstName},\n\n' + lease + '\n\n' + ask + sign),
+      why: 'A check-in; no earlier email to follow up on.',
+    };
+  }
+
   function mailtoLink(to, subject, body) {
     return 'mailto:' + encodeURIComponent(to || '').replace(/%40/g, '@') + '?subject=' + encodeURIComponent(subject || '') + '&body=' + encodeURIComponent(body || '');
   }
@@ -2235,6 +2285,7 @@
     TEMPLATE_STEPS,
     fillTemplate,
     suggestTemplate,
+    followUpDraft,
     mailtoLink,
     LIST_COMPANY_COLUMNS,
     planListSync,
