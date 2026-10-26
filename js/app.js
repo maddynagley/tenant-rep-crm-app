@@ -1798,7 +1798,7 @@
               .map((d) => {
                 const est = L.estimatedCommission(d);
                 return `<a class="deal-card" draggable="true" data-deal="${esc(d.id)}" href="#/deal/${esc(d.id)}">
-                  <div class="dc-title">${esc(d.name)}</div>
+                  <div class="dc-title"><span>${esc(d.name)}</span>${L.OPEN_STAGES.includes(d.stage) ? emailIcon(d.companyId, '', { deal: d.id }) : ''}</div>
                   <div class="sub">${esc(companyName(d.companyId))}${d.partnerBrokers ? ' · with ' + esc(d.partnerBrokers) : ''}</div>
                   <div class="dc-meta">${assetBadge(d.assetClass)} ${L.dealSizeLabel(d) ? `<span>${esc(L.dealSizeLabel(d))}${L.dealOfficeLabel(d) ? ' · ' + esc(L.dealOfficeLabel(d)) : ''}</span>` : badge('Add RSF', 'amber')}</div>
                   <div class="dc-meta"><strong>${L.fmtMoney(est.myShare, true)}</strong><span class="muted">${L.dealProbability(d)}%</span>${d.targetClose ? `<span class="muted">${esc(L.fmtDate(d.targetClose))}</span>` : ''}</div>
@@ -1815,7 +1815,7 @@
         ${sorted
           .map((d) => {
             const est = L.estimatedCommission(d);
-            return `<tr data-href="#/deal/${esc(d.id)}"><td><strong>${esc(d.name)}</strong><div class="sub">${esc(companyName(d.companyId))}</div></td>
+            return `<tr data-href="#/deal/${esc(d.id)}"><td><strong>${esc(d.name)}</strong> ${L.OPEN_STAGES.includes(d.stage) ? emailIcon(d.companyId, '', { deal: d.id }) : ''}<div class="sub">${esc(companyName(d.companyId))}</div></td>
               <td>${esc(d.dealType)}</td><td>${assetBadge(d.assetClass)}</td><td>${esc(d.stage)}</td>
               <td class="right nowrap">${esc(L.dealSizeLabel(d)) || badge('Add RSF', 'amber')}${L.dealOfficeLabel(d) ? `<div class="sub">${esc(L.dealOfficeLabel(d))}</div>` : ''}</td>
               <td class="right">${L.fmtMoney(est.aggregateValue, true)}</td>
