@@ -482,3 +482,8 @@ input.cell-input { height: 28px; font-size: 13px; padding: 0 6px; width: auto; m
 .fill-in-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .fill-in-days .btn { font-weight: 500; }
 @media (max-width: 640px) { .fill-ins-grid { grid-template-columns: 1fr; } }
+
+/* "?" help toggle */
+.help-btn { width: 30px; height: 30px; align-self: center; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--accent); font-weight: 700; font-size: 14px; cursor: pointer; line-height: 1; }
+.help-btn:hover, .help-btn.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+.help-panel ul.plain li { margin: 3px 0; }

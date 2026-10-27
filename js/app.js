@@ -1592,6 +1592,27 @@
       : esc(d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }));
   }
 
+  // The "?" next to Import comps: when to import and when to match a file.
+  function compsHelp() {
+    return `<section class="card help-panel"><h2>Import comps or Match a file? <button class="link more" data-action="toggle-comps-help">Close</button></h2>
+      <div class="grid2">
+        <div><h3 class="notes-sub">Import comps: add new information</h3>
+          <p>Use it whenever a new comp sheet arrives (e.g. next quarter's file).</p>
+          <ul class="plain"><li>Adds new deals, and fills in or updates comps it recognizes as the same deal.</li><li>Never deletes anything.</li><li>Anything that looks like a duplicate is held for your approval.</li><li>A comp it can't recognize (like a badly saved copy from an old import) is left alone.</li></ul></div>
+        <div><h3 class="notes-sub">Match a file: make the CRM agree with a sheet</h3>
+          <p>Use it to clean up when the CRM's comps don't line up with a sheet. The sheet is the source of truth.</p>
+          <ul class="plain"><li>Pairs each row with the CRM comp for the same tenant and building, even if its terms were saved wrong.</li><li>Shows every field that differs (CRM → file) and lets you correct it.</li><li>Finds leftover copies of the same tenant and offers to delete them.</li><li>Lists comps that aren't in the file, kept unless you tick them.</li></ul></div>
+      </div>
+      <div class="table-wrap"><table class="tbl compact"><thead><tr><th>Situation</th><th>Use</th></tr></thead><tbody>
+        <tr><td>A new comp sheet arrives</td><td>Import comps</td></tr>
+        <tr><td>You updated a few rows in a sheet you already imported</td><td>Import comps</td></tr>
+        <tr><td>The CRM's comps don't line up with a sheet and re-importing didn't fix it</td><td>Match a file</td></tr>
+        <tr><td>You suspect duplicates or wrong terms from an old import</td><td>Match a file</td></tr>
+      </tbody></table></div>
+      <p class="hint">Rule of thumb: Import for new sheets; Match a file only to fix a mess.</p>
+    </section>`;
+  }
+
   function viewComps() {
     const f = state.comps;
     const today = L.todayISO();
@@ -1633,7 +1654,7 @@
       <div class="sub">Columns like Building, Tenant, SF, Signed, Term, Rent, Escalations, Free Rent and TI are matched automatically. You review them before anything is saved.</div></div>`;
     return `
       <div class="page-head"><h1>Comps & Critical Dates</h1>
-        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="btn" data-action="pick-file" data-kind="comps">Import comps</button><button class="btn" data-action="pick-file" data-kind="compsAlign" title="Compare the CRM with a comp sheet and fix what differs">Match a file</button><button class="btn" data-action="export-comps">Export comps</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
+        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="help-btn${state.comps.help ? ' on' : ''}" data-action="toggle-comps-help" title="When to use Import comps vs Match a file" aria-expanded="${state.comps.help ? 'true' : 'false'}" aria-label="Help: importing comps">?</button><button class="btn" data-action="pick-file" data-kind="comps">Import comps</button><button class="btn" data-action="pick-file" data-kind="compsAlign" title="Compare the CRM with a comp sheet and fix what differs">Match a file</button><button class="btn" data-action="export-comps">Export comps</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
       </div>
       <div class="toolbar">
         <div class="seg">
@@ -1642,6 +1663,7 @@
         </div>
         ${f.tab === 'comps' ? assetTabs(f.asset, 'comps') + `<input type="search" placeholder="Search building, tenant, submarket…" value="${esc(f.q)}" data-filter="comps.q" id="f-comps-q" />` : ''}
       </div>
+      ${state.comps.help ? compsHelp() : ''}
       ${f.tab === 'comps' ? compTable + dropZone : dates}`;
   }
 
@@ -4068,6 +4090,10 @@
         case 'summarize':
           e.preventDefault();
           return openBrief(d.col, d.id);
+        case 'toggle-comps-help':
+          state.comps.help = !state.comps.help;
+          saveUIState();
+          return render();
         case 'drill':
           state.marketing.drill = state.marketing.drill === d.key ? '' : d.key;
           saveUIState();
