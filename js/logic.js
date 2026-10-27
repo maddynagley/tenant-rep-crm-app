@@ -1400,6 +1400,71 @@
     return [brief.title].concat(brief.sections.map((sec) => '\n' + sec.label + '\n' + sec.items.map((t) => '- ' + t).join('\n'))).join('\n');
   }
 
+  const RECAP_TEMPLATE = 'Weekly recap';
+  function mondayOf(iso) {
+    const d = parseISODate(iso);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return toISODate(d);
+  }
+  // Already recapped this week: an email tagged as the weekly recap (or titled like one) on this deal.
+  function recapSent(deal, activities, today) {
+    const from = mondayOf(today);
+    return activities.some(
+      (a) => a.type === 'Email' && !a.inbound && a.date >= from && a.date <= today && (a.dealId === deal.id || (!a.dealId && a.companyId === deal.companyId)) && (a.template === RECAP_TEMPLATE || /weekly (update|recap)/i.test(a.subject || ''))
+    );
+  }
+
+  // Friday status email to the client on an open deal: what got done this week (even if nothing) and what's next.
+  // ctx: { company, contact, me, deal, activities (company's), properties (deal's), today }. Returns { subject, body, done, next }.
+  function weeklyRecap(ctx) {
+    const d = ctx.deal;
+    const today = ctx.today || todayISO();
+    const from = mondayOf(today);
+    const inWeek = (iso) => Boolean(iso) && String(iso).slice(0, 10) >= from && String(iso).slice(0, 10) <= today;
+    const props = ctx.properties || [];
+    const acts = (ctx.activities || []).filter((a) => !a.dealId || a.dealId === d.id);
+    const names = (list) => list.map((p) => p.building || p.name).filter(Boolean);
+    const join = (list) => (list.length <= 2 ? list.join(' and ') : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1]);
+    const done = [];
+    const stage = normalizeDealStage(d.stage);
+    if (inWeek(d.stageChangedAt) && stage !== 'Intro Call') done.push('Moved the search to the ' + stage + ' stage.');
+    const added = names(props.filter((p) => inWeek(p.createdAt)));
+    if (added.length) done.push('Added ' + (added.length === 1 ? added[0] : added.length + ' buildings (' + join(added) + ')') + ' to the survey.');
+    const toured = names(props.filter((p) => inWeek(p.tourDate) && p.tourDate <= today));
+    if (toured.length) done.push('Toured ' + join(toured) + '.');
+    const changed = (st) => names(props.filter((p) => p.status === st && inWeek(p.updatedAt)));
+    if (changed('Proposal Requested').length) done.push('Requested proposals from ' + join(changed('Proposal Requested')) + '.');
+    if (changed('Proposal Received').length) done.push('Received proposals from ' + join(changed('Proposal Received')) + '.');
+    if (changed('Shortlisted').length) done.push('Shortlisted ' + join(changed('Shortlisted')) + '.');
+    if (changed('Selected').length) done.push('Selected ' + join(changed('Selected')) + '.');
+    acts
+      .filter((a) => inWeek(a.date) && ['Meeting', 'Call', 'Tour', 'Proposal'].includes(a.type) && !(a.type === 'Tour' && toured.length))
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .forEach((a) => done.push((a.type === 'Meeting' ? 'Met: ' : a.type === 'Call' ? 'Call: ' : a.type + ': ') + (a.subject || '').replace(/[.\s]+$/, '') + '.'));
+    const next = acts
+      .filter((a) => a.type === 'Task' && !a.done && (a.followUpDate || a.date) <= addDays(today, 14))
+      .sort((a, b) => (a.followUpDate || a.date).localeCompare(b.followUpDate || b.date))
+      .slice(0, 4)
+      .map((a) => String(a.subject || '').replace(/[.\s]+$/, '') + '.');
+    const DEFAULT_NEXT = {
+      'Intro Call': 'Pull together a survey of options that fit your requirement.',
+      'Market Survey': 'Narrow the survey with you and line up tours of the best fits.',
+      Touring: 'Get your feedback on the tours and request proposals on the front-runners.',
+      RFP: 'Compare the landlord proposals side by side and pick the ones to negotiate.',
+      LOI: 'Work through the LOI terms with the landlord.',
+      'Lease Negotiation': 'Keep the lease moving and close out the open points.',
+    };
+    if (!next.length) next.push(DEFAULT_NEXT[stage] || DEFAULT_NEXT['Intro Call']);
+    const bullets = (list) => list.map((t) => '- ' + t).join('\n');
+    const week = parseISODate(from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const body =
+      'Hi {FirstName},\n\nHere\'s a quick update on ' + (d.name || 'your search') + ' for the week.\n\n' +
+      (done.length ? 'This week:\n' + bullets(done) : 'It was a quieter week on this one. I\'m keeping an eye on the market and will flag anything new that fits.') +
+      '\n\nNext steps:\n' + bullets(next) +
+      '\n\nLet me know if anything has changed on your end or if you have any questions.\n\nHave a great weekend,\n{MyFirstName}';
+    return { subject: (d.name || ctx.company.name) + ' – weekly update (week of ' + week + ')', body: fillTemplate(body, ctx), done, next };
+  }
+
   function mailtoLink(to, subject, body) {
     return 'mailto:' + encodeURIComponent(to || '').replace(/%40/g, '@') + '?subject=' + encodeURIComponent(subject || '') + '&body=' + encodeURIComponent(body || '');
   }
@@ -2384,6 +2449,9 @@
     fillTemplate,
     suggestTemplate,
     followUpDraft,
+    RECAP_TEMPLATE,
+    recapSent,
+    weeklyRecap,
     emailSnippet,
     dealBrief,
     briefText,

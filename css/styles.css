@@ -267,6 +267,7 @@ dl.info dd { margin: 0; overflow-wrap: anywhere; }
 .deal-card { display: block; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text); box-shadow: var(--shadow); cursor: grab; }
 .deal-card:hover { border-color: var(--accent); text-decoration: none; }
 .dc-title { font-weight: 600; display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+.dc-title .icon-row { display: inline-flex; gap: 4px; flex: none; }
 .dc-title .mail-icon { flex: none; width: 24px; height: 24px; }
 .dc-title .mail-icon svg { width: 14px; height: 14px; }
 .dc-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; flex-wrap: wrap; }

@@ -881,3 +881,29 @@ test('dealBrief: where things stand from emails, notes, tasks and survey', () =>
   assert.match(sec('Key dates'), /Rep agreement not signed/);
   assert.match(L.briefText(b), /^Acme HQ\n\nWhere it stands\n- Touring/);
 });
+
+test('weeklyRecap: this week on the deal, or a quiet-week note, plus next steps', () => {
+  const company = { id: 'co1', name: 'Acme' };
+  const deal = { id: 'd1', companyId: 'co1', name: 'Acme HQ', stage: 'Touring', stageChangedAt: '2026-10-27T15:00:00Z' };
+  const ctx = { company, deal, contact: { firstName: 'Pat' }, me: { name: 'Jordan Lee' }, today: '2026-10-30' };
+  const properties = [
+    { building: 'One Midtown', tourDate: '2026-10-28', createdAt: '2026-10-10T00:00:00Z', status: 'Toured', updatedAt: '2026-10-28T00:00:00Z' },
+    { building: 'Two Uptown', status: 'Proposal Received', createdAt: '2026-10-26T00:00:00Z', updatedAt: '2026-10-29T00:00:00Z' },
+  ];
+  const activities = [
+    { type: 'Meeting', date: '2026-10-27', dealId: 'd1', subject: 'Kickoff with leadership' },
+    { type: 'Task', date: '2026-11-03', dealId: 'd1', subject: 'Send proposal comparison' },
+    { type: 'Call', date: '2026-10-20', dealId: 'd1', subject: 'Last week call' },
+  ];
+  const r = L.weeklyRecap(Object.assign({ properties, activities }, ctx));
+  assert.equal(r.subject, 'Acme HQ – weekly update (week of Oct 26)');
+  assert.deepEqual(r.done, ['Moved the search to the Touring stage.', 'Added Two Uptown to the survey.', 'Toured One Midtown.', 'Received proposals from Two Uptown.', 'Met: Kickoff with leadership.']);
+  assert.deepEqual(r.next, ['Send proposal comparison.']);
+  assert.match(r.body, /^Hi Pat,/);
+  assert.match(r.body, /Have a great weekend,\nJordan$/);
+  const quiet = L.weeklyRecap(Object.assign({ properties: [], activities: [] }, ctx, { deal: Object.assign({}, deal, { stageChangedAt: '2026-09-01' }) }));
+  assert.match(quiet.body, /quieter week/);
+  assert.deepEqual(quiet.next, ['Get your feedback on the tours and request proposals on the front-runners.']);
+  assert.equal(L.recapSent(deal, [{ type: 'Email', date: '2026-10-30', dealId: 'd1', template: 'Weekly recap' }], '2026-10-30'), true);
+  assert.equal(L.recapSent(deal, [{ type: 'Email', date: '2026-10-23', dealId: 'd1', template: 'Weekly recap' }], '2026-10-30'), false);
+});

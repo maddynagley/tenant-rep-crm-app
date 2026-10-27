@@ -467,7 +467,10 @@
       }`;
   }
   function notesActions(col, id) {
-    return `<span class="more icon-row"><button class="mail-icon" data-action="summarize" data-col="${col}" data-id="${esc(id)}" title="Summarize where things stand" aria-label="Summarize"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/><path d="M18 14l1 2.2 2.2 1-2.2 1L18 20.4l-1-2.2-2.2-1 2.2-1z"/></svg></button>${noteIcon(col, id)}</span>`;
+    return `<span class="more icon-row">${summarizeIcon(col, id)}${noteIcon(col, id)}</span>`;
+  }
+  function summarizeIcon(col, id) {
+    return `<button class="mail-icon" data-action="summarize" data-col="${col}" data-id="${esc(id)}" title="Summarize where things stand" aria-label="Summarize"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/><path d="M18 14l1 2.2 2.2 1-2.2 1L18 20.4l-1-2.2-2.2-1 2.2-1z"/></svg></button>`;
   }
 
   function openBrief(col, id) {
@@ -1000,6 +1003,23 @@
       </li>`
     );
 
+    // Fridays: a weekly status email to the client on every open deal, until it's sent or skipped.
+    const recapItems =
+      L.parseISODate(today).getDay() !== 5
+        ? []
+        : S.all('deals')
+            .filter((d) => L.OPEN_STAGES.includes(d.stage) && !L.recapSent(d, S.all('activities'), today) && (s.recapSkipped || {})[d.id] !== today)
+            .sort((a, b) => L.dealProbability(b) - L.dealProbability(a))
+            .map((d) => {
+              const p = reachContact(d.companyId, '');
+              const attrs = `data-deal="${esc(d.id)}" data-company="${esc(d.companyId)}" data-contact="${esc(p ? p.id : '')}"`;
+              return `<li><div class="fu-body"><div><a href="#/deal/${esc(d.id)}"><strong>${esc(d.name)}</strong></a> ${badge(d.stage, 'blue')}</div>
+                <div class="sub">${esc(companyName(d.companyId))}${p ? ' · ' + esc(contactName(p)) : ''}</div></div>
+                <div class="todo-actions">${p && p.email ? `<button class="btn small" data-action="draft-email" data-recap="1" ${attrs}>Draft recap to ${esc(p.firstName)}</button>` : `<a class="btn small" href="#/company/${esc(d.companyId)}">Find a contact</a>`}
+                <button class="btn small" data-action="recap-sent" ${attrs} title="Log the recap as sent">✓ Sent</button>
+                <button class="btn small ghost" data-action="recap-skip" data-deal="${esc(d.id)}" title="No recap for this deal this week">Skip this week</button></div></li>`;
+            });
+
     const updateItems = plan.updates.map((item) => {
       const action =
         item.action === 'create-deal'
@@ -1037,6 +1057,7 @@
         <a class="kpi" href="#/leads"><span class="kpi-label">Leads waiting on a follow-up</span><span class="kpi-value">${plan.remaining.followUps}</span><span class="kpi-sub">${plan.remaining.fresh} new leads not yet touched</span></a>
         <a class="kpi" href="#/pipeline"><span class="kpi-label">Deals needing attention</span><span class="kpi-value">${plan.deals.length}</span><span class="kpi-sub">stale, past due or expiring rep agreement</span></a>
       </div>
+      ${recapItems.length ? section('Friday recaps: send each client a weekly update', recapItems, '', '<p class="hint">A short status email on every active deal: what got done this week (even if it was quiet) and what\'s next. It drafts from the deal\'s tours, proposals, meetings and open tasks.</p>') : ''}
       ${tasks.length ? `<section class="card"><h2>Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
       ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
       ${section(
@@ -1868,7 +1889,7 @@
               .map((d) => {
                 const est = L.estimatedCommission(d);
                 return `<a class="deal-card" draggable="true" data-deal="${esc(d.id)}" href="#/deal/${esc(d.id)}">
-                  <div class="dc-title"><span>${esc(d.name)}</span>${L.OPEN_STAGES.includes(d.stage) ? emailIcon(d.companyId, '', { deal: d.id }) : ''}</div>
+                  <div class="dc-title"><span>${esc(d.name)}</span><span class="icon-row">${summarizeIcon('deals', d.id)}${L.OPEN_STAGES.includes(d.stage) ? emailIcon(d.companyId, '', { deal: d.id }) : ''}</span></div>
                   <div class="sub">${esc(companyName(d.companyId))}${d.partnerBrokers ? ' · with ' + esc(d.partnerBrokers) : ''}</div>
                   <div class="dc-meta">${assetBadge(d.assetClass)} ${L.dealSizeLabel(d) ? `<span>${esc(L.dealSizeLabel(d))}${L.dealOfficeLabel(d) ? ' · ' + esc(L.dealOfficeLabel(d)) : ''}</span>` : badge('Add RSF', 'amber')}</div>
                   <div class="dc-meta"><strong>${L.fmtMoney(est.myShare, true)}</strong><span class="muted">${L.dealProbability(d)}%</span>${d.targetClose ? `<span class="muted">${esc(L.fmtDate(d.targetClose))}</span>` : ''}</div>
@@ -2540,6 +2561,7 @@
   }
 
   const REC_DRAFT = '__recommended';
+  const RECAP_DRAFT = '__recap';
   function openDraft(companyId, contactId, step, replyId, opts) {
     opts = opts || {};
     const c = S.get('companies', companyId);
@@ -2550,6 +2572,7 @@
     const suggested = (step && templates.find((t) => t.step === step)) || L.suggestTemplate(templates, c, { today: L.todayISO(), lastTouch: lastTouchMap()[companyId] });
     const dlg = $('#modal');
     const reply = S.get('activities', replyId);
+    const openDeal = draftContext(companyId, '', opts.dealId).deal;
     if (dlg.open) dlg.close();
     dlg.innerHTML = `<form method="dialog" id="draft-form" data-company="${esc(companyId)}" data-deal="${esc(opts.dealId || '')}" data-reply="${esc(reply ? reply.id : '')}" data-reply-subject="${esc(reply ? 'RE: ' + String(reply.subject || '').replace(/^(re|fw|fwd|reply):\s*/gi, '') : '')}">
       <header><h2>Draft email to ${esc(c.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
@@ -2558,7 +2581,12 @@
           ? `<p class="hint">No contact with an email address at ${esc(c.name)} yet. Add one first.</p>`
           : `<div class="form-grid">
           <label>To<span class="draft-to"><select name="contact">${options(people.map((p) => ({ value: p.id, label: contactName(p) + ' <' + p.email + '>' })), contact && contact.id)}</select><button type="button" class="btn small" data-action="copy-draft-to" title="Copy the email address">Copy</button></span></label>
-          <label>Template<select name="template">${options([{ value: REC_DRAFT, label: 'Recommended follow-up' }].concat(templates.map((t) => ({ value: t.id, label: t.name + ' (' + t.step + ')' }))), opts.recommended || !suggested ? REC_DRAFT : suggested.id)}</select></label>
+          <label>Template<select name="template">${options(
+            [{ value: REC_DRAFT, label: 'Recommended follow-up' }]
+              .concat(openDeal ? [{ value: RECAP_DRAFT, label: 'Weekly recap' }] : [])
+              .concat(templates.map((t) => ({ value: t.id, label: t.name + ' (' + t.step + ')' }))),
+            opts.recap && openDeal ? RECAP_DRAFT : opts.recommended || !suggested ? REC_DRAFT : suggested.id
+          )}</select></label>
           <p class="hint wide" id="draft-why"></p>
           <label class="wide">Subject<input name="subject" /></label>
           <label class="wide">Body<textarea name="body" rows="14"></textarea></label>
@@ -2577,7 +2605,12 @@
     const f = $('#draft-form');
     const ctx = draftContext(f.dataset.company, f.elements.contact.value, f.dataset.deal);
     let draft;
-    if (f.elements.template.value === REC_DRAFT) {
+    if (f.elements.template.value === RECAP_DRAFT) {
+      draft = L.weeklyRecap(
+        Object.assign({ activities: S.all('activities').filter((a) => a.companyId === f.dataset.company), properties: S.all('properties').filter((p) => p.dealId === ctx.deal.id) }, ctx)
+      );
+      draft.why = draft.done.length ? 'Recap of ' + draft.done.length + ' thing' + (draft.done.length > 1 ? 's' : '') + ' logged on this deal since Monday. Edit freely before sending.' : 'Nothing logged on this deal since Monday, so it says it was a quieter week.';
+    } else if (f.elements.template.value === REC_DRAFT) {
       // The email being followed up: the one named, else the last one you sent them.
       const lastEmail =
         S.get('activities', f.dataset.reply) ||
@@ -3263,7 +3296,7 @@
       // Remember which template this email came from, so it's tagged when HubSpot logs it (or when you tap ✓ Emailed).
       const f = $('#draft-form');
       const t = S.get('templates', f.elements.template.value);
-      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : f.elements.template.value === REC_DRAFT ? 'Recommended follow-up' : '', pendingTemplateAt: L.todayISO() });
+      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : f.elements.template.value === REC_DRAFT ? 'Recommended follow-up' : f.elements.template.value === RECAP_DRAFT ? L.RECAP_TEMPLATE : '', pendingTemplateAt: L.todayISO() });
       setTimeout(() => $('#modal').close(), 300);
       return;
     }
@@ -3341,6 +3374,16 @@
           runWorkflows();
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
         }
+        case 'recap-sent': {
+          const deal = S.get('deals', d.deal);
+          S.upsert('activities', { type: 'Email', date: L.todayISO(), companyId: deal.companyId, dealId: deal.id, contactId: d.contact || '', subject: deal.name + ' – weekly update', template: L.RECAP_TEMPLATE });
+          return toast('Logged the weekly recap for ' + deal.name + '.');
+        }
+        case 'recap-skip': {
+          const skip = Object.assign({}, S.settings().recapSkipped || {}, { [d.deal]: L.todayISO() });
+          S.saveSettings({ recapSkipped: skip });
+          return toast('Skipped this week.');
+        }
         case 'sync-list':
           return syncSharedList(d.list, true);
         case 'add-list': {
@@ -3380,7 +3423,7 @@
           return openQuickNote(d.col, d.id);
         case 'draft-email':
           e.preventDefault();
-          return openDraft(d.company, d.contact, d.step, d.reply, { recommended: Boolean(d.recommended), dealId: d.deal });
+          return openDraft(d.company, d.contact, d.step, d.reply, { recommended: Boolean(d.recommended), recap: Boolean(d.recap), dealId: d.deal });
         case 'copy-draft-to': {
           const p = S.get('contacts', $('#draft-form').elements.contact.value);
           if (p) navigator.clipboard.writeText(p.email).then(() => toast('Copied ' + p.email + '.'));
