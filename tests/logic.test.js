@@ -1172,7 +1172,11 @@ test('prospecting report: prospects only, initial vs follow-up, opens, replies a
   assert.deepEqual(touches.map((t) => [t.companyId, t.stage]), [['a', 'Initial outreach'], ['a', 'Follow-up'], ['b', 'Initial outreach'], ['a', 'Follow-up']]);
   const r = L.prospectingReport(data, { today: '2026-10-26', period: 'lastWeek', internalDomain: 'firm.test' });
   assert.deepEqual([r.range.from, r.range.to], ['2026-10-19', '2026-10-25']);
-  assert.deepEqual(r.totals, { initial: 1, followUp: 2, emails: 2, calls: 1, linkedin: 0, companies: 2, opened: 2, openRate: 1, responses: 1, responseRate: 1 / 3, meetings: 1 });
+  assert.deepEqual(r.totals, { initial: 1, followUp: 2, emails: 2, calls: 1, linkedin: 0, companies: 2, opened: 2, openRate: 1, responses: 1, responseRate: 1 / 3, meetings: 1, conversation: 0 });
+  assert.deepEqual(r.lists.initial.map((x) => [x.company, x.contact, x.subject]), [['Birch', 'Sam', 'Intro']]);
+  assert.deepEqual(r.lists.followUp.map((x) => [x.company, x.type]), [['Acme', 'Call'], ['Acme', 'Email']]);
+  assert.deepEqual(r.lists.opened.map((x) => [x.company, x.opens]), [['Acme', 6], ['Birch', 1]]);
+  assert.deepEqual(r.lists.meetings.map((x) => x.company), ['Birch']);
   assert.deepEqual(r.responded.map((x) => [x.company, x.contact, x.how]), [['Birch', 'Sam', 'Replied: Intro']]);
   assert.deepEqual(r.openedNoReply.map((x) => [x.company, x.opens]), [['Acme', 6]]);
   assert.equal(r.followUps.length, 1);
@@ -1187,4 +1191,27 @@ test('prospecting report: prospects only, initial vs follow-up, opens, replies a
   assert.match(text, /1 initial outreach and 2 follow-ups to 2 companies/);
   assert.match(text, /Follow up next:\n- Acme \(Pat Lee\)/);
   assert.deepEqual(L.periodRange('lastMonth', '2026-10-26'), { from: '2026-09-01', to: '2026-09-30', label: 'September' });
+});
+
+test('prospecting: a conversation after a reply and repeat log entries are not counted as follow-ups', () => {
+  const data = {
+    companies: [{ id: 'a', name: 'Acme', status: 'Contacted' }],
+    contacts: [{ id: 'p1', companyId: 'a', firstName: 'Pat' }, { id: 'p2', companyId: 'a', firstName: 'Sam' }],
+    deals: [],
+    activities: [
+      { id: '1', type: 'Email', date: '2026-10-05', companyId: 'a', contactId: 'p1', subject: 'Intro' },
+      { id: '2', type: 'Email', date: '2026-10-05', companyId: 'a', contactId: 'p2', subject: 'Intro' },
+      { id: '3', type: 'Email', date: '2026-10-07', companyId: 'a', contactId: 'p1', subject: 'Reply: Intro', inbound: true },
+      { id: '4', type: 'Email', date: '2026-10-08', companyId: 'a', contactId: 'p1', subject: 'RE: Intro' },
+      { id: '5', type: 'Email', date: '2026-10-09', companyId: 'a', contactId: 'p1', subject: 'RE: Intro times' },
+      { id: '6', type: 'Email', date: '2026-12-01', companyId: 'a', contactId: 'p1', subject: 'Checking back in' },
+    ],
+  };
+  const t = L.prospectTouches(data, {});
+  assert.deepEqual(t.touches.map((x) => [x.id, x.stage]), [['1', 'Initial outreach'], ['6', 'Follow-up']]);
+  assert.deepEqual(t.conversation.map((x) => x.id), ['4', '5']);
+  assert.equal(data.activities[0].touchNo, undefined, 'store records are not changed');
+  const r = L.prospectingReport(data, { today: '2026-10-11', period: 'thisWeek' });
+  assert.equal(r.totals.conversation, 2);
+  assert.equal(r.totals.followUp, 0);
 });

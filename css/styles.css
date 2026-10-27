@@ -459,3 +459,7 @@ h2 .seg.more { margin-left: auto; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 .key-initial { background: var(--chart); }
 .key-follow { background: var(--chart-ref); }
+button.kpi-drill { text-align: left; font: inherit; cursor: pointer; }
+button.kpi-drill:hover { border-color: var(--accent); }
+button.kpi-drill.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.kpi-more { font-size: 11px; color: var(--accent); margin-top: 6px; }

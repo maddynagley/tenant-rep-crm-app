@@ -354,15 +354,32 @@
         if (!dealSince[d.companyId] || at < dealSince[d.companyId]) dealSince[d.companyId] = at;
       });
     const isProspectCo = (c) => c && isProspect(c) && !['Active Client', 'Past Client'].includes(c.status);
+    const replies = (data.activities || []).filter((a) => a.inbound && a.type === 'Email' && a.date && isProspectCo(companies[a.companyId]));
+    // Once a prospect has written back, your emails over the next 30 days are a conversation, not prospecting.
+    const talking = (a) => a.type === 'Email' && replies.some((r) => r.companyId === a.companyId && r.date <= a.date && r.date >= addDays(a.date, -30));
+    const seen = new Set();
+    const conversation = [];
     const touches = (data.activities || [])
       .filter((a) => OUTREACH_TYPES.includes(a.type) && !a.inbound && a.date && a.companyId)
       .filter((a) => isProspectCo(companies[a.companyId]) && !a.dealThread && !(dealSince[a.companyId] && dealSince[a.companyId] <= a.date))
       .filter((a) => !isColleague(contacts[a.contactId], opts.internalDomain))
-      .sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+      .sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+      // The same email logged twice (e.g. once per recipient) counts once.
+      .filter((a) => {
+        const k = [a.companyId, a.date, a.type, String(a.subject || '').toLowerCase().replace(/^((re|fw|fwd)\s*:\s*)+/g, '').trim()].join('|');
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .filter((a) => {
+        if (!talking(a)) return true;
+        conversation.push(a);
+        return false;
+      })
+      .map((a) => Object.assign({}, a));
     const count = {};
     touches.forEach((a) => (a.touchNo = count[a.companyId] = (count[a.companyId] || 0) + 1));
-    const replies = (data.activities || []).filter((a) => a.inbound && a.type === 'Email' && a.date && isProspectCo(companies[a.companyId]));
-    return { touches: touches.map((a) => Object.assign({}, a, { stage: a.touchNo === 1 ? 'Initial outreach' : 'Follow-up' })), replies, companies, contacts };
+    return { touches: touches.map((a) => Object.assign(a, { stage: a.touchNo === 1 ? 'Initial outreach' : 'Follow-up' })), replies, companies, contacts, conversation };
   }
 
   function periodRange(period, today) {
@@ -394,7 +411,7 @@
     opts = opts || {};
     const today = opts.today || todayISO();
     const range = periodRange(opts.period, today);
-    const { touches, replies, companies, contacts } = prospectTouches(data, opts);
+    const { touches, replies, companies, contacts, conversation } = prospectTouches(data, opts);
     const inRange = (iso) => iso >= range.from && iso <= range.to;
     const name = (a) => (companies[a.companyId] || {}).name || '';
     const person = (id) => {
@@ -408,7 +425,11 @@
     const respondedCos = {};
     replies.filter((r) => inRange(r.date)).forEach((r) => (respondedCos[r.companyId] = respondedCos[r.companyId] || { companyId: r.companyId, company: name(r), contact: person(r.contactId), date: r.date, how: 'Replied: ' + String(r.subject || '').replace(/^Reply:\s*/, '') }));
     period.filter((a) => RESPONDED.includes(a.outcome)).forEach((a) => (respondedCos[a.companyId] = respondedCos[a.companyId] || { companyId: a.companyId, company: name(a), contact: person(a.contactId), date: a.date, how: a.outcome + (a.type !== 'Email' ? ' (' + a.type.toLowerCase() + ')' : '') }));
-    const meetings = (data.activities || []).filter((a) => a.type === 'Meeting' && inRange(a.date || '') && companies[a.companyId] && isProspect(companies[a.companyId])).length + period.filter((a) => a.outcome === 'Meeting booked').length;
+    const meetingActs = (data.activities || []).filter((a) => a.type === 'Meeting' && inRange(a.date || '') && companies[a.companyId] && isProspect(companies[a.companyId]));
+    const meetings = meetingActs.length + period.filter((a) => a.outcome === 'Meeting booked').length;
+    // Who's behind each number, for the drill-down lists.
+    const row = (a) => ({ id: a.id, companyId: a.companyId, company: name(a), contactId: a.contactId, contact: person(a.contactId), date: a.date, type: a.type, subject: a.subject || '', opens: parseNumber(a.opens) || 0, stage: a.stage || '', answered: a.stage ? answered(a) : false, outcome: a.outcome || '' });
+    const byDate = (a, b) => b.date.localeCompare(a.date);
     const opened = emails.filter((a) => (parseNumber(a.opens) || 0) > 0);
     const totals = {
       initial: period.filter((a) => a.stage === 'Initial outreach').length,
@@ -422,6 +443,13 @@
       responses: Object.keys(respondedCos).length,
       responseRate: period.length ? period.filter(answered).length / period.length : 0,
       meetings,
+      conversation: conversation.filter((a) => inRange(a.date)).length,
+    };
+    const lists = {
+      initial: period.filter((a) => a.stage === 'Initial outreach').map(row).sort(byDate),
+      followUp: period.filter((a) => a.stage === 'Follow-up').map(row).sort(byDate),
+      opened: opened.map(row).sort((a, b) => b.opens - a.opens),
+      meetings: meetingActs.map(row).concat(period.filter((a) => a.outcome === 'Meeting booked').map(row)).sort(byDate),
     };
     const openedNoReply = opened
       .filter((a) => !answered(a))
@@ -492,7 +520,7 @@
       .sort((a, b) => b.score - a.score)
       .slice(0, 15);
 
-    return { range, totals, responded: Object.values(respondedCos).sort((a, b) => b.date.localeCompare(a.date)), openedNoReply, working, weeks, followUps };
+    return { range, totals, lists, responded: Object.values(respondedCos).sort((a, b) => b.date.localeCompare(a.date)), openedNoReply, working, weeks, followUps };
   }
 
   // The report as plain text, to paste into an email or notes.

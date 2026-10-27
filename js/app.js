@@ -1139,7 +1139,29 @@
     const data = { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') };
     const r = L.prospectingReport(data, { today: L.todayISO(), period: f.period || 'thisWeek', internalDomain: myEmailDomain() });
     const t = r.totals;
-    const tile = (label, value, sub) => `<div class="kpi"><span class="kpi-label">${esc(label)}</span><span class="kpi-value">${esc(String(value))}</span><span class="kpi-sub">${esc(sub || '')}</span></div>`;
+    // Each tile opens the list behind its number; clicking it again closes the list.
+    const drill = f.drill || '';
+    const tile = (key, label, value, sub) =>
+      `<button class="kpi kpi-drill${drill === key ? ' on' : ''}" data-action="drill" data-key="${key}" aria-pressed="${drill === key}"><span class="kpi-label">${esc(label)}</span><span class="kpi-value">${esc(String(value))}</span><span class="kpi-sub">${esc(sub || '')}</span><span class="kpi-more">${drill === key ? 'Hide list' : 'See who'}</span></button>`;
+    const drillRows = { initial: r.lists.initial, followUp: r.lists.followUp, opened: r.lists.opened, meetings: r.lists.meetings }[drill];
+    const drillTitle = { initial: 'Initial outreach', followUp: 'Follow-ups', opened: 'Opened', responded: 'Responded', meetings: 'Meetings' }[drill];
+    const drillCard = !drill
+      ? ''
+      : drill === 'responded'
+        ? `<section class="card"><h2>${esc(drillTitle)} · ${esc(r.range.label)} <span class="muted">${r.responded.length}</span></h2>${
+            r.responded.length
+              ? `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Date</th><th>Company</th><th>Contact</th><th>Response</th></tr></thead><tbody>${r.responded.map((x) => `<tr data-href="#/company/${esc(x.companyId)}"><td class="nowrap">${esc(L.fmtDate(x.date))}</td><td><strong>${esc(x.company)}</strong></td><td>${esc(x.contact)}</td><td>${esc(x.how)}</td></tr>`).join('')}</tbody></table></div>`
+              : emptyState('No responses in this period.')
+          }</section>`
+        : `<section class="card"><h2>${esc(drillTitle)} · ${esc(r.range.label)} <span class="muted">${drillRows.length}</span></h2>${
+            drillRows.length
+              ? `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Date</th><th>Company</th><th>Contact</th><th>How</th><th>Subject</th><th class="right">Opens</th><th>Reply</th></tr></thead><tbody>${drillRows
+                  .map(
+                    (x) => `<tr data-href="#/company/${esc(x.companyId)}"><td class="nowrap">${esc(L.fmtDate(x.date))}</td><td><strong>${esc(x.company)}</strong>${x.stage === 'Follow-up' ? '' : ''}</td><td>${esc(x.contact) || '<span class="muted">—</span>'}</td><td>${esc(x.type)}${x.outcome && x.outcome !== 'No response' ? `<div class="sub">${esc(x.outcome)}</div>` : ''}</td><td>${esc(x.subject)}</td><td class="right">${x.opens || '<span class="muted">—</span>'}</td><td>${x.answered ? badge('Responded', 'green') : x.stage ? '<span class="muted">Not yet</span>' : ''}</td></tr>`
+                  )
+                  .join('')}</tbody></table></div>`
+              : emptyState('None in this period.')
+          }</section>`;
     const periods = [['thisWeek', 'This week'], ['lastWeek', 'Last week'], ['thisMonth', 'This month'], ['lastMonth', 'Last month'], ['last90', '90 days']];
     // 8 weeks: initial outreach and follow-ups stacked (2px gap between them), responses as their own chart.
     const max = Math.max(1, ...r.weeks.map((w) => w.initial + w.followUp));
@@ -1177,12 +1199,14 @@
         <span class="muted">${esc(L.fmtDate(r.range.from))} – ${esc(L.fmtDate(r.range.to))}</span>
         <button class="btn small" data-action="copy-text" data-text="${esc(L.prospectingRecapText(r))}">Copy recap</button></div>
       <div class="kpis">
-        ${tile('Initial outreach', t.initial, t.companies + ' companies touched')}
-        ${tile('Follow-ups', t.followUp, t.emails + ' emails · ' + t.calls + ' calls · ' + t.linkedin + ' LinkedIn')}
-        ${tile('Opened', t.opened, pct(t.openRate) + ' of emails')}
-        ${tile('Responded', t.responses, pct(t.responseRate) + ' of touches')}
-        ${tile('Meetings', t.meetings, 'with prospects')}
+        ${tile('initial', 'Initial outreach', t.initial, t.companies + ' companies touched')}
+        ${tile('followUp', 'Follow-ups', t.followUp, t.emails + ' emails · ' + t.calls + ' calls · ' + t.linkedin + ' LinkedIn')}
+        ${tile('opened', 'Opened', t.opened, pct(t.openRate) + ' of emails')}
+        ${tile('responded', 'Responded', t.responses, pct(t.responseRate) + ' of touches')}
+        ${tile('meetings', 'Meetings', t.meetings, 'with prospects')}
       </div>
+      ${t.conversation ? `<p class="hint">${t.conversation} email${t.conversation > 1 ? 's' : ''} in conversations with prospects who'd already replied ${t.conversation > 1 ? "aren't" : "isn't"} counted as follow-ups.</p>` : ''}
+      ${drillCard}
       <section class="card"><h2>Follow up next <span class="muted">${r.followUps.length}</span></h2>
         <p class="hint">Prospects whose last touch (3 to 60 days ago) got no reply, ranked by opens, lead temperature and lease timing.</p>
         ${
@@ -3909,6 +3933,10 @@
         case 'summarize':
           e.preventDefault();
           return openBrief(d.col, d.id);
+        case 'drill':
+          state.marketing.drill = state.marketing.drill === d.key ? '' : d.key;
+          saveUIState();
+          return render();
         case 'open-report':
           Object.assign(state.marketing, { tab: 'outreach', period: 'lastWeek' });
           saveUIState();
