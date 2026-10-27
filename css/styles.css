@@ -402,3 +402,5 @@ dialog .form-grid { padding: 16px 18px; overflow-y: auto; }
 .drop-zone .sub { margin-top: 8px; }
 .drop-zone.over { border-color: var(--accent); background: var(--gray-soft); }
 .tbl tr.total-row td { border-top: 2px solid var(--border); font-weight: 600; }
+.dup-review { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; background: var(--bg); }
+.dup-review select { min-width: 190px; }

@@ -2092,7 +2092,149 @@
     return d ? quarterOf(d) : '';
   }
 
-  const isMarketTotal = (sub) => !sub || /^(total|market total|metro|overall|atlanta( total| metro)?|all submarkets|grand total)$/i.test(String(sub).trim());
+  const isMarketTotal = (sub) => !sub || /^(total|market|market total|metro|overall|atlanta( total| metro)?|all submarkets|grand total)$/i.test(String(sub).trim());
+
+  // ---------- Research PDF reports ----------
+  // Quarterly brokerage research reports, as text lines laid out like the page (columns kept apart by runs of spaces).
+  // Reads the "Submarket Statistics" table, the Market Observations bullets and each submarket's Current Conditions.
+  const STAT_COLUMNS = [
+    ['inventory', /Inventory/i],
+    ['underConstruction', /\bUnder\b/i],
+    ['vacancy', /Vacancy|\bTotal\b(?!\s+Inventory)/i],
+    ['netAbsorption', /Qtr\.?\s+(Net\s+)?Absorption/i],
+    ['ytdAbsorption', /YTD\s+(Net\s+)?Absorption/i],
+    ['classARent', /Class\s+A\b/i],
+    ['classBRent', /Class\s+B\b/i],
+    ['whRent', /WH\s*\/\s*Dist/i],
+    ['flexRent', /R&D\s*\/\s*Flex/i],
+    ['askingRent', /Average\s+Direct\s+Asking|Direct\s+Asking\s+Rent|Average\s+Asking/i],
+  ];
+  const DEFAULT_STAT_ORDER = {
+    Office: ['inventory', 'underConstruction', 'vacancy', 'netAbsorption', 'ytdAbsorption', 'classARent', 'classBRent', 'askingRent'],
+    Industrial: ['inventory', 'underConstruction', 'vacancy', 'netAbsorption', 'ytdAbsorption', 'whRent', 'flexRent', 'askingRent'],
+  };
+  // A page footer: a letter-spaced firm name and a page number ("F I R M   16").
+  const PAGE_FOOTER = /^\s*(?:[A-Z]{1,2}\s){3,}[A-Z]{0,2}\s+\d{1,3}\s*$/;
+  const QUARTER_WORDS = { first: 1, second: 2, third: 3, fourth: 4 };
+
+  // A table row: the name runs to the last word with a letter in it; the rest are values ("-" = none).
+  function statRow(line) {
+    const tokens = String(line).trim().replace(/(\d)\s+%/g, '$1%').split(/\s+/);
+    let i = tokens.length - 1;
+    while (i >= 0 && !/[a-z]/i.test(tokens[i])) i--;
+    const values = tokens.slice(i + 1);
+    if (i < 0 || values.length < 5 || !values.every((v) => /^(-?\$?[\d,]+(\.\d+)?%?|-)$/.test(v))) return null;
+    return { name: tokens.slice(0, i + 1).join(' '), values: values.map((v) => (v === '-' ? null : v)) };
+  }
+
+  // Bullets in a block of lines: "•" or "–" starts one, indented lines continue it. `slice` picks the column.
+  function bulletsIn(lines, slice) {
+    const out = [];
+    let cur = null;
+    lines.forEach((raw) => {
+      const line = slice ? slice(raw) : raw;
+      const start = line.search(/\S/);
+      if (start < 0) return;
+      const m = /^\s*[•●▪–]\s+(.*)$/.exec(line);
+      const text = (m ? m[1] : line.trim()).split(/\s{3,}/)[0].trim();
+      if (m) {
+        if (cur) out.push(cur);
+        cur = text;
+      } else if (cur !== null && start <= 12 && text) cur += ' ' + text;
+      else if (cur !== null && start > 12) return;
+    });
+    if (cur) out.push(cur);
+    return out.map((b) => b.replace(/\s+/g, ' ').replace(/(\w)- (\w)/g, '$1-$2').trim()).filter((b) => b.length > 20);
+  }
+
+  function parseResearchReport(lines, filename) {
+    lines = (lines || []).map((l) => String(l).replace(/\t/g, '    '));
+    const text = lines.join('\n');
+    // The report's quarter: from the file name, else the "2Q26" stamped on its pages (the most common one), else
+    // "the second quarter of 2026" as written in the text.
+    let quarter = normalizeQuarter(filename);
+    if (!quarter) {
+      const counts = {};
+      (text.match(/\b[1-4]Q\d{2}\b/g) || []).forEach((q) => (counts[q] = (counts[q] || 0) + 1));
+      quarter = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || '';
+    }
+    if (!quarter) {
+      const counts = {};
+      (text.match(/\b(first|second|third|fourth) quarter of \d{4}/gi) || []).forEach((w) => {
+        const m = /(\w+) quarter of (\d{4})/i.exec(w);
+        const q = QUARTER_WORDS[m[1].toLowerCase()] + 'Q' + m[2].slice(2);
+        counts[q] = (counts[q] || 0) + 1;
+      });
+      quarter = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || '';
+    }
+    const assetClass = /industrial/i.test(String(filename)) || /Industrial\s+(Market|Submarket)/i.test(text) ? 'Industrial' : 'Office';
+    const market = (/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) (?:Office|Industrial) Submarket Overview/.exec(text) || [])[1] || '';
+
+    // Submarket Statistics table
+    const rows = [];
+    const at = lines.findIndex((l) => /Submarket Statistics/i.test(l));
+    if (at >= 0) {
+      let first = -1;
+      for (let i = at + 1; i < Math.min(lines.length, at + 12); i++) if (statRow(lines[i])) { first = i; break; }
+      if (first > 0) {
+        const head = lines.slice(at + 1, first).find((l) => /Inventory/i.test(l)) || '';
+        const order = STAT_COLUMNS.map(([k, re]) => [k, head.search(re)]).filter(([, i]) => i >= 0).sort((a, b) => a[1] - b[1]).map(([k]) => k);
+        for (let i = first; i < lines.length; i++) {
+          if (/Source:/i.test(lines[i]) || PAGE_FOOTER.test(lines[i])) break;
+          const r = statRow(lines[i]);
+          if (!r) continue;
+          const keys = order.length === r.values.length ? order : DEFAULT_STAT_ORDER[assetClass];
+          const rec = { submarket: r.name };
+          keys.forEach((k, j) => r.values[j] !== null && r.values[j] !== undefined && (rec[k] = r.values[j]));
+          const clean = cleanMarketStat(rec, { quarter, assetClass });
+          ['classARent', 'classBRent', 'whRent', 'flexRent'].forEach((k) => rec[k] !== undefined && (clean[k] = firstNumber(rec[k])));
+          rows.push(clean);
+          if (clean.submarket === 'Market total') break;
+        }
+      }
+    }
+
+    // Market Observations: two columns of bulleted sections.
+    const highlights = {};
+    const obs = lines.findIndex((l) => /Market Observations/i.test(l));
+    if (obs >= 0) {
+      let end = lines.findIndex((l, i) => i > obs && /Table of Contents|^\s*Economy\s*$/i.test(l) && i > obs + 3);
+      if (end < 0) end = Math.min(lines.length, obs + 80);
+      const block = lines.slice(obs + 1, end);
+      const rightStarts = block.map((l) => l.search(/\S\s*$/) > 40 ? (/^(.{40,}?\s{2,})[–•]\s/.exec(l) || [])[1] : null).filter(Boolean).map((p) => p.length);
+      const col = rightStarts.length ? Math.min(...rightStarts) : 0;
+      const halves = col ? [(l) => l.slice(0, col), (l) => ' '.repeat(0) + l.slice(col)] : [(l) => l];
+      halves.forEach((half) => {
+        let name = null;
+        let chunk = [];
+        const flush = () => name && chunk.length && (highlights[name] = (highlights[name] || []).concat(bulletsIn(chunk)));
+        block.forEach((l) => {
+          const h = half(l).trim();
+          const hm = /^(Economy|Major Transactions|Leasing Market Fundamentals|Market Fundamentals|Outlook|Key Takeaways)$/i.exec(h);
+          if (hm) {
+            flush();
+            name = hm[1];
+            chunk = [];
+          } else chunk.push(half(l));
+        });
+        flush();
+      });
+    }
+
+    // Each submarket page: "<Name> Office Submarket Overview", then Current Conditions bullets in the left column.
+    const submarkets = {};
+    lines.forEach((l, i) => {
+      const m = /^\s*(.+?)\s+(?:Office|Industrial)\s+Submarket Overview\s*$/.exec(l);
+      if (!m || m[1] === market) return;
+      const cc = lines.findIndex((x, j) => j > i && j < i + 45 && /Current Conditions/i.test(x));
+      if (cc < 0) return;
+      let end = lines.findIndex((x, j) => j > cc && (/Submarket Overview|Source:/i.test(x) || PAGE_FOOTER.test(x)));
+      if (end < 0) end = lines.length;
+      const b = bulletsIn(lines.slice(cc + 1, end), (x) => (x.search(/\S/) > 12 ? '' : x));
+      if (b.length) submarkets[m[1].trim()] = b;
+    });
+    return { quarter, assetClass, market, rows, highlights, submarkets };
+  }
 
   // One row from a Research stats table → { quarter, assetClass, submarket, vacancy (%), askingRent ($/SF/yr), … }.
   function cleanMarketStat(rec, defaults) {
@@ -2198,8 +2340,8 @@
     commencement: ['commencement', 'commencement date', 'lease commencement', 'start date', 'move in', 'move in date'],
     termMonths: ['term', 'term months', 'term mos', 'lease term', 'term mo', 'term yrs', 'term years'],
     leaseExpiration: ['expiration', 'expiration date', 'lease expiration', 'lxd', 'exp date', 'lease end', 'end date'],
-    startingRent: ['starting rent', 'rent', 'rate', 'base rent', 'rent/sf', 'rent psf', 'rate psf', '/sf', 'asking rent', 'initial rent', 'face rent', 'start rent', 'rental rate', 'net effective'],
-    rateBasis: ['rent basis', 'rate basis', 'basis', 'service type', 'lease structure', 'expense structure', 'rent type'],
+    startingRent: ['starting rent', 'lease rate', 'rent', 'rate', 'base rent', 'contract rent', 'lease rent', 'rent/sf', 'rent psf', 'rate psf', '/sf', 'asking rent', 'initial rent', 'face rent', 'start rent', 'rental rate', 'net effective'],
+    rateBasis: ['rent basis', 'rate basis', 'rate type', 'basis', 'service type', 'lease structure', 'expense structure', 'rent type'],
     escalationPct: ['escalation', 'escalations', 'annual escalation', 'bumps', 'annual increase', 'esc', 'rent escalation', 'increases'],
     freeRentMonths: ['free rent', 'free rent months', 'free rent mos', 'abatement', 'free', 'rent abatement', 'abated rent'],
     tiAllowance: ['ti', 'ti allowance', 'tis', 'ti/sf', 'ti psf', 'tenant improvements', 'tia', 'improvement allowance', 'work letter'],
@@ -2246,10 +2388,13 @@
       out.notes = [out.notes, 'Escalations: ' + String(rec.escalationPct).trim()].filter(Boolean).join(' · ');
       delete out.escalationPct;
     } else if (out.escalationPct !== undefined && out.escalationPct > 0 && out.escalationPct < 0.2 && !/%/.test(String(rec.escalationPct))) out.escalationPct = Math.round(out.escalationPct * 10000) / 100;
-    // "5 yrs" and "62 mo" are clear; a bare number under 12 is years (5 = 60 months), otherwise months.
+    // "5 yrs" and "62 mo" are clear, as is a column headed in months or years; otherwise a bare number under 12
+    // is years (5 = 60 months).
     const rawTerm = String(rec.termMonths || '').trim();
     const term = parseTermMonths(rawTerm.replace(/[^0-9.a-z ]/gi, ' ').trim());
-    if (term) out.termMonths = /^[\d.]+$/.test(rawTerm) && term < 12 ? Math.round(term * 12) : term;
+    if (term) out.termMonths = /^[\d.]+$/.test(rawTerm) && (defaults.termUnit === 'years' || (!defaults.termUnit && term < 12)) ? Math.round(term * 12) : term;
+    if (rec.dealType && !basisInType && !DEAL_TYPES.includes(String(rec.dealType).trim())) out.notes = [out.notes, 'Type: ' + String(rec.dealType).trim()].filter(Boolean).join(' · ');
+    if (/\d\s*-\s*\$?\d/.test(String(rec.tiAllowance || ''))) out.notes = [out.notes, 'TI: ' + String(rec.tiAllowance).trim()].filter(Boolean).join(' · ');
     const rent = firstNumber(rec.startingRent);
     if (rent !== null) out.startingRent = rent;
     out.rateBasis = normalizeRateBasis(rec.rateBasis, '') || normalizeRateBasis(rec.startingRent, '') || (basisInType ? normalizeRateBasis(rec.dealType, '') : '') || (out.assetClass === 'Industrial' ? 'NNN ($/SF/yr)' : 'Full Service ($/SF/yr)');
@@ -2259,13 +2404,64 @@
     });
     if (!out.source) out.source = defaults.source || '';
     if (defaults.confidential) out.confidential = true;
+    // Values filled from the import's defaults rather than the sheet, so an update leaves the existing comp's alone.
+    const guessed = [];
+    if (!rec.source) guessed.push('source');
+    if (!normalizeAssetClass(rec.assetClass)) guessed.push('assetClass');
+    if (!normalizeRateBasis(rec.rateBasis, '') && !normalizeRateBasis(rec.startingRent, '') && !basisInType) guessed.push('rateBasis');
+    Object.defineProperty(out, 'guessed', { value: guessed, enumerable: false });
     return out;
   }
 
-  // Same building, tenant and date (signed, else commencement) means the same comp.
+  const keyOf = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // "Possible Now, Inc." and "Possible Now" are the same tenant.
+  const tenantKey = (v) =>
+    String(v || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9& ]/g, ' ')
+      .replace(/\b(inc|llc|l l c|corp|corporation|co|company|ltd|lp|llp|pc|pllc|the)\b/g, ' ')
+      .replace(/[^a-z0-9]/g, '');
+  // Same building, tenant, date (signed, else commencement) and SF means the same comp.
   function compKey(c) {
-    const k = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    return [k(c.building), k(c.tenant), c.signedDate || c.commencement || '', Math.round(parseNumber(c.sf) || 0)].join('|');
+    return [keyOf(c.building), tenantKey(c.tenant), c.signedDate || c.commencement || '', Math.round(parseNumber(c.sf) || 0)].join('|');
+  }
+  // Terms agree when every term both comps have is the same (a blank on either side doesn't count against it).
+  function sameTerms(a, b) {
+    return ['startingRent', 'termMonths', 'escalationPct', 'freeRentMonths', 'tiAllowance', 'sf'].every((k) => {
+      const x = parseNumber(a[k]);
+      const y = parseNumber(b[k]);
+      return x === null || y === null || Math.abs(x - y) < 0.005;
+    });
+  }
+
+  // Sorts comps from a sheet into new ones and ones that need Maddy's call, against the CRM and earlier rows.
+  //   duplicate: the same deal with the same terms (default: update the existing comp, or skip a repeat row)
+  //   possible:  same tenant at the same building or size, but a different date or terms; could be an
+  //              expansion, extension or a second deal, or a repeat (default: skip until approved)
+  function planCompImport(comps, existing) {
+    const seen = [];
+    return comps.map((c, i) => {
+      const t = tenantKey(c.tenant);
+      const near = (o) => t && tenantKey(o.tenant) && (tenantKey(o.tenant).startsWith(t) || t.startsWith(tenantKey(o.tenant)));
+      const sameSpace = (o) => keyOf(o.building) === keyOf(c.building) || (keyOf(o.address) && keyOf(o.address) === keyOf(c.address)) || Math.abs((parseNumber(o.sf) || 0) - (parseNumber(c.sf) || -1)) <= 0.02 * (parseNumber(c.sf) || 0);
+      const check = (list, where) => {
+        const exact = list.find((o) => compKey(o) === compKey(c));
+        if (exact && sameTerms(exact, c)) return { status: 'duplicate', where, match: exact, reason: 'Same tenant, building, size and terms' };
+        const close = exact || list.find((o) => near(o) && sameSpace(o));
+        if (close) {
+          const diffs = [];
+          if ((close.signedDate || '') !== (c.signedDate || '')) diffs.push('date');
+          if (Math.round(parseNumber(close.sf) || 0) !== Math.round(parseNumber(c.sf) || 0)) diffs.push('size');
+          if (!sameTerms(close, c)) diffs.push('terms');
+          return { status: 'possible', where, match: close, reason: 'Same tenant' + (keyOf(close.building) === keyOf(c.building) ? ' and building' : '') + (diffs.length ? '; different ' + diffs.join(', ') : '') };
+        }
+        return null;
+      };
+      // A clash inside the sheet comes first, so a second row can't quietly overwrite what the first one set.
+      const res = check(seen, 'file') || check(existing, 'crm') || { status: 'new' };
+      seen.push(Object.assign({ row: i }, c));
+      return Object.assign({ comp: c }, res);
+    });
   }
 
   // A term like "5 years", "5 yrs", "62 mo" or a bare number of months.
@@ -2507,7 +2703,7 @@
       if (idx >= 0) mapping[field] = idx;
     });
     // Then headers with a unit tacked on, like "Total Inventory (SF)" or "Vacancy (%)".
-    const bare = normalized.map((h) => h.replace(/\s*(\/?sf|psf|rsf|%|\/sf\/yr|\/sf\/mo)$/, '').trim());
+    const bare = normalized.map((h) => h.replace(/\s*(\/?sf|psf|rsf|%|\/sf\/yr|\/sf\/mo|mos?|months|yrs?|years)$/, '').trim());
     Object.keys(aliases).forEach((field) => {
       if (mapping[field] !== undefined) return;
       const idx = bare.findIndex((h, i) => h && candidates(field).includes(h) && !Object.values(mapping).includes(i));
@@ -2539,9 +2735,13 @@
         at = i;
       }
     });
-    const headers = rows[at];
+    let headers = rows[at].map((h) => String(h === null || h === undefined ? '' : h));
+    // A second header row (units like "(Mos.)", or a label missing above) is folded into the first.
+    const next = (rows[at + 1] || []).map((v) => String(v === null || v === undefined ? '' : v).trim());
+    const subHeader = next.some(Boolean) && next.every((v) => !v || !/\d/.test(v) || /^\(.*\)$/.test(v));
+    if (subHeader) headers = headers.map((h, i) => [h.trim(), next[i] || ''].filter(Boolean).join(' ')).concat(next.slice(headers.length).filter(Boolean));
     const mapping = mapHeaders(headers, aliases);
-    const records = rows.slice(at + 1).filter((r) => r.some((v) => String(v || '').trim())).map((r) => {
+    const records = rows.slice(at + (subHeader ? 2 : 1)).filter((r) => r.some((v) => String(v || '').trim())).map((r) => {
       const rec = {};
       Object.keys(mapping).forEach((field) => {
         const v = String(r[mapping[field]] === undefined || r[mapping[field]] === null ? '' : r[mapping[field]]).trim();
@@ -2760,6 +2960,7 @@
     PORTFOLIO_IMPORT_ALIASES,
     COMP_IMPORT_ALIASES,
     MARKET_STAT_ALIASES,
+    parseResearchReport,
     compareQuarters,
     MARKET_PLACEHOLDERS,
     normalizeQuarter,
@@ -2768,6 +2969,7 @@
     marketValues,
     cleanImportedComp,
     compKey,
+    planCompImport,
     parseTermMonths,
     normalizeDealType,
     SHEET_COLUMNS,

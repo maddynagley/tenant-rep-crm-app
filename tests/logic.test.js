@@ -990,3 +990,38 @@ test('market stats: Research table rows, latest quarter per submarket, template 
   assert.equal(L.marketStatFor(now, { assetClass: 'Industrial' }), null);
   assert.equal(L.fillTemplate('{Vacancy}', { company: {} }), '[Vacancy]');
 });
+
+test('comp import: second header row, rate columns, months, and duplicate review', () => {
+  const rows = [
+    ['Tenant', 'Address', 'Building Name', 'Submarket', 'Size (SF)', 'Lease Term', 'Lease Rate', 'Rate Type', 'Escalations', 'Free Rent', 'TIA', ''],
+    ['', '', '', '', '', '(Mos.)', '', '', '', '(Mos.)', '', 'Type'],
+    ['Acme, Inc.', '1 Main St', 'One Main', 'Uptown', '4,000', '7', '27.5', 'FS', '0.03', '3', '$10-$15', 'Downsize & Extension'],
+    ['Acme', '1 Main St', 'One Main', 'Uptown', '4,000', '7', '27', 'FS', '0.03', '3', '10', 'Renewal'],
+    ['Birch', '2 Side St', '', 'Uptown', '2,000', '24', '20', 'NNN', '0', '0', '0', ''],
+  ];
+  const res = L.rowsToRecords(rows, L.COMP_IMPORT_ALIASES);
+  assert.equal(res.records.length, 3);
+  assert.deepEqual(Object.keys(res.mapping).sort(), ['address', 'building', 'dealType', 'escalationPct', 'freeRentMonths', 'rateBasis', 'sf', 'startingRent', 'submarket', 'tenant', 'termMonths', 'tiAllowance'].sort());
+  const comps = res.records.map((r) => L.cleanImportedComp(r, { assetClass: 'Office', termUnit: 'months' }));
+  assert.deepEqual([comps[0].startingRent, comps[0].rateBasis, comps[0].termMonths, comps[0].escalationPct, comps[0].tiAllowance, comps[0].dealType], [27.5, 'Full Service ($/SF/yr)', 7, 3, 10, 'Renewal']);
+  assert.match(comps[0].notes, /Type: Downsize & Extension · TI: \$10-\$15/);
+  assert.equal(comps[2].building, '2 Side St');
+  // Already in the CRM without rent (an earlier import): the first row updates it; the second row is held for review.
+  const existing = [{ id: 'c1', building: 'One Main', tenant: 'Acme Inc', sf: 4000 }, { id: 'c2', building: 'Other', tenant: 'Birch', sf: 9000, startingRent: 30 }];
+  const plan = L.planCompImport(comps, existing);
+  assert.deepEqual(plan.map((p) => [p.status, p.where]), [['duplicate', 'crm'], ['possible', 'file'], ['new', undefined]]);
+  assert.equal(plan[0].match.id, 'c1');
+  assert.match(plan[1].reason, /Same tenant and building; different terms/);
+  // Same deal and terms again: a duplicate; an expansion (different size and date) at the same building: possible.
+  const again = L.planCompImport([{ building: 'One Main', tenant: 'Acme', sf: 4000, startingRent: 27.5 }, { building: 'One Main', tenant: 'Acme', sf: 6000, signedDate: '2027-01-01' }], [Object.assign({ id: 'c3' }, comps[0])]);
+  assert.deepEqual(again.map((p) => p.status), ['duplicate', 'possible']);
+  assert.match(again[1].reason, /different date, size/);
+});
+
+test('comp import: defaults are marked so an update keeps the existing comp\'s values', () => {
+  const c = L.cleanImportedComp({ building: 'X', startingRent: '30' }, { source: 'Outside broker', assetClass: 'Office' });
+  assert.deepEqual([c.source, c.assetClass, c.rateBasis], ['Outside broker', 'Office', 'Full Service ($/SF/yr)']);
+  assert.deepEqual(c.guessed, ['source', 'assetClass', 'rateBasis']);
+  assert.equal(Object.keys(c).includes('guessed'), false);
+  assert.deepEqual(L.cleanImportedComp({ building: 'X', source: 'CoStar', assetClass: 'Office', rateBasis: 'NNN' }).guessed, []);
+});

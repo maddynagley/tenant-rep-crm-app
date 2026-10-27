@@ -2449,6 +2449,31 @@
       </div>`;
   }
 
+  // Comps that may already be in the CRM (or repeat a row above) wait for Maddy's call; nothing is doubled silently.
+  function compPlan(p, opts) {
+    const comps = p.result.records.map((r) => L.cleanImportedComp(r, Object.assign({ termUnit: p.termUnit }, opts || {})));
+    return L.planCompImport(comps, S.all('comps'));
+  }
+  function compDuplicateReview(p) {
+    const plan = compPlan(p);
+    const flagged = plan.map((x, i) => Object.assign({ i }, x)).filter((x) => x.status !== 'new');
+    if (!flagged.length) return `<p class="wide hint">No duplicates: all ${plan.length} comps are new to the CRM.</p>`;
+    const line = (c) => esc([c.tenant, c.building, c.sf ? L.fmtNumber(c.sf) + ' SF' : '', c.signedDate ? L.fmtDate(c.signedDate) : '', c.startingRent ? '$' + Number(c.startingRent).toFixed(2) : '', c.termMonths ? c.termMonths + ' mo' : ''].filter(Boolean).join(' · '));
+    return `<div class="wide dup-review">
+      <h3 class="notes-sub">Review ${flagged.length} possible duplicate${flagged.length > 1 ? 's' : ''}</h3>
+      <p class="hint">Nothing is added twice unless you choose to. An expansion, extension or a second deal with the same tenant is fine to add as a separate comp; the same deal again is not.</p>
+      <div class="table-wrap"><table class="tbl compact"><thead><tr><th>Row in file</th><th>Matches</th><th>Why</th><th>What to do</th></tr></thead><tbody>${flagged
+        .map((x) => {
+          const choices =
+            x.where === 'crm'
+              ? [{ value: 'update', label: 'Update the existing comp' }, { value: 'add', label: 'Add as a separate comp' }, { value: 'skip', label: 'Skip this row' }]
+              : [{ value: 'skip', label: 'Skip this row' }, { value: 'add', label: 'Add as a separate comp' }];
+          const def = x.status === 'duplicate' && x.where === 'crm' ? 'update' : 'skip';
+          return `<tr class="${x.status === 'possible' ? 'dup-possible' : ''}"><td>${line(x.comp)}</td><td>${x.where === 'crm' ? 'In the CRM: ' : 'Row ' + (x.match.row + 1) + ' of this file: '}${line(x.match)}</td><td>${badge(x.status === 'duplicate' ? 'Same deal' : 'Possible duplicate', x.status === 'duplicate' ? 'gray' : 'amber')} <span class="sub">${esc(x.reason)}</span></td><td><select name="dup-${x.i}">${options(choices, def)}</select></td></tr>`;
+        })
+        .join('')}</tbody></table></div></div>`;
+  }
+
   function importPreviewCard() {
     const p = importPreview;
     const mapped = Object.keys(p.result.mapping);
@@ -2466,6 +2491,7 @@
       <div class="table-wrap"><table class="tbl compact"><thead><tr>${mapped.map((k) => `<th>${esc(k)}</th>`).join('')}</tr></thead>
         <tbody>${sample.map((r) => `<tr>${mapped.map((k) => `<td>${esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       <form id="import-form" class="form-grid">
+        ${isComps ? compDuplicateReview(p) : ''}
         ${
           isStats
             ? `<label>Quarter<input name="quarter" value="${esc(p.quarter)}" placeholder="3Q26" required pattern="[1-4][Qq][0-9]{2}" /></label>
@@ -3150,6 +3176,8 @@
     const title = filename + ' ' + rows.slice(0, 6).map((r) => r.join(' ')).join(' ');
     importPreview.quarter = L.normalizeQuarter(title) || L.latestDataQuarter(L.todayISO());
     importPreview.assetClass = /industrial|warehouse|logistics/i.test(title) ? 'Industrial' : 'Office';
+    const termHead = importPreview.result.mapping.termMonths !== undefined ? importPreview.result.headers[importPreview.result.mapping.termMonths] : '';
+    importPreview.termUnit = /\bmo/i.test(termHead) ? 'months' : /\b(yr|year)/i.test(termHead) ? 'years' : '';
     if (location.hash !== '#/data') location.hash = '#/data';
     else render();
     window.scrollTo(0, 0);
@@ -3185,26 +3213,26 @@
   }
 
   function importComps(records, opts) {
-    const existing = {};
-    S.all('comps').forEach((c) => (existing[L.compKey(c)] = c));
+    const plan = compPlan(importPreview, opts);
     let added = 0;
     let updated = 0;
     let skipped = 0;
-    records.forEach((rec) => {
-      const comp = L.cleanImportedComp(rec, opts);
+    let held = 0;
+    plan.forEach((x, i) => {
+      const comp = x.comp;
       if (!comp.building) return skipped++;
-      const same = existing[L.compKey(comp)];
-      if (same) {
-        Object.keys(comp).forEach((k) => comp[k] === '' && delete comp[k]);
-        S.upsert('comps', Object.assign({ id: same.id }, comp), { silent: true });
-        updated++;
-      } else {
-        existing[L.compKey(comp)] = S.upsert('comps', comp, { silent: true });
-        added++;
+      const choice = x.status === 'new' ? 'add' : opts.choices[i] || (x.status === 'duplicate' && x.where === 'crm' ? 'update' : 'skip');
+      if (choice === 'skip') return held++;
+      if (choice === 'update') {
+        Object.keys(comp).forEach((k) => (comp[k] === '' || comp[k] === undefined || (comp.guessed || []).includes(k)) && delete comp[k]);
+        S.upsert('comps', Object.assign({ id: x.match.id }, comp), { silent: true });
+        return updated++;
       }
+      S.upsert('comps', comp, { silent: true });
+      added++;
     });
     S.saveSettings({});
-    return `Comps: ${added} added${updated ? `, ${updated} updated` : ''}${skipped ? `, ${skipped} rows skipped (no building or address)` : ''}.`;
+    return `Comps: ${added} added${updated ? `, ${updated} updated` : ''}${held ? `, ${held} duplicate${held > 1 ? 's' : ''} skipped` : ''}${skipped ? `, ${skipped} rows without a building or address skipped` : ''}.`;
   }
 
   // ---------- Google Sheet sync ----------
@@ -3840,6 +3868,8 @@
       const opts = { assetClass: fd.get('assetClass'), status: fd.get('status'), source: fd.get('source'), confidential: fd.get('confidential') === 'on', quarter: String(fd.get('quarter') || '').toUpperCase() };
       const importers = { companies: importCompanies, contacts: importContacts, portfolio: importPortfolio, comps: importComps, marketStats: importMarketStats };
       const kind = importPreview.kind;
+      opts.choices = {};
+      Array.from(fd.keys()).filter((k) => /^dup-\d+$/.test(k)).forEach((k) => (opts.choices[k.slice(4)] = fd.get(k)));
       const msg = importers[kind](importPreview.result.records, opts);
       importPreview = null;
       if (kind === 'comps') state.comps.tab = 'comps';
