@@ -2063,6 +2063,93 @@
     notes: ['notes', 'comments'],
   };
 
+  // Comp spreadsheets (CoStar exports, broker comp sheets, research tables).
+  const COMP_IMPORT_ALIASES = {
+    building: ['building', 'building name', 'property', 'property name', 'project', 'bldg'],
+    address: ['address', 'property address', 'street address', 'building address', 'location'],
+    city: ['city'],
+    submarket: ['submarket', 'sub market', 'market', 'submarket name'],
+    assetClass: ['asset class', 'property type', 'product type', 'asset type', 'space type', 'type of space', 'use'],
+    landlord: ['landlord', 'owner', 'ownership', 'landlord name'],
+    yearBuilt: ['year built', 'yr built', 'built', 'year blt'],
+    clearHeight: ['clear height', 'clear ht', 'ceiling height', 'clear'],
+    tenant: ['tenant', 'tenant name', 'company', 'lessee', 'occupant'],
+    dealType: ['deal type', 'transaction type', 'lease type', 'type'],
+    sf: ['sf', 'rsf', 'square feet', 'sq ft', 'size', 'size sf', 'leased sf', 'sf leased', 'rentable sf', 'area', 'size rsf', 'total sf'],
+    signedDate: ['signed', 'signed date', 'sign date', 'lease signed', 'execution date', 'date signed', 'deal date', 'transaction date', 'date'],
+    commencement: ['commencement', 'commencement date', 'lease commencement', 'start date', 'move in', 'move in date'],
+    termMonths: ['term', 'term months', 'term mos', 'lease term', 'term mo', 'term yrs', 'term years'],
+    leaseExpiration: ['expiration', 'expiration date', 'lease expiration', 'lxd', 'exp date', 'lease end', 'end date'],
+    startingRent: ['starting rent', 'rent', 'rate', 'base rent', 'rent/sf', 'rent psf', 'rate psf', '/sf', 'asking rent', 'initial rent', 'face rent', 'start rent', 'rental rate', 'net effective'],
+    rateBasis: ['rent basis', 'rate basis', 'basis', 'service type', 'lease structure', 'expense structure', 'rent type'],
+    escalationPct: ['escalation', 'escalations', 'annual escalation', 'bumps', 'annual increase', 'esc', 'rent escalation', 'increases'],
+    freeRentMonths: ['free rent', 'free rent months', 'free rent mos', 'abatement', 'free', 'rent abatement', 'abated rent'],
+    tiAllowance: ['ti', 'ti allowance', 'tis', 'ti/sf', 'ti psf', 'tenant improvements', 'tia', 'improvement allowance', 'work letter'],
+    source: ['source'],
+    notes: ['notes', 'comments', 'remarks', 'note'],
+  };
+
+  // The first number in text like "$32.50 FS", "3 months", "$45.00 PSF" or "3.0%".
+  function firstNumber(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    const m = /-?\d[\d,]*\.?\d*/.exec(String(v || '').replace(/\$\s+/g, '$'));
+    return m ? parseNumber(m[0]) : null;
+  }
+
+  function normalizeRateBasis(v, fallback) {
+    const s = String(v || '').toLowerCase();
+    const monthly = /\/\s*mo|per month|monthly|psf\/mo|\/sf\/mo/.test(s);
+    if (/nnn|triple|net net|\bnet\b|\bnn\b/.test(s)) return monthly ? 'NNN ($/SF/mo)' : 'NNN ($/SF/yr)';
+    if (/\bmg\b|modified/.test(s)) return 'Modified Gross ($/SF/yr)';
+    if (/\bfs\b|full service|full-service|\bfsg\b/.test(s)) return 'Full Service ($/SF/yr)';
+    if (/gross/.test(s)) return monthly ? 'Gross ($/SF/mo)' : 'Full Service ($/SF/yr)';
+    if (monthly) return 'NNN ($/SF/mo)';
+    return fallback || '';
+  }
+
+  // One spreadsheet row → a comp record. defaults: { assetClass, source, confidential }.
+  function cleanImportedComp(rec, defaults) {
+    defaults = defaults || {};
+    const out = {};
+    ['building', 'address', 'city', 'submarket', 'landlord', 'tenant', 'source', 'notes'].forEach((k) => {
+      if (rec[k] !== undefined && String(rec[k]).trim()) out[k] = String(rec[k]).trim();
+    });
+    if (!out.building && out.address) out.building = out.address;
+    out.assetClass = normalizeAssetClass(rec.assetClass) || defaults.assetClass || '';
+    // "Lease type" columns often hold the rent basis (Full Service, NNN) rather than the deal type.
+    const basisInType = rec.dealType && normalizeRateBasis(rec.dealType, '') && !normalizeDealType(String(rec.dealType).replace(/lease/i, ''));
+    if (rec.dealType && !basisInType && normalizeDealType(rec.dealType)) out.dealType = normalizeDealType(rec.dealType);
+    ['sf', 'yearBuilt', 'clearHeight', 'tiAllowance', 'freeRentMonths', 'escalationPct'].forEach((k) => {
+      const n = firstNumber(rec[k]);
+      if (n !== null) out[k] = n;
+    });
+    // Escalations written as a fraction (0.03) mean 3%; fixed-dollar bumps ("$0.50") aren't a percentage.
+    if (out.escalationPct !== undefined && /\$/.test(String(rec.escalationPct))) {
+      out.notes = [out.notes, 'Escalations: ' + String(rec.escalationPct).trim()].filter(Boolean).join(' · ');
+      delete out.escalationPct;
+    } else if (out.escalationPct !== undefined && out.escalationPct > 0 && out.escalationPct < 0.2 && !/%/.test(String(rec.escalationPct))) out.escalationPct = Math.round(out.escalationPct * 10000) / 100;
+    // "5 yrs" and "62 mo" are clear; a bare number under 12 is years (5 = 60 months), otherwise months.
+    const rawTerm = String(rec.termMonths || '').trim();
+    const term = parseTermMonths(rawTerm.replace(/[^0-9.a-z ]/gi, ' ').trim());
+    if (term) out.termMonths = /^[\d.]+$/.test(rawTerm) && term < 12 ? Math.round(term * 12) : term;
+    const rent = firstNumber(rec.startingRent);
+    if (rent !== null) out.startingRent = rent;
+    out.rateBasis = normalizeRateBasis(rec.rateBasis, '') || normalizeRateBasis(rec.startingRent, '') || (basisInType ? normalizeRateBasis(rec.dealType, '') : '') || (out.assetClass === 'Industrial' ? 'NNN ($/SF/yr)' : 'Full Service ($/SF/yr)');
+    ['signedDate', 'commencement', 'leaseExpiration'].forEach((k) => {
+      const d = normalizeDate(rec[k]);
+      if (d) out[k] = d;
+    });
+    if (!out.source) out.source = defaults.source || '';
+    if (defaults.confidential) out.confidential = true;
+    return out;
+  }
+
+  // Same building, tenant and date (signed, else commencement) means the same comp.
+  function compKey(c) {
+    const k = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return [k(c.building), k(c.tenant), c.signedDate || c.commencement || '', Math.round(parseNumber(c.sf) || 0)].join('|');
+  }
+
   // A term like "5 years", "5 yrs", "62 mo" or a bare number of months.
   function parseTermMonths(v) {
     if (v === null || v === undefined || v === '') return null;
@@ -2290,7 +2377,7 @@
   };
 
   function normHeader(h) {
-    return String(h).toLowerCase().replace(/[_\s]+/g, ' ').replace(/[^a-z0-9#/ ]/g, '').trim();
+    return String(h).toLowerCase().replace(/[_\s]+/g, ' ').replace(/[^a-z0-9#/ ]/g, '').replace(/\s*\/\s*/g, '/').trim();
   }
 
   function mapHeaders(headers, aliases) {
@@ -2314,14 +2401,25 @@
     return '';
   }
 
+  // The header row is the one (among the first 15) that matches the most known columns, so title rows above a
+  // table in a spreadsheet are skipped.
   function rowsToRecords(rows, aliases) {
     if (!rows.length) return { records: [], mapping: {}, headers: [] };
-    const headers = rows[0];
+    let at = 0;
+    let best = -1;
+    rows.slice(0, 15).forEach((r, i) => {
+      const n = Object.keys(mapHeaders(r, aliases)).length;
+      if (n > best) {
+        best = n;
+        at = i;
+      }
+    });
+    const headers = rows[at];
     const mapping = mapHeaders(headers, aliases);
-    const records = rows.slice(1).map((r) => {
+    const records = rows.slice(at + 1).filter((r) => r.some((v) => String(v || '').trim())).map((r) => {
       const rec = {};
       Object.keys(mapping).forEach((field) => {
-        const v = (r[mapping[field]] || '').trim();
+        const v = String(r[mapping[field]] === undefined || r[mapping[field]] === null ? '' : r[mapping[field]]).trim();
         if (v !== '') rec[field] = v;
       });
       return rec;
@@ -2535,6 +2633,9 @@
     summarizeDeals,
     portfolioBreakdown,
     PORTFOLIO_IMPORT_ALIASES,
+    COMP_IMPORT_ALIASES,
+    cleanImportedComp,
+    compKey,
     parseTermMonths,
     normalizeDealType,
     SHEET_COLUMNS,

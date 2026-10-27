@@ -1269,10 +1269,14 @@
             <td class="right">${c.tiAllowance ? '$' + esc(c.tiAllowance) : ''}</td><td class="nowrap">${compLXDCell(c)}</td><td>${esc(c.source)}</td></tr>`
           )
           .join('')}</tbody></table></div>`
-      : emptyState('No comps yet. Open a closed deal and tap "Save as comp", or add one by hand.', '<button class="btn primary" data-action="new" data-col="comps">+ Comp</button>');
+      : S.all('comps').length
+        ? emptyState('No comps match these filters.')
+        : emptyState('No comps yet. Drop a comp spreadsheet below, open a closed deal and tap "Save as comp", or add one by hand.', '<button class="btn primary" data-action="new" data-col="comps">+ Comp</button>');
+    const dropZone = `<div class="drop-zone" data-drop="comps"><strong>Drag an Excel or CSV comp sheet here</strong> <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="comps">Choose a file</button>
+      <div class="sub">Columns like Building, Tenant, SF, Signed, Term, Rent, Escalations, Free Rent and TI are matched automatically. You review them before anything is saved.</div></div>`;
     return `
       <div class="page-head"><h1>Comps & Critical Dates</h1>
-        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
+        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="btn" data-action="pick-file" data-kind="comps">Import comps</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
       </div>
       <div class="toolbar">
         <div class="seg">
@@ -1281,7 +1285,7 @@
         </div>
         ${f.tab === 'comps' ? assetTabs(f.asset, 'comps') + `<input type="search" placeholder="Search building, tenant, submarket…" value="${esc(f.q)}" data-filter="comps.q" id="f-comps-q" />` : ''}
       </div>
-      ${f.tab === 'comps' ? compTable : dates}`;
+      ${f.tab === 'comps' ? compTable + dropZone : dates}`;
   }
 
   // ----- coach sidebar -----
@@ -2310,7 +2314,7 @@
       ${importPreview ? importPreviewCard() : ''}
       <div class="grid2">
         <section class="card">
-          <h2>Import from CSV</h2>
+          <h2>Import from CSV or Excel</h2>
           <p>Export a list from CoStar, Reonomy, ZoomInfo, LinkedIn Sales Navigator or Excel (Save As → CSV), then import it here.
           Columns like <em>Tenant Name, SF Occupied, Lease Expiration, Submarket, Address, Landlord, Industry, Employees</em> are recognized automatically.</p>
           <div class="actions">
@@ -2405,7 +2409,8 @@
   function importPreviewCard() {
     const p = importPreview;
     const mapped = Object.keys(p.result.mapping);
-    const required = { companies: 'name', contacts: 'company', portfolio: 'company' }[p.kind];
+    const required = { companies: 'name', contacts: 'company', portfolio: 'company', comps: 'building' }[p.kind];
+    const isComps = p.kind === 'comps';
     const unmapped = p.result.headers.filter((h, i) => !Object.values(p.result.mapping).includes(i));
     const sample = p.result.records.slice(0, 5);
     return `<section class="card import-preview">
@@ -2413,18 +2418,23 @@
       <p>${p.result.records.length} rows found. Matched columns:</p>
       <div class="mapping">${mapped.map((k) => `<span class="badge green">${esc(p.result.headers[p.result.mapping[k]])} → ${esc(k)}</span>`).join(' ')}
         ${unmapped.map((h) => `<span class="badge gray" title="Will be ignored">${esc(h)} (ignored)</span>`).join(' ')}</div>
-      ${!mapped.includes(required) ? `<p class="red-text">No ${p.kind === 'companies' ? 'company/tenant name' : 'client/company'} column was recognized. Rename that column to "Company" and try again.</p>` : ''}
+      ${!mapped.includes(required) && !(isComps && mapped.includes('address')) ? `<p class="red-text">No ${isComps ? 'building or address' : p.kind === 'companies' ? 'company/tenant name' : 'client/company'} column was recognized. Rename that column to "${isComps ? 'Building' : 'Company'}" and try again.</p>` : ''}
       <div class="table-wrap"><table class="tbl compact"><thead><tr>${mapped.map((k) => `<th>${esc(k)}</th>`).join('')}</tr></thead>
         <tbody>${sample.map((r) => `<tr>${mapped.map((k) => `<td>${esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       <form id="import-form" class="form-grid">
         <label>Asset class when not in file<select name="assetClass">${options(L.ASSET_CLASSES, state.companies.asset !== 'All' ? state.companies.asset : 'Office')}</select></label>
-        <label>Status for new companies<select name="status">${options(L.COMPANY_STATUSES, p.kind === 'portfolio' ? 'Past Client' : 'Target')}</select></label>
-        <label>Lead source<input name="source" value="${esc(p.kind === 'contacts' ? '' : p.kind === 'portfolio' ? 'Portfolio import' : 'CSV import')}" /></label>
+        ${
+          isComps
+            ? `<label>Source when not in file<select name="source">${options(FIELDS.comps.find((x) => x.key === 'source').options, 'Outside broker')}</select></label>
+        <label class="check"><input type="checkbox" name="confidential" /> Mark these comps confidential (internal use only)</label>`
+            : `<label>Status for new companies<select name="status">${options(L.COMPANY_STATUSES, p.kind === 'portfolio' ? 'Past Client' : 'Target')}</select></label>
+        <label>Lead source<input name="source" value="${esc(p.kind === 'contacts' ? '' : p.kind === 'portfolio' ? 'Portfolio import' : 'CSV import')}" /></label>`
+        }
         <div class="wide actions">
           <button class="btn primary" type="submit">Import ${p.result.records.length} rows</button>
           <button class="btn" type="button" data-action="cancel-import">Cancel</button>
         </div>
-        <p class="hint wide">Companies whose name (and address, when given) already exist are updated rather than duplicated. ${p.kind === 'contacts' ? 'Contacts with an email already in the CRM are skipped; companies that do not exist yet are created.' : ''}${p.kind === 'portfolio' ? 'Each row becomes a Closed Won deal under its client (clients are created if needed). Re-importing the same client, close date and SF updates the deal instead of duplicating it.' : ''}</p>
+        <p class="hint wide">${isComps ? '' : 'Companies whose name (and address, when given) already exist are updated rather than duplicated. '}${p.kind === 'contacts' ? 'Contacts with an email already in the CRM are skipped; companies that do not exist yet are created.' : ''}${p.kind === 'portfolio' ? 'Each row becomes a Closed Won deal under its client (clients are created if needed). Re-importing the same client, close date and SF updates the deal instead of duplicating it.' : ''}${isComps ? 'Each row becomes a comp. A comp already in the CRM (same building, tenant, date and SF) is updated instead of duplicated. Lease expirations are estimated from the term when the sheet has none.' : ''}</p>
       </form>
     </section>`;
   }
@@ -3067,14 +3077,67 @@
         }
         return;
       }
-      const rows = L.parseCSV(text);
-      const aliases = { companies: L.COMPANY_IMPORT_ALIASES, contacts: L.CONTACT_IMPORT_ALIASES, portfolio: L.PORTFOLIO_IMPORT_ALIASES }[kind];
-      importPreview = { kind, filename: file.name, result: L.rowsToRecords(rows, aliases) };
-      if (location.hash !== '#/data') location.hash = '#/data';
-      else render();
-      window.scrollTo(0, 0);
+      showImportPreview(kind, file.name, L.parseCSV(text));
     };
+    if (kind !== 'backup' && isExcel(file)) {
+      readExcelRows(file, IMPORT_ALIASES[kind]).then((rows) => showImportPreview(kind, file.name, rows), (e) => alert(e.message));
+      return;
+    }
     reader.readAsText(file);
+  }
+
+  const IMPORT_ALIASES = { companies: L.COMPANY_IMPORT_ALIASES, contacts: L.CONTACT_IMPORT_ALIASES, portfolio: L.PORTFOLIO_IMPORT_ALIASES, comps: L.COMP_IMPORT_ALIASES };
+  const isExcel = (file) => /\.(xlsx|xlsm|xls)$/i.test(file.name);
+
+  function showImportPreview(kind, filename, rows) {
+    importPreview = { kind, filename, result: L.rowsToRecords(rows, IMPORT_ALIASES[kind]) };
+    if (location.hash !== '#/data') location.hash = '#/data';
+    else render();
+    window.scrollTo(0, 0);
+  }
+
+  // Excel files are read in the browser by SheetJS, loaded only when one is dropped. The file never leaves the computer.
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    return new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      el.onload = () => resolve(window.XLSX);
+      el.onerror = () => reject(new Error('Could not load the Excel reader. Check your connection, or save the sheet as CSV and import that.'));
+      document.head.appendChild(el);
+    });
+  }
+  // Rows of the sheet whose columns best match what's being imported (a workbook may hold several tabs).
+  function readExcelRows(file, aliases) {
+    return Promise.all([loadXLSX(), file.arrayBuffer()]).then(([XLSX, buf]) => {
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      const sheets = wb.SheetNames.map((n) => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' }));
+      const score = (rows) => Object.keys(L.rowsToRecords(rows, aliases).mapping).length;
+      return sheets.sort((a, b) => score(b) - score(a))[0] || [];
+    });
+  }
+
+  function importComps(records, opts) {
+    const existing = {};
+    S.all('comps').forEach((c) => (existing[L.compKey(c)] = c));
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    records.forEach((rec) => {
+      const comp = L.cleanImportedComp(rec, opts);
+      if (!comp.building) return skipped++;
+      const same = existing[L.compKey(comp)];
+      if (same) {
+        Object.keys(comp).forEach((k) => comp[k] === '' && delete comp[k]);
+        S.upsert('comps', Object.assign({ id: same.id }, comp), { silent: true });
+        updated++;
+      } else {
+        existing[L.compKey(comp)] = S.upsert('comps', comp, { silent: true });
+        added++;
+      }
+    });
+    S.saveSettings({});
+    return `Comps: ${added} added${updated ? `, ${updated} updated` : ''}${skipped ? `, ${skipped} rows skipped (no building or address)` : ''}.`;
   }
 
   // ---------- Google Sheet sync ----------
@@ -3581,7 +3644,7 @@
         case 'pick-file': {
           const input = $('#file-input');
           input.dataset.kind = d.kind;
-          input.accept = d.kind === 'backup' ? '.json,application/json' : '.csv,text/csv';
+          input.accept = d.kind === 'backup' ? '.json,application/json' : '.csv,text/csv,.xlsx,.xls,.xlsm';
           input.value = '';
           return input.click();
         }
@@ -3702,15 +3765,34 @@
     } else if (e.target.id === 'import-form') {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const opts = { assetClass: fd.get('assetClass'), status: fd.get('status'), source: fd.get('source') };
-      const importers = { companies: importCompanies, contacts: importContacts, portfolio: importPortfolio };
+      const opts = { assetClass: fd.get('assetClass'), status: fd.get('status'), source: fd.get('source'), confidential: fd.get('confidential') === 'on' };
+      const importers = { companies: importCompanies, contacts: importContacts, portfolio: importPortfolio, comps: importComps };
       const kind = importPreview.kind;
       const msg = importers[kind](importPreview.result.records, opts);
       importPreview = null;
+      if (kind === 'comps') state.comps.tab = 'comps';
       location.hash = '#/' + kind;
       render();
       toast(msg);
     }
+  });
+
+  // Drop a comp sheet anywhere on the Comps tab.
+  const dropTarget = () => (location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : '');
+  document.addEventListener('dragover', (e) => {
+    if (!dropTarget() || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    $$('.drop-zone').forEach((z) => z.classList.add('over'));
+  });
+  document.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget) $$('.drop-zone').forEach((z) => z.classList.remove('over'));
+  });
+  document.addEventListener('drop', (e) => {
+    const kind = dropTarget();
+    if (!kind || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    $$('.drop-zone').forEach((z) => z.classList.remove('over'));
+    handleFile(kind, e.dataTransfer.files[0]);
   });
 
   $('#file-input').addEventListener('change', (e) => {

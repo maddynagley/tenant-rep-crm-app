@@ -928,3 +928,31 @@ test('recaps carry over to the next Friday; partner brokers are cc\'d from conta
   assert.deepEqual(L.partnerEmails({ partnerBrokers: 'Mitchell Karrh & RJ Zurak' }, contacts), { found: ['mk@firm.test'], missing: ['RJ Zurak'] });
   assert.equal(L.mailtoLink('a@x.test', 'S', 'B', 'mk@firm.test,b@y.test'), 'mailto:a@x.test?cc=mk@firm.test,b@y.test&subject=S&body=B');
 });
+
+test('comp sheets: header row found below titles, values cleaned, duplicates keyed', () => {
+  const rows = [
+    ['Q3 2026 Office Lease Comps'],
+    [''],
+    ['Building', 'Tenant', 'Property Type', 'RSF', 'Sign Date', 'Term', 'Rent ($/SF)', 'Lease Type', 'Escalations', 'Free Rent', 'TI ($/SF)'],
+    ['One Midtown', 'Acme', 'Office', '12,500', '3/15/2026', '7', '$38.50', 'Full Service', '3.0%', '6 months', '$65.00 PSF'],
+    ['Uptown Park', 'Birch', 'Warehouse', '85,000', '2026-05-01', '62 mo', '$7.25 NNN', '', '$0.25', '3', '5'],
+    ['', '', '', '', '', '', '', '', '', '', ''],
+  ];
+  const res = L.rowsToRecords(rows, L.COMP_IMPORT_ALIASES);
+  assert.equal(res.records.length, 2);
+  assert.equal(res.headers[0], 'Building');
+  const a = L.cleanImportedComp(res.records[0], { source: 'CoStar' });
+  assert.deepEqual(
+    [a.building, a.tenant, a.assetClass, a.sf, a.signedDate, a.termMonths, a.startingRent, a.rateBasis, a.escalationPct, a.freeRentMonths, a.tiAllowance, a.source],
+    ['One Midtown', 'Acme', 'Office', 12500, '2026-03-15', 84, 38.5, 'Full Service ($/SF/yr)', 3, 6, 65, 'CoStar']
+  );
+  const b = L.cleanImportedComp(res.records[1], { source: 'CoStar', confidential: true });
+  assert.deepEqual([b.assetClass, b.termMonths, b.startingRent, b.rateBasis, b.escalationPct, b.confidential], ['Industrial', 62, 7.25, 'NNN ($/SF/yr)', undefined, true]);
+  assert.match(b.notes, /Escalations: \$0\.25/);
+  assert.equal(L.compKey(a), L.compKey(Object.assign({}, a, { tenant: 'ACME ', startingRent: 40 })));
+  assert.equal(L.cleanImportedComp({ escalationPct: '0.03', building: 'X' }).escalationPct, 3);
+  const typed = L.cleanImportedComp({ building: 'X', assetClass: 'Office', dealType: 'NNN' });
+  assert.deepEqual([typed.dealType, typed.rateBasis], [undefined, 'NNN ($/SF/yr)']);
+  assert.equal(L.cleanImportedComp({ building: 'X', dealType: 'Renewal' }).dealType, 'Renewal');
+  assert.equal(L.cleanImportedComp({ building: 'X', dealType: 'New Lease' }).dealType, 'New Lease');
+});
