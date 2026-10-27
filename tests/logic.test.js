@@ -956,3 +956,37 @@ test('comp sheets: header row found below titles, values cleaned, duplicates key
   assert.equal(L.cleanImportedComp({ building: 'X', dealType: 'Renewal' }).dealType, 'Renewal');
   assert.equal(L.cleanImportedComp({ building: 'X', dealType: 'New Lease' }).dealType, 'New Lease');
 });
+
+test('market stats: Research table rows, latest quarter per submarket, template placeholders', () => {
+  assert.equal(L.normalizeQuarter('Atlanta Office 3Q26.xlsx'), '3Q26');
+  assert.equal(L.normalizeQuarter('Q2 2026'), '2Q26');
+  assert.equal(L.normalizeQuarter('2026 Q1'), '1Q26');
+  const rows = [
+    ['Atlanta Office Market – 3Q26'],
+    ['Submarket', 'Total Inventory (SF)', 'Total Vacancy Rate', 'Qtr Net Absorption', 'Under Construction', 'Avg Asking Rent ($/SF)'],
+    ['Northside', '22,000,000', '24.1%', '(45,000)', '0', '$43.10'],
+    ['Midtown', '25.5M', '0.215', '120,000', '1,200,000', '$46.50'],
+    ['Atlanta Total', '150,000,000', '23.0%', '50,000', '2,000,000', '$37.25'],
+  ];
+  const res = L.rowsToRecords(rows, L.MARKET_STAT_ALIASES);
+  const now = res.records.map((r) => L.cleanMarketStat(r, { quarter: '3Q26', assetClass: 'Office' }));
+  assert.deepEqual(now[0], { quarter: '3Q26', assetClass: 'Office', submarket: 'Northside', vacancy: 24.1, inventory: 22000000, netAbsorption: -45000, underConstruction: 0, askingRent: 43.1 });
+  assert.equal(now[1].vacancy, 21.5);
+  assert.equal(now[1].inventory, 25500000);
+  assert.equal(now[2].submarket, 'Market total');
+  const prev = [{ quarter: '2Q26', assetClass: 'Office', submarket: 'Northside', vacancy: 24.5, askingRent: 42.5 }];
+  const company = { name: 'Acme', assetClass: 'Office', submarket: 'Northside' };
+  const m = L.marketStatFor(now.concat(prev), company);
+  assert.equal(m.current.submarket, 'Northside');
+  assert.equal(m.previous.quarter, '2Q26');
+  assert.equal(m.market.vacancy, 23);
+  const v = L.marketValues(m, company);
+  assert.equal(v.VacancyChange, 'down 40 bps from 2Q26');
+  assert.equal(v.RentChange, 'up 1.4% from 2Q26');
+  assert.equal(v.MarketStat, 'Northside office vacancy was 24.1% in 3Q26, down 40 bps from 2Q26, asking rents averaged $43.10/SF (up 1.4% from 2Q26) and net absorption was -45,000 SF.');
+  assert.equal(L.fillTemplate('{Submarket} vacancy is {Vacancy} ({VacancyChange}); metro {MarketVacancy}.', { company, market: m }), 'Northside vacancy is 24.1% (down 40 bps from 2Q26); metro 23.0%.');
+  // A submarket with no row falls back to the market total; no stats leaves the usual [brackets].
+  assert.equal(L.marketStatFor(now, { assetClass: 'Office', submarket: 'Airport' }).current.submarket, 'Market total');
+  assert.equal(L.marketStatFor(now, { assetClass: 'Industrial' }), null);
+  assert.equal(L.fillTemplate('{Vacancy}', { company: {} }), '[Vacancy]');
+});

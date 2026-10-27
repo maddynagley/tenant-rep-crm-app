@@ -1114,6 +1114,7 @@
       { v: 'collateral', l: `Collateral (${collateral.length})` },
       { v: 'social', l: `Social (${posts.length})` },
       { v: 'templates', l: `Email templates (${S.all('templates').length})` },
+      { v: 'stats', l: 'Market stats' },
       { v: 'outreach', l: 'Outreach results' },
     ];
     let body = '';
@@ -1145,7 +1146,7 @@
       const stats = {};
       L.outreachStats(S.all('activities'), (a) => a.template).forEach((r) => (stats[r.key] = r));
       const list = S.all('templates').slice().sort((a, b) => L.TEMPLATE_STEPS.indexOf(a.step) - L.TEMPLATE_STEPS.indexOf(b.step) || a.name.localeCompare(b.name));
-      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
+      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. Market stats placeholders like {MarketStat}, {Vacancy}, {VacancyChange} and {AskingRent} fill in from the latest Research numbers for the company's submarket (see Market stats). They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
         ${
           list.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Template</th><th>When</th><th>Subject</th><th class="right">Sent</th><th class="right">Response rate</th></tr></thead><tbody>${list
@@ -1156,6 +1157,8 @@
                 .join('')}</tbody></table></div>`
             : emptyState('No templates yet.', '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>')
         }`;
+    } else if (f.tab === 'stats') {
+      body = marketStatsTab();
     } else {
       const acts = S.all('activities');
       const weekday = (a) => (a.date ? L.parseISODate(a.date).toLocaleDateString(undefined, { weekday: 'long' }) : '');
@@ -1172,7 +1175,7 @@
 
     return `
       <div class="page-head"><h1>Marketing</h1>
-        <div class="actions">${f.tab === 'templates' ? '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>' : `<button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button>`}</div>
+        <div class="actions">${f.tab === 'stats' ? '<button class="btn primary" data-action="pick-file" data-kind="marketStats">Import stats</button>' : f.tab === 'templates' ? '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>' : `<button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button>`}</div>
       </div>
       <div class="kpis">
         <div class="kpi ${goal && thisWeek >= goal ? 'good' : ''}"><span class="kpi-label">Posts this week</span><span class="kpi-value">${thisWeek} / ${goal}</span><span class="kpi-sub">weekly goal (Settings)</span></div>
@@ -1181,9 +1184,49 @@
       </div>
       <div class="toolbar">
         <div class="seg">${tabs.map((t) => `<button class="${f.tab === t.v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="tab" data-value="${t.v}">${esc(t.l)}</button>`).join('')}</div>
-        ${f.tab === 'outreach' ? '' : `<input type="search" placeholder="Search title, submarket, partner…" value="${esc(f.q)}" data-filter="marketing.q" id="f-marketing-q" />`}
+        ${f.tab === 'outreach' || f.tab === 'stats' ? '' : `<input type="search" placeholder="Search title, submarket, partner…" value="${esc(f.q)}" data-filter="marketing.q" id="f-marketing-q" />`}
       </div>
       ${body}`;
+  }
+
+  // Quarterly Research stats by submarket: they feed the {MarketStat}-style template placeholders.
+  function marketStatsTab() {
+    const stats = S.settings().marketStats || [];
+    const fmtPct = (n) => (n === undefined || n === null ? '<span class="muted">—</span>' : Number(n).toFixed(1) + '%');
+    const fmtSF = (n) => (n === undefined || n === null ? '<span class="muted">—</span>' : esc(L.fmtNumber(Math.round(n))));
+    const quarters = Array.from(new Set(stats.map((x) => x.quarter + '|' + x.assetClass)))
+      .map((k) => ({ quarter: k.split('|')[0], assetClass: k.split('|')[1], n: stats.filter((x) => x.quarter + '|' + x.assetClass === k).length }))
+      .sort((a, b) => L.compareQuarters(b.quarter, a.quarter) || a.assetClass.localeCompare(b.assetClass));
+    const tables = ['Office', 'Industrial']
+      .map((asset) => {
+        const latest = quarters.find((q) => q.assetClass === asset);
+        if (!latest) return '';
+        const rows = stats.filter((x) => x.assetClass === asset && x.quarter === latest.quarter).sort((a, b) => (a.submarket === 'Market total') - (b.submarket === 'Market total') || a.submarket.localeCompare(b.submarket));
+        return `<section class="card"><h2>${esc(asset)} · ${esc(latest.quarter)}</h2><div class="table-wrap"><table class="tbl compact"><thead><tr><th>Submarket</th><th class="right">Vacancy</th><th>vs. last qtr</th><th class="right">Asking rent</th><th class="right">Net absorption</th><th class="right">Under construction</th><th class="right">Inventory</th></tr></thead><tbody>${rows
+          .map((x) => {
+            const v = L.marketValues(L.marketStatFor(stats, { assetClass: asset, submarket: x.submarket }), {});
+            return `<tr${x.submarket === 'Market total' ? ' class="total-row"' : ''}><td><strong>${esc(x.submarket)}</strong></td><td class="right">${fmtPct(x.vacancy)}</td><td class="muted">${esc(v.VacancyChange || '')}</td><td class="right">${x.askingRent ? '$' + Number(x.askingRent).toFixed(2) : '<span class="muted">—</span>'}</td><td class="right">${fmtSF(x.netAbsorption)}</td><td class="right">${fmtSF(x.underConstruction)}</td><td class="right">${fmtSF(x.inventory)}</td></tr>`;
+          })
+          .join('')}</tbody></table></div></section>`;
+      })
+      .join('');
+    return `<p class="hint">Drop each quarter's Research stats here (Excel or CSV, one row per submarket plus a market total). Email templates and recommended follow-ups then quote the latest numbers for each company's submarket, with the change from the quarter before, so your emails update as the stats do.</p>
+      <div class="drop-zone" data-drop="marketStats"><strong>Drag a quarterly stats sheet here</strong> <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="marketStats">Choose a file</button>
+        <div class="sub">Columns like Submarket, Inventory, Vacancy, Net Absorption, Under Construction and Asking Rent are matched automatically. You confirm the quarter and asset class before saving.</div></div>
+      ${tables || emptyState('No market stats yet. Drop your first Research sheet above.')}
+      ${quarters.length ? `<section class="card"><h2>Quarters on file</h2><ul class="plain added-notes">${quarters.map((q) => `<li>${esc(q.quarter)} · ${esc(q.assetClass)} <span class="muted">· ${q.n} rows</span> <button class="link" data-action="remove-stats" data-quarter="${esc(q.quarter)}" data-asset="${esc(q.assetClass)}">Remove</button></li>`).join('')}</ul></section>` : ''}
+      <section class="card"><h2>Placeholders for templates</h2>
+        <p class="hint">Use these in Marketing → Email templates. They come from the company's submarket (or the market total when its submarket isn't in the sheet), for its asset class.</p>
+        <dl class="info">${[
+          ['{MarketStat}', 'A ready sentence: "Northside office vacancy was 24.1% in 3Q26, down 40 bps from 2Q26, asking rents averaged $43.10/SF (up 1.4% from 2Q26) and net absorption was -45,000 SF."'],
+          ['{Vacancy} / {VacancyChange}', '24.1% / down 40 bps from 2Q26'],
+          ['{AskingRent} / {RentChange}', '$43.10/SF / up 1.4% from 2Q26'],
+          ['{NetAbsorption}, {UnderConstruction}, {Deliveries}', 'In SF'],
+          ['{MarketVacancy}', 'The metro-wide vacancy, for comparison'],
+          ['{Quarter} / {StatsArea}', '3Q26 / the submarket the numbers are for'],
+        ]
+          .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`)
+          .join('')}</dl></section>`;
   }
 
   // ----- comps & critical dates -----
@@ -2409,8 +2452,9 @@
   function importPreviewCard() {
     const p = importPreview;
     const mapped = Object.keys(p.result.mapping);
-    const required = { companies: 'name', contacts: 'company', portfolio: 'company', comps: 'building' }[p.kind];
+    const required = { companies: 'name', contacts: 'company', portfolio: 'company', comps: 'building', marketStats: 'submarket' }[p.kind];
     const isComps = p.kind === 'comps';
+    const isStats = p.kind === 'marketStats';
     const unmapped = p.result.headers.filter((h, i) => !Object.values(p.result.mapping).includes(i));
     const sample = p.result.records.slice(0, 5);
     return `<section class="card import-preview">
@@ -2418,13 +2462,20 @@
       <p>${p.result.records.length} rows found. Matched columns:</p>
       <div class="mapping">${mapped.map((k) => `<span class="badge green">${esc(p.result.headers[p.result.mapping[k]])} → ${esc(k)}</span>`).join(' ')}
         ${unmapped.map((h) => `<span class="badge gray" title="Will be ignored">${esc(h)} (ignored)</span>`).join(' ')}</div>
-      ${!mapped.includes(required) && !(isComps && mapped.includes('address')) ? `<p class="red-text">No ${isComps ? 'building or address' : p.kind === 'companies' ? 'company/tenant name' : 'client/company'} column was recognized. Rename that column to "${isComps ? 'Building' : 'Company'}" and try again.</p>` : ''}
+      ${!mapped.includes(required) && !(isComps && mapped.includes('address')) ? `<p class="red-text">No ${isStats ? 'submarket' : isComps ? 'building or address' : p.kind === 'companies' ? 'company/tenant name' : 'client/company'} column was recognized. Rename that column to "${isStats ? 'Submarket' : isComps ? 'Building' : 'Company'}" and try again.</p>` : ''}
       <div class="table-wrap"><table class="tbl compact"><thead><tr>${mapped.map((k) => `<th>${esc(k)}</th>`).join('')}</tr></thead>
         <tbody>${sample.map((r) => `<tr>${mapped.map((k) => `<td>${esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       <form id="import-form" class="form-grid">
-        <label>Asset class when not in file<select name="assetClass">${options(L.ASSET_CLASSES, state.companies.asset !== 'All' ? state.companies.asset : 'Office')}</select></label>
         ${
-          isComps
+          isStats
+            ? `<label>Quarter<input name="quarter" value="${esc(p.quarter)}" placeholder="3Q26" required pattern="[1-4][Qq][0-9]{2}" /></label>
+        <label>Asset class<select name="assetClass">${options(['Office', 'Industrial'], p.assetClass)}</select></label>`
+            : `<label>Asset class when not in file<select name="assetClass">${options(L.ASSET_CLASSES, state.companies.asset !== 'All' ? state.companies.asset : 'Office')}</select></label>`
+        }
+        ${
+          isStats
+            ? ''
+            : isComps
             ? `<label>Source when not in file<select name="source">${options(FIELDS.comps.find((x) => x.key === 'source').options, 'Outside broker')}</select></label>
         <label class="check"><input type="checkbox" name="confidential" /> Mark these comps confidential (internal use only)</label>`
             : `<label>Status for new companies<select name="status">${options(L.COMPANY_STATUSES, p.kind === 'portfolio' ? 'Past Client' : 'Target')}</select></label>
@@ -2434,7 +2485,7 @@
           <button class="btn primary" type="submit">Import ${p.result.records.length} rows</button>
           <button class="btn" type="button" data-action="cancel-import">Cancel</button>
         </div>
-        <p class="hint wide">${isComps ? '' : 'Companies whose name (and address, when given) already exist are updated rather than duplicated. '}${p.kind === 'contacts' ? 'Contacts with an email already in the CRM are skipped; companies that do not exist yet are created.' : ''}${p.kind === 'portfolio' ? 'Each row becomes a Closed Won deal under its client (clients are created if needed). Re-importing the same client, close date and SF updates the deal instead of duplicating it.' : ''}${isComps ? 'Each row becomes a comp. A comp already in the CRM (same building, tenant, date and SF) is updated instead of duplicated. Lease expirations are estimated from the term when the sheet has none.' : ''}</p>
+        <p class="hint wide">${isComps || isStats ? '' : 'Companies whose name (and address, when given) already exist are updated rather than duplicated. '}${p.kind === 'contacts' ? 'Contacts with an email already in the CRM are skipped; companies that do not exist yet are created.' : ''}${p.kind === 'portfolio' ? 'Each row becomes a Closed Won deal under its client (clients are created if needed). Re-importing the same client, close date and SF updates the deal instead of duplicating it.' : ''}${isStats ? 'Each row is one submarket for this quarter; a row named Total or Atlanta becomes the market total. Importing the same quarter again replaces it.' : ''}${isComps ? 'Each row becomes a comp. A comp already in the CRM (same building, tenant, date and SF) is updated instead of duplicated. Lease expirations are estimated from the term when the sheet has none.' : ''}</p>
       </form>
     </section>`;
   }
@@ -2540,7 +2591,7 @@
     const p = S.get('contacts', contactId) || {};
     const deal = S.get('deals', dealId) || S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
     const st = S.settings();
-    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, deal, today: L.todayISO() };
+    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, deal, market: L.marketStatFor(S.settings().marketStats || [], c), today: L.todayISO() };
   }
 
   // Who to call and their numbers, with click-to-call, copy, and logging the call.
@@ -3079,6 +3130,10 @@
       }
       showImportPreview(kind, file.name, L.parseCSV(text));
     };
+    if (/\.pdf$/i.test(file.name)) {
+      alert('PDF reports can\'t be read automatically yet. Import the Excel or CSV version of the stats table, or send the PDF to the CRM Updates chat.');
+      return;
+    }
     if (kind !== 'backup' && isExcel(file)) {
       readExcelRows(file, IMPORT_ALIASES[kind]).then((rows) => showImportPreview(kind, file.name, rows), (e) => alert(e.message));
       return;
@@ -3086,11 +3141,15 @@
     reader.readAsText(file);
   }
 
-  const IMPORT_ALIASES = { companies: L.COMPANY_IMPORT_ALIASES, contacts: L.CONTACT_IMPORT_ALIASES, portfolio: L.PORTFOLIO_IMPORT_ALIASES, comps: L.COMP_IMPORT_ALIASES };
+  const IMPORT_ALIASES = { companies: L.COMPANY_IMPORT_ALIASES, contacts: L.CONTACT_IMPORT_ALIASES, portfolio: L.PORTFOLIO_IMPORT_ALIASES, comps: L.COMP_IMPORT_ALIASES, marketStats: L.MARKET_STAT_ALIASES };
   const isExcel = (file) => /\.(xlsx|xlsm|xls)$/i.test(file.name);
 
   function showImportPreview(kind, filename, rows) {
     importPreview = { kind, filename, result: L.rowsToRecords(rows, IMPORT_ALIASES[kind]) };
+    // Research sheets name the quarter and product in the file name or a title row.
+    const title = filename + ' ' + rows.slice(0, 6).map((r) => r.join(' ')).join(' ');
+    importPreview.quarter = L.normalizeQuarter(title) || L.latestDataQuarter(L.todayISO());
+    importPreview.assetClass = /industrial|warehouse|logistics/i.test(title) ? 'Industrial' : 'Office';
     if (location.hash !== '#/data') location.hash = '#/data';
     else render();
     window.scrollTo(0, 0);
@@ -3115,6 +3174,14 @@
       const score = (rows) => Object.keys(L.rowsToRecords(rows, aliases).mapping).length;
       return sheets.sort((a, b) => score(b) - score(a))[0] || [];
     });
+  }
+
+  function importMarketStats(records, opts) {
+    const rows = records.map((r) => L.cleanMarketStat(r, opts)).filter((x) => x.quarter && x.submarket && Object.keys(x).length > 3);
+    const fresh = new Set(rows.map((x) => x.quarter + '|' + x.assetClass));
+    const kept = (S.settings().marketStats || []).filter((x) => !fresh.has(x.quarter + '|' + x.assetClass));
+    S.saveSettings({ marketStats: kept.concat(rows) });
+    return `Market stats: ${rows.length} submarkets saved for ${opts.quarter} ${opts.assetClass}.`;
   }
 
   function importComps(records, opts) {
@@ -3442,6 +3509,11 @@
           runWorkflows();
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
         }
+        case 'remove-stats': {
+          if (!confirm(`Remove the ${d.quarter} ${d.asset} market stats?`)) return;
+          S.saveSettings({ marketStats: (S.settings().marketStats || []).filter((x) => !(x.quarter === d.quarter && x.assetClass === d.asset)) });
+          return toast('Removed.');
+        }
         case 'recap-sent': {
           const deal = S.get('deals', d.deal);
           S.upsert('activities', { type: 'Email', date: L.todayISO(), companyId: deal.companyId, dealId: deal.id, contactId: d.contact || '', subject: deal.name + ' – weekly update', template: L.RECAP_TEMPLATE });
@@ -3765,20 +3837,22 @@
     } else if (e.target.id === 'import-form') {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const opts = { assetClass: fd.get('assetClass'), status: fd.get('status'), source: fd.get('source'), confidential: fd.get('confidential') === 'on' };
-      const importers = { companies: importCompanies, contacts: importContacts, portfolio: importPortfolio, comps: importComps };
+      const opts = { assetClass: fd.get('assetClass'), status: fd.get('status'), source: fd.get('source'), confidential: fd.get('confidential') === 'on', quarter: String(fd.get('quarter') || '').toUpperCase() };
+      const importers = { companies: importCompanies, contacts: importContacts, portfolio: importPortfolio, comps: importComps, marketStats: importMarketStats };
       const kind = importPreview.kind;
       const msg = importers[kind](importPreview.result.records, opts);
       importPreview = null;
       if (kind === 'comps') state.comps.tab = 'comps';
-      location.hash = '#/' + kind;
+      if (kind === 'marketStats') state.marketing.tab = 'stats';
+      location.hash = '#/' + (kind === 'marketStats' ? 'marketing' : kind);
       render();
       toast(msg);
     }
   });
 
-  // Drop a comp sheet anywhere on the Comps tab.
-  const dropTarget = () => (location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : '');
+  // Drop a comp sheet anywhere on the Comps tab, or a Research stats sheet on Marketing → Market stats.
+  const dropTarget = () =>
+    location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : location.hash.startsWith('#/marketing') && state.marketing.tab === 'stats' ? 'marketStats' : '';
   document.addEventListener('dragover', (e) => {
     if (!dropTarget() || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();

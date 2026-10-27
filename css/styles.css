@@ -401,3 +401,4 @@ dialog .form-grid { padding: 16px 18px; overflow-y: auto; }
 .drop-zone { margin-top: 16px; padding: 22px 16px; border: 2px dashed var(--border); border-radius: var(--radius); text-align: center; background: var(--panel); }
 .drop-zone .sub { margin-top: 8px; }
 .drop-zone.over { border-color: var(--accent); background: var(--gray-soft); }
+.tbl tr.total-row td { border-top: 2px solid var(--border); font-weight: 600; }

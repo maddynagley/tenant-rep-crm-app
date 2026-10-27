@@ -346,6 +346,7 @@
     d.setMonth(d.getMonth() - 3);
     return quarterOf(toISODate(d));
   }
+  const compareQuarters = (a, b) => (quarterKey(a) || 0) - (quarterKey(b) || 0);
   function quarterKey(q) {
     const m = /^([1-4])Q(\d{2})$/i.exec(String(q || '').trim());
     return m ? Number(m[2]) * 4 + Number(m[1]) : null;
@@ -1235,6 +1236,7 @@
       MyFirm: me.firm,
       Partner: ctx.partner,
     };
+    Object.assign(values, marketValues(ctx.market, c));
     return String(text || '').replace(/\{(\w+)\}/g, (m, key) => {
       if (!(key in values)) return m;
       const v = values[key];
@@ -1294,7 +1296,7 @@
         : months !== null && months > 18 && months <= 36
           ? 'Your lease at {Building} runs to {LeaseExpiration}. That\'s still a way out, but a quick look at the market now makes it easier to plan budget and timing.'
           : 'I\'d love to hear how the space at {Building} is working for your team.';
-    const ask = 'Would you have 15 minutes next week for a quick call? I can share what we\'re seeing in {Submarket} (recent deals, rents and concessions), whether or not a move is on the table.';
+    const ask = (ctx.market ? '{MarketStat} ' : '') + 'Would you have 15 minutes next week for a quick call? I can share what we\'re seeing in {Submarket} (recent deals, rents and concessions), whether or not a move is on the table.';
     if (last) {
       return {
         subject: reSubject(last.subject),
@@ -2063,6 +2065,122 @@
     notes: ['notes', 'comments'],
   };
 
+  // Quarterly market stats from Research (one row per submarket, plus a market total row).
+  const MARKET_STAT_ALIASES = {
+    submarket: ['submarket', 'sub market', 'market', 'submarket name', 'area', 'geography', 'cluster'],
+    assetClass: ['asset class', 'property type', 'product type', 'type', 'sector'],
+    quarter: ['quarter', 'period', 'qtr'],
+    inventory: ['inventory', 'total inventory', 'inventory sf', 'rba', 'total rba', 'existing inventory', 'total sf', 'building sf'],
+    vacancy: ['vacancy', 'vacancy rate', 'total vacancy', 'total vacancy rate', 'vacancy %', 'vac rate', 'direct vacancy', 'direct vacancy rate', 'vacant %'],
+    availability: ['availability', 'availability rate', 'total availability', 'available %'],
+    netAbsorption: ['net absorption', 'qtr net absorption', 'current qtr net absorption', 'quarterly net absorption', 'net absorption sf', 'absorption', 'current quarter net absorption'],
+    ytdAbsorption: ['ytd net absorption', 'ytd absorption', 'net absorption ytd', 'year to date net absorption'],
+    underConstruction: ['under construction', 'under construction sf', 'construction', 'uc sf', 'u/c'],
+    deliveries: ['deliveries', 'qtr deliveries', 'deliveries sf', 'completions', 'ytd deliveries'],
+    askingRent: ['asking rent', 'avg asking rent', 'average asking rent', 'gross asking rent', 'asking rent /sf', 'avg asking rent /sf', 'direct asking rent', 'asking rate', 'average asking rate', 'rent', 'avg rent'],
+    leasingActivity: ['leasing activity', 'total leasing', 'leasing volume', 'gross leasing', 'qtr leasing activity'],
+  };
+
+  // "3Q26" from "3Q 2026", "Q3 2026", "2026 Q3", "3Q26" or a date, or ''.
+  function normalizeQuarter(v) {
+    const s = String(v || '').toUpperCase();
+    let m;
+    if ((m = /\b([1-4])\s*Q\s*'?(\d{4}|\d{2})\b/.exec(s))) return m[1] + 'Q' + m[2].slice(-2);
+    if ((m = /\bQ\s*([1-4])\s*[-' ]?\s*(\d{4}|\d{2})\b/.exec(s))) return m[1] + 'Q' + m[2].slice(-2);
+    if ((m = /\b(\d{4})\s*[-_ ]?\s*Q([1-4])\b/.exec(s))) return m[2] + 'Q' + m[1].slice(-2);
+    const d = normalizeDate(v);
+    return d ? quarterOf(d) : '';
+  }
+
+  const isMarketTotal = (sub) => !sub || /^(total|market total|metro|overall|atlanta( total| metro)?|all submarkets|grand total)$/i.test(String(sub).trim());
+
+  // One row from a Research stats table → { quarter, assetClass, submarket, vacancy (%), askingRent ($/SF/yr), … }.
+  function cleanMarketStat(rec, defaults) {
+    defaults = defaults || {};
+    const out = { quarter: normalizeQuarter(rec.quarter) || defaults.quarter || '', assetClass: normalizeAssetClass(rec.assetClass) || defaults.assetClass || '', submarket: String(rec.submarket || '').trim() };
+    if (isMarketTotal(out.submarket)) out.submarket = 'Market total';
+    const pct = (v) => {
+      const n = firstNumber(v);
+      if (n === null) return null;
+      return !/%/.test(String(v)) && Math.abs(n) < 1 && n !== 0 ? Math.round(n * 1000) / 10 : n;
+    };
+    ['vacancy', 'availability'].forEach((k) => {
+      const n = pct(rec[k]);
+      if (n !== null) out[k] = n;
+    });
+    ['inventory', 'netAbsorption', 'ytdAbsorption', 'underConstruction', 'deliveries', 'leasingActivity'].forEach((k) => {
+      if (rec[k] === undefined) return;
+      const raw = String(rec[k]).trim();
+      // (45,000) is accounting for -45,000; "1.2M" or "1.2 MSF" is millions.
+      let n = firstNumber(raw.replace(/^\((.*)\)$/, '-$1'));
+      if (n === null) return;
+      if (/\d\s*(m|msf|mil)/i.test(raw)) n = Math.round(n * 1e6);
+      else if (/\d\s*k\b/i.test(raw)) n = Math.round(n * 1e3);
+      out[k] = n;
+    });
+    const rent = firstNumber(rec.askingRent);
+    if (rent !== null) out.askingRent = /\/\s*mo|monthly/i.test(String(rec.askingRent)) ? Math.round(rent * 1200) / 100 : rent;
+    return out;
+  }
+
+  // The stats that apply to a company: its submarket in the latest quarter on file (else the market total), with
+  // the quarter before for comparison.
+  function marketStatFor(stats, company) {
+    const asset = company.assetClass === 'Industrial' ? 'Industrial' : 'Office';
+    const mine = (stats || []).filter((x) => x.assetClass === asset || (x.assetClass === 'Office & Industrial' && asset));
+    if (!mine.length) return null;
+    const qs = Array.from(new Set(mine.map((x) => x.quarter))).sort((a, b) => quarterKey(b) - quarterKey(a));
+    const key = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const find = (q, sub) => mine.find((x) => x.quarter === q && key(x.submarket) === key(sub));
+    const sub = company.submarket && find(qs[0], company.submarket) ? company.submarket : 'Market total';
+    const cur = find(qs[0], sub);
+    if (!cur) return null;
+    return { current: cur, previous: qs[1] ? find(qs[1], sub) || null : null, market: sub === 'Market total' ? null : find(qs[0], 'Market total') || null };
+  }
+
+  // Template placeholders from market stats ({Vacancy}, {VacancyChange}, {AskingRent}, {MarketStat}…).
+  const MARKET_PLACEHOLDERS = ['Quarter', 'StatsArea', 'Vacancy', 'VacancyChange', 'Availability', 'AskingRent', 'RentChange', 'NetAbsorption', 'YTDAbsorption', 'UnderConstruction', 'Deliveries', 'MarketVacancy', 'MarketStat'];
+  function marketValues(m, company) {
+    if (!m) return MARKET_PLACEHOLDERS.reduce((o, k) => Object.assign(o, { [k]: '' }), {});
+    const c = m.current;
+    const p = m.previous;
+    const pctFmt = (n) => (n === undefined || n === null ? '' : Number(n).toFixed(1) + '%');
+    const sfFmt = (n) => (n === undefined || n === null ? '' : (n < 0 ? '-' : '') + fmtNumber(Math.abs(Math.round(n))) + ' SF');
+    const area = c.submarket === 'Market total' ? 'Atlanta' : c.submarket;
+    const asset = String(c.assetClass || company.assetClass || '').toLowerCase().replace(' & ', '/');
+    let vacChange = '';
+    if (p && c.vacancy !== undefined && p.vacancy !== undefined) {
+      const bps = Math.round((c.vacancy - p.vacancy) * 100);
+      vacChange = bps === 0 ? 'flat from ' + p.quarter : (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps from ' + p.quarter;
+    }
+    let rentChange = '';
+    if (p && c.askingRent && p.askingRent) {
+      const ch = ((c.askingRent - p.askingRent) / p.askingRent) * 100;
+      rentChange = Math.abs(ch) < 0.05 ? 'flat from ' + p.quarter : (ch < 0 ? 'down ' : 'up ') + Math.abs(ch).toFixed(1) + '% from ' + p.quarter;
+    }
+    const parts = [];
+    if (c.vacancy !== undefined) parts.push(area + ' ' + asset + ' vacancy was ' + pctFmt(c.vacancy) + ' in ' + c.quarter + (vacChange ? ', ' + vacChange : ''));
+    if (c.askingRent) parts.push('asking rents averaged $' + Number(c.askingRent).toFixed(2) + '/SF' + (rentChange ? ' (' + rentChange + ')' : ''));
+    if (c.netAbsorption !== undefined) parts.push('net absorption was ' + sfFmt(c.netAbsorption));
+    let sentence = parts.length ? parts.slice(0, -1).join(', ') + (parts.length > 1 ? ' and ' : '') + parts[parts.length - 1] + '.' : '';
+    sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+    return {
+      Quarter: c.quarter,
+      StatsArea: area,
+      Vacancy: pctFmt(c.vacancy),
+      VacancyChange: vacChange,
+      Availability: pctFmt(c.availability),
+      AskingRent: c.askingRent ? '$' + Number(c.askingRent).toFixed(2) + '/SF' : '',
+      RentChange: rentChange,
+      NetAbsorption: sfFmt(c.netAbsorption),
+      YTDAbsorption: sfFmt(c.ytdAbsorption),
+      UnderConstruction: sfFmt(c.underConstruction),
+      Deliveries: sfFmt(c.deliveries),
+      MarketVacancy: m.market ? pctFmt(m.market.vacancy) : pctFmt(c.vacancy),
+      MarketStat: sentence,
+    };
+  }
+
   // Comp spreadsheets (CoStar exports, broker comp sheets, research tables).
   const COMP_IMPORT_ALIASES = {
     building: ['building', 'building name', 'property', 'property name', 'project', 'bldg'],
@@ -2383,9 +2501,16 @@
   function mapHeaders(headers, aliases) {
     const mapping = {};
     const normalized = headers.map(normHeader);
+    const candidates = (field) => [normHeader(field)].concat(aliases[field].map(normHeader));
     Object.keys(aliases).forEach((field) => {
-      const candidates = [normHeader(field)].concat(aliases[field].map(normHeader));
-      const idx = normalized.findIndex((h, i) => candidates.includes(h) && !Object.values(mapping).includes(i));
+      const idx = normalized.findIndex((h, i) => candidates(field).includes(h) && !Object.values(mapping).includes(i));
+      if (idx >= 0) mapping[field] = idx;
+    });
+    // Then headers with a unit tacked on, like "Total Inventory (SF)" or "Vacancy (%)".
+    const bare = normalized.map((h) => h.replace(/\s*(\/?sf|psf|rsf|%|\/sf\/yr|\/sf\/mo)$/, '').trim());
+    Object.keys(aliases).forEach((field) => {
+      if (mapping[field] !== undefined) return;
+      const idx = bare.findIndex((h, i) => h && candidates(field).includes(h) && !Object.values(mapping).includes(i));
       if (idx >= 0) mapping[field] = idx;
     });
     return mapping;
@@ -2634,6 +2759,13 @@
     portfolioBreakdown,
     PORTFOLIO_IMPORT_ALIASES,
     COMP_IMPORT_ALIASES,
+    MARKET_STAT_ALIASES,
+    compareQuarters,
+    MARKET_PLACEHOLDERS,
+    normalizeQuarter,
+    cleanMarketStat,
+    marketStatFor,
+    marketValues,
     cleanImportedComp,
     compKey,
     parseTermMonths,
