@@ -1772,6 +1772,16 @@
     return L.sortRows(withScore, SORT_COLUMNS.companies, SORT_COLUMNS.companies[f.sort] ? f.sort : 'score', f.dir, byName);
   }
 
+  // A search shouldn't come up empty because a filter (e.g. "Next 24 months") hides the company.
+  function hiddenSearchMatches(shownCount) {
+    const f = state.companies;
+    const q = f.q.trim().toLowerCase();
+    if (!q || !(f.status || f.submarket || f.priority || f.window || (f.asset && f.asset !== 'All'))) return '';
+    const all = S.all('companies').filter((c) => [c.name, c.aliases, c.industry, c.address, c.building, c.city, c.submarket, c.landlord, c.tags, c.notes].join(' ').toLowerCase().includes(q)).length;
+    const hidden = all - shownCount;
+    return hidden > 0 ? `<p class="hint">${hidden} more compan${hidden > 1 ? 'ies match' : 'y matches'} "${esc(f.q.trim())}" but ${hidden > 1 ? 'are' : 'is'} hidden by your filters. <button class="link" data-action="clear-company-filters">Show all matches</button></p>` : '';
+  }
+
   function companyTabs() {
     const f = state.companies;
     const lists = S.settings().sharedLists || [];
@@ -1874,6 +1884,7 @@
         )}</select>
       </div>
       <p class="count">${rows.length} companies · ${L.fmtNumber(totalSF)} SF</p>
+      ${hiddenSearchMatches(rows.length)}
       ${
         rows.length
           ? `<div class="table-wrap"><table class="tbl">
@@ -3813,6 +3824,10 @@
           saveUIState();
           return render();
         }
+        case 'clear-company-filters':
+          Object.assign(state.companies, { status: '', submarket: '', priority: '', window: '', asset: 'All', limit: 100 });
+          saveUIState();
+          return render();
         case 'set-filter':
           if (actionEl.tagName === 'A') e.preventDefault();
           state[d.scope][d.key] = d.value;
