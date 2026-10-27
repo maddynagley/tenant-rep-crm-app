@@ -336,6 +336,184 @@
       .sort((a, b) => b.sent - a.sent);
   }
 
+  // ---------- prospecting report ----------
+  // Prospecting = calls, emails and LinkedIn messages to tenants/prospects you aren't already working a deal with.
+  // Client and deal communication, colleagues and other relationships (landlords, brokers, vendors) are left out.
+  // Each company's first touch is its initial outreach; later touches are follow-ups.
+  function prospectTouches(data, opts) {
+    opts = opts || {};
+    const companies = {};
+    (data.companies || []).forEach((c) => (companies[c.id] = c));
+    const contacts = {};
+    (data.contacts || []).forEach((p) => (contacts[p.id] = p));
+    const dealSince = {};
+    (data.deals || [])
+      .filter((d) => d.stage !== 'Closed Lost')
+      .forEach((d) => {
+        const at = String(d.createdAt || '').slice(0, 10) || '0000';
+        if (!dealSince[d.companyId] || at < dealSince[d.companyId]) dealSince[d.companyId] = at;
+      });
+    const isProspectCo = (c) => c && isProspect(c) && !['Active Client', 'Past Client'].includes(c.status);
+    const touches = (data.activities || [])
+      .filter((a) => OUTREACH_TYPES.includes(a.type) && !a.inbound && a.date && a.companyId)
+      .filter((a) => isProspectCo(companies[a.companyId]) && !a.dealThread && !(dealSince[a.companyId] && dealSince[a.companyId] <= a.date))
+      .filter((a) => !isColleague(contacts[a.contactId], opts.internalDomain))
+      .sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    const count = {};
+    touches.forEach((a) => (a.touchNo = count[a.companyId] = (count[a.companyId] || 0) + 1));
+    const replies = (data.activities || []).filter((a) => a.inbound && a.type === 'Email' && a.date && isProspectCo(companies[a.companyId]));
+    return { touches: touches.map((a) => Object.assign({}, a, { stage: a.touchNo === 1 ? 'Initial outreach' : 'Follow-up' })), replies, companies, contacts };
+  }
+
+  function periodRange(period, today) {
+    today = today || todayISO();
+    const d = parseISODate(today);
+    const monday = (iso) => {
+      const x = parseISODate(iso);
+      x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+      return toISODate(x);
+    };
+    const first = (y, m) => toISODate(new Date(y, m, 1));
+    switch (period) {
+      case 'lastWeek':
+        return { from: addDays(monday(today), -7), to: addDays(monday(today), -1), label: 'Last week' };
+      case 'thisMonth':
+        return { from: first(d.getFullYear(), d.getMonth()), to: today, label: d.toLocaleDateString('en-US', { month: 'long' }) + ' to date' };
+      case 'lastMonth':
+        return { from: first(d.getFullYear(), d.getMonth() - 1), to: addDays(first(d.getFullYear(), d.getMonth()), -1), label: new Date(d.getFullYear(), d.getMonth() - 1, 1).toLocaleDateString('en-US', { month: 'long' }) };
+      case 'last90':
+        return { from: addDays(today, -89), to: today, label: 'Last 90 days' };
+      default:
+        return { from: monday(today), to: today, label: 'This week' };
+    }
+  }
+
+  // The recap for a period: what went out, who opened, who replied, meetings, what's working (over the last 90
+  // days, so the rates mean something), an 8-week trend, and who to follow up with next.
+  function prospectingReport(data, opts) {
+    opts = opts || {};
+    const today = opts.today || todayISO();
+    const range = periodRange(opts.period, today);
+    const { touches, replies, companies, contacts } = prospectTouches(data, opts);
+    const inRange = (iso) => iso >= range.from && iso <= range.to;
+    const name = (a) => (companies[a.companyId] || {}).name || '';
+    const person = (id) => {
+      const p = contacts[id];
+      return p ? [p.firstName, p.lastName].filter(Boolean).join(' ') : '';
+    };
+    // A touch got a response if it's marked so, or the company wrote back within 21 days.
+    const answered = (a) => responded(a) || replies.some((r) => r.companyId === a.companyId && r.date >= a.date && r.date <= addDays(a.date, 21));
+    const period = touches.filter((a) => inRange(a.date));
+    const emails = period.filter((a) => a.type === 'Email');
+    const respondedCos = {};
+    replies.filter((r) => inRange(r.date)).forEach((r) => (respondedCos[r.companyId] = respondedCos[r.companyId] || { companyId: r.companyId, company: name(r), contact: person(r.contactId), date: r.date, how: 'Replied: ' + String(r.subject || '').replace(/^Reply:\s*/, '') }));
+    period.filter((a) => RESPONDED.includes(a.outcome)).forEach((a) => (respondedCos[a.companyId] = respondedCos[a.companyId] || { companyId: a.companyId, company: name(a), contact: person(a.contactId), date: a.date, how: a.outcome + (a.type !== 'Email' ? ' (' + a.type.toLowerCase() + ')' : '') }));
+    const meetings = (data.activities || []).filter((a) => a.type === 'Meeting' && inRange(a.date || '') && companies[a.companyId] && isProspect(companies[a.companyId])).length + period.filter((a) => a.outcome === 'Meeting booked').length;
+    const opened = emails.filter((a) => (parseNumber(a.opens) || 0) > 0);
+    const totals = {
+      initial: period.filter((a) => a.stage === 'Initial outreach').length,
+      followUp: period.filter((a) => a.stage === 'Follow-up').length,
+      emails: emails.length,
+      calls: period.filter((a) => a.type === 'Call').length,
+      linkedin: period.filter((a) => a.type === 'LinkedIn').length,
+      companies: new Set(period.map((a) => a.companyId)).size,
+      opened: opened.length,
+      openRate: emails.length ? opened.length / emails.length : 0,
+      responses: Object.keys(respondedCos).length,
+      responseRate: period.length ? period.filter(answered).length / period.length : 0,
+      meetings,
+    };
+    const openedNoReply = opened
+      .filter((a) => !answered(a))
+      .map((a) => ({ companyId: a.companyId, company: name(a), contact: person(a.contactId), date: a.date, subject: a.subject, opens: parseNumber(a.opens) || 0, stage: a.stage }))
+      .sort((a, b) => b.opens - a.opens);
+
+    // What's working, over the last 90 days.
+    const recent = touches.filter((a) => a.date >= addDays(today, -89) && a.date <= today);
+    const group = (keyFn) => {
+      const g = {};
+      recent.forEach((a) => {
+        const k = keyFn(a) || '(none)';
+        const r = (g[k] = g[k] || { key: k, sent: 0, opened: 0, responded: 0 });
+        r.sent++;
+        if ((parseNumber(a.opens) || 0) > 0) r.opened++;
+        if (answered(a)) r.responded++;
+      });
+      return Object.values(g)
+        .map((r) => Object.assign(r, { responseRate: r.sent ? r.responded / r.sent : 0, openRate: r.sent ? r.opened / r.sent : 0 }))
+        .sort((a, b) => b.sent - a.sent);
+    };
+    const working = {
+      byTemplate: group((a) => a.template),
+      byTouch: group((a) => (a.touchNo >= 4 ? '4th touch or later' : ['1st touch', '2nd touch', '3rd touch'][a.touchNo - 1])).sort((a, b) => a.key.localeCompare(b.key)),
+      byChannel: group((a) => a.type),
+      byDay: group((a) => parseISODate(a.date).toLocaleDateString('en-US', { weekday: 'long' })),
+    };
+
+    // Eight weeks, oldest first.
+    const weeks = [];
+    const thisMonday = periodRange('thisWeek', today).from;
+    for (let i = 7; i >= 0; i--) {
+      const from = addDays(thisMonday, -7 * i);
+      const to = addDays(from, 6);
+      const w = touches.filter((a) => a.date >= from && a.date <= to);
+      weeks.push({ from, initial: w.filter((a) => a.stage === 'Initial outreach').length, followUp: w.filter((a) => a.stage === 'Follow-up').length, responses: new Set(replies.filter((r) => r.date >= from && r.date <= to).map((r) => r.companyId).concat(w.filter((a) => RESPONDED.includes(a.outcome)).map((a) => a.companyId))).size });
+    }
+
+    // Who to follow up with next: each prospect's latest touch, unanswered, ranked by how warm the signals are.
+    const last = {};
+    touches.forEach((a) => (last[a.companyId] = a));
+    const replied = (cid, since) => replies.some((r) => r.companyId === cid && r.date >= since);
+    const followUps = Object.values(last)
+      .filter((a) => !answered(a) && !replied(a.companyId, a.date) && a.date <= addDays(today, -3) && a.date >= addDays(today, -60))
+      .map((a) => {
+        const c = companies[a.companyId];
+        const opens = parseNumber(a.opens) || 0;
+        const months = c.leaseExpiration ? monthsUntil(c.leaseExpiration, today) : null;
+        const why = [];
+        let score = 0;
+        if (opens) {
+          score += Math.min(opens, 10) * 3;
+          why.push('opened ' + opens + (opens === 1 ? ' time' : ' times'));
+        }
+        if (c.leadTemp === 'Hot' || c.leadTemp === 'Warm') {
+          score += c.leadTemp === 'Hot' ? 12 : 6;
+          why.push(c.leadTemp.toLowerCase() + ' lead');
+        }
+        if (months !== null && months >= 0 && months <= 24) {
+          score += 24 - months;
+          why.push('lease expires in ' + months + ' mo');
+        }
+        const days = daysBetween(a.date, today);
+        if (days >= 7 && days <= 21) score += 4;
+        why.push(a.type.toLowerCase() + ' ' + days + ' days ago, touch ' + a.touchNo);
+        return { companyId: a.companyId, contactId: a.contactId, company: c.name, contact: person(a.contactId), lastTouch: a.date, lastType: a.type, subject: a.subject, touchNo: a.touchNo, opens, score, why: why.join(' · ') };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 15);
+
+    return { range, totals, responded: Object.values(respondedCos).sort((a, b) => b.date.localeCompare(a.date)), openedNoReply, working, weeks, followUps };
+  }
+
+  // The report as plain text, to paste into an email or notes.
+  function prospectingRecapText(r) {
+    const pct = (x) => Math.round(x * 100) + '%';
+    const t = r.totals;
+    const lines = [
+      'Prospecting recap: ' + r.range.label + ' (' + fmtDate(r.range.from) + ' – ' + fmtDate(r.range.to) + ')',
+      '',
+      '- ' + t.initial + ' initial outreach and ' + t.followUp + ' follow-ups to ' + t.companies + ' companies (' + t.emails + ' emails, ' + t.calls + ' calls, ' + t.linkedin + ' LinkedIn)',
+      '- ' + t.opened + ' emails opened (' + pct(t.openRate) + ' open rate)',
+      '- ' + t.responses + ' responded (' + pct(t.responseRate) + ' response rate), ' + t.meetings + ' meetings',
+    ];
+    if (r.responded.length) lines.push('', 'Responded:', ...r.responded.map((x) => '- ' + x.company + (x.contact ? ' (' + x.contact + ')' : '') + ': ' + x.how));
+    if (r.openedNoReply.length) lines.push('', 'Opened, no reply yet:', ...r.openedNoReply.slice(0, 10).map((x) => '- ' + x.company + (x.contact ? ' (' + x.contact + ')' : '') + ': opened ' + x.opens + 'x'));
+    if (r.followUps.length) lines.push('', 'Follow up next:', ...r.followUps.slice(0, 10).map((x) => '- ' + x.company + (x.contact ? ' (' + x.contact + ')' : '') + ': ' + x.why));
+    const best = r.working.byTemplate.filter((x) => x.sent >= 5 && x.key !== '(none)').sort((a, b) => b.responseRate - a.responseRate)[0];
+    if (best) lines.push('', 'Best template (90 days): ' + best.key + ', ' + pct(best.responseRate) + ' response on ' + best.sent + ' sent');
+    return lines.join('\n');
+  }
+
   // "3Q26" for the quarter a date falls in; the latest finished quarter is what market data covers.
   function quarterOf(iso) {
     const d = parseISODate(iso);
@@ -3052,6 +3230,10 @@
     OUTCOMES,
     responded,
     outreachStats,
+    prospectTouches,
+    periodRange,
+    prospectingReport,
+    prospectingRecapText,
     quarterOf,
     latestDataQuarter,
     collateralStale,

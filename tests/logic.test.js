@@ -1144,3 +1144,47 @@ test('submarketBrief: one submarket compared with the market and its last quarte
   assert.match(L.submarketBrief(stats, 'Office', 'Market total').points[0], /^The market's office vacancy is 26\.1%\.$/);
   assert.equal(L.submarketBrief(stats, 'Office', 'Nowhere'), null);
 });
+
+test('prospecting report: prospects only, initial vs follow-up, opens, replies and who to follow up with', () => {
+  const companies = [
+    { id: 'a', name: 'Acme', relationship: 'Tenant / prospect', status: 'Contacted', leaseExpiration: '2027-06-30', leadTemp: 'Warm' },
+    { id: 'b', name: 'Birch', status: 'Contacted' },
+    { id: 'c', name: 'Cedar (client)', status: 'Active Client' },
+    { id: 'd', name: 'Dune Realty', relationship: 'Landlord / ownership' },
+    { id: 'e', name: 'Elm (deal)', status: 'Engaged' },
+  ];
+  const contacts = [{ id: 'pa', companyId: 'a', firstName: 'Pat', lastName: 'Lee' }, { id: 'pb', companyId: 'b', firstName: 'Sam' }, { id: 'me', companyId: 'x', firstName: 'Jo', email: 'jo@firm.test' }];
+  const deals = [{ id: 'd1', companyId: 'e', stage: 'Touring', createdAt: '2026-10-01T00:00:00Z' }];
+  const activities = [
+    { type: 'Email', date: '2026-10-05', companyId: 'a', contactId: 'pa', subject: 'Intro', opens: 4, template: 'Building intro' },
+    { type: 'Email', date: '2026-10-20', companyId: 'a', contactId: 'pa', subject: 'Following up', opens: 6, template: 'Following up' },
+    { type: 'Email', date: '2026-10-21', companyId: 'b', contactId: 'pb', subject: 'Intro', opens: 1, template: 'Building intro' },
+    { type: 'Email', date: '2026-10-22', companyId: 'b', subject: 'Reply: Intro', inbound: true, contactId: 'pb' },
+    { type: 'Call', date: '2026-10-22', companyId: 'a', contactId: 'pa', outcome: 'Left voicemail' },
+    { type: 'Email', date: '2026-10-21', companyId: 'c', subject: 'Check-in' },
+    { type: 'Email', date: '2026-10-21', companyId: 'd', subject: 'Availability?' },
+    { type: 'Email', date: '2026-10-21', companyId: 'e', subject: 'Tour recap' },
+    { type: 'Email', date: '2026-10-21', companyId: 'a', contactId: 'me', subject: 'Internal fwd' },
+    { type: 'Meeting', date: '2026-10-23', companyId: 'b', subject: 'Intro meeting' },
+  ];
+  const data = { companies, contacts, deals, activities };
+  const { touches } = L.prospectTouches(data, { internalDomain: 'firm.test' });
+  assert.deepEqual(touches.map((t) => [t.companyId, t.stage]), [['a', 'Initial outreach'], ['a', 'Follow-up'], ['b', 'Initial outreach'], ['a', 'Follow-up']]);
+  const r = L.prospectingReport(data, { today: '2026-10-26', period: 'lastWeek', internalDomain: 'firm.test' });
+  assert.deepEqual([r.range.from, r.range.to], ['2026-10-19', '2026-10-25']);
+  assert.deepEqual(r.totals, { initial: 1, followUp: 2, emails: 2, calls: 1, linkedin: 0, companies: 2, opened: 2, openRate: 1, responses: 1, responseRate: 1 / 3, meetings: 1 });
+  assert.deepEqual(r.responded.map((x) => [x.company, x.contact, x.how]), [['Birch', 'Sam', 'Replied: Intro']]);
+  assert.deepEqual(r.openedNoReply.map((x) => [x.company, x.opens]), [['Acme', 6]]);
+  assert.equal(r.followUps.length, 1);
+  assert.equal(r.followUps[0].company, 'Acme');
+  assert.match(r.followUps[0].why, /warm lead · lease expires in 8 mo · call 4 days ago, touch 3/);
+  const byTemplate = Object.fromEntries(r.working.byTemplate.map((x) => [x.key, [x.sent, x.responded]]));
+  assert.deepEqual(byTemplate['Building intro'], [2, 1]);
+  assert.equal(r.weeks.length, 8);
+  assert.deepEqual(r.weeks[6], { from: '2026-10-19', initial: 1, followUp: 2, responses: 1 });
+  const text = L.prospectingRecapText(r);
+  assert.match(text, /^Prospecting recap: Last week \(Oct 19, 2026 – Oct 25, 2026\)/);
+  assert.match(text, /1 initial outreach and 2 follow-ups to 2 companies/);
+  assert.match(text, /Follow up next:\n- Acme \(Pat Lee\)/);
+  assert.deepEqual(L.periodRange('lastMonth', '2026-10-26'), { from: '2026-09-01', to: '2026-09-30', label: 'September' });
+});

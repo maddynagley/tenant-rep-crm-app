@@ -1081,6 +1081,7 @@
         <a class="kpi" href="#/leads"><span class="kpi-label">Leads waiting on a follow-up</span><span class="kpi-value">${plan.remaining.followUps}</span><span class="kpi-sub">${plan.remaining.fresh} new leads not yet touched</span></a>
         <a class="kpi" href="#/pipeline"><span class="kpi-label">Deals needing attention</span><span class="kpi-value">${plan.deals.length}</span><span class="kpi-sub">stale, past due or expiring rep agreement</span></a>
       </div>
+      ${L.parseISODate(today).getDay() === 1 ? mondayProspectingCard(today) : ''}
       ${recapItems.length ? section('Friday recaps: send each client a weekly update', recapItems, '', '<p class="hint">A short status email on every active deal: what got done this week (even if it was quiet) and what\'s next. It drafts from the deal\'s tours, proposals, meetings and open tasks.</p>') : ''}
       ${tasks.length ? `<section class="card"><h2>Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
       ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
@@ -1113,12 +1114,103 @@
 
   function statsTable(rows, label) {
     if (!rows.length) return emptyState('Nothing logged yet.');
-    return `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>${esc(label)}</th><th class="right">Sent</th><th class="right">Opened</th><th class="right">Responded</th><th class="right">Meetings</th></tr></thead><tbody>${rows
+    const meetings = rows.some((r) => r.meetings !== undefined);
+    return `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>${esc(label)}</th><th class="right">Sent</th><th class="right">Opened</th><th class="right">Responded</th>${meetings ? '<th class="right">Meetings</th>' : ''}</tr></thead><tbody>${rows
       .map(
         (r) => `<tr><td>${esc(r.key)}</td><td class="right">${r.sent}</td><td class="right">${r.opened ? pct(r.openRate) : '<span class="muted">—</span>'}</td>
-        <td class="right"><strong>${pct(r.responseRate)}</strong> <span class="muted">(${r.responded})</span></td><td class="right">${r.meetings}</td></tr>`
+        <td class="right"><strong>${pct(r.responseRate)}</strong> <span class="muted">(${r.responded})</span></td>${meetings ? `<td class="right">${r.meetings}</td>` : ''}</tr>`
       )
       .join('')}</tbody></table></div>`;
+  }
+
+  // Mondays on Today: last week's prospecting in one line, with who to follow up with first.
+  function mondayProspectingCard(today) {
+    const r = L.prospectingReport({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') }, { today, period: 'lastWeek', internalDomain: myEmailDomain() });
+    const t = r.totals;
+    if (!t.initial && !t.followUp && !r.followUps.length) return '';
+    return `<section class="card"><h2>Last week's prospecting <button class="link more" data-action="open-report">Full report</button></h2>
+      <p>${t.initial} initial outreach and ${t.followUp} follow-ups to ${t.companies} companies · ${t.opened} opened (${pct(t.openRate)}) · <strong>${t.responses} responded</strong> · ${t.meetings} meetings</p>
+      ${r.followUps.length ? `<p class="hint">Follow up first: ${r.followUps.slice(0, 5).map((x) => `<a href="#/company/${esc(x.companyId)}">${esc(x.company)}</a>`).join(', ')}</p>` : ''}</section>`;
+  }
+
+  // Prospecting report: only touches to prospects (no client or deal email), for a week, a month or 90 days.
+  function prospectingTab() {
+    const f = state.marketing;
+    const data = { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') };
+    const r = L.prospectingReport(data, { today: L.todayISO(), period: f.period || 'thisWeek', internalDomain: myEmailDomain() });
+    const t = r.totals;
+    const tile = (label, value, sub) => `<div class="kpi"><span class="kpi-label">${esc(label)}</span><span class="kpi-value">${esc(String(value))}</span><span class="kpi-sub">${esc(sub || '')}</span></div>`;
+    const periods = [['thisWeek', 'This week'], ['lastWeek', 'Last week'], ['thisMonth', 'This month'], ['lastMonth', 'Last month'], ['last90', '90 days']];
+    // 8 weeks: initial outreach and follow-ups stacked (2px gap between them), responses as their own chart.
+    const max = Math.max(1, ...r.weeks.map((w) => w.initial + w.followUp));
+    const maxR = Math.max(1, ...r.weeks.map((w) => w.responses));
+    const wk = (w) => L.parseISODate(w.from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const weekly = `<div class="wk-chart" role="img" aria-label="Prospecting touches by week, last 8 weeks">${r.weeks
+      .map(
+        (w) => `<div class="wk-col"><div class="wk-stack" data-tip="${esc('Week of ' + wk(w) + '\nInitial outreach ' + w.initial + '\nFollow-ups ' + w.followUp + '\nResponded ' + w.responses)}">
+          <span class="seg-follow" style="height:${(w.followUp / max) * 100}%"></span><span class="seg-initial" style="height:${(w.initial / max) * 100}%"></span></div>
+          <div class="wk-value">${w.initial + w.followUp || ''}</div><div class="wk-label">${esc(wk(w))}</div></div>`
+      )
+      .join('')}</div>
+      <div class="legend"><span><i class="key-initial"></i>Initial outreach</span><span><i class="key-follow"></i>Follow-ups</span></div>`;
+    const respChart = `<div class="wk-chart small" role="img" aria-label="Prospects who responded, by week">${r.weeks
+      .map((w) => `<div class="wk-col"><div class="wk-stack" data-tip="${esc('Week of ' + wk(w) + ': ' + w.responses + ' responded')}"><span class="seg-initial" style="height:${(w.responses / maxR) * 100}%"></span></div><div class="wk-value">${w.responses || ''}</div><div class="wk-label">${esc(wk(w))}</div></div>`)
+      .join('')}</div>`;
+
+    // Takeaways from the last 90 days.
+    const tips = [];
+    const tpl = r.working.byTemplate.filter((x) => x.key !== '(none)' && x.sent >= 5).sort((a, b) => b.responseRate - a.responseRate);
+    if (tpl.length > 1) tips.push(`"${tpl[0].key}" is your best template: ${pct(tpl[0].responseRate)} response on ${tpl[0].sent} sent, vs ${pct(tpl[tpl.length - 1].responseRate)} for "${tpl[tpl.length - 1].key}".`);
+    const touch = r.working.byTouch;
+    const later = touch.filter((x) => x.key !== '1st touch');
+    const laterResp = later.reduce((n, x) => n + x.responded, 0);
+    const allResp = touch.reduce((n, x) => n + x.responded, 0);
+    if (allResp >= 3) tips.push(`${pct(laterResp / allResp)} of your responses came on a follow-up, not the first touch. Keep following up at least twice.`);
+    const days = r.working.byDay.filter((x) => x.sent >= 5).sort((a, b) => b.responseRate - a.responseRate);
+    if (days.length > 1) tips.push(`${days[0].key} gets the best response (${pct(days[0].responseRate)}); ${days[days.length - 1].key} the worst (${pct(days[days.length - 1].responseRate)}).`);
+    if (r.openedNoReply.length) tips.push(`${r.openedNoReply.length} ${r.openedNoReply.length === 1 ? 'person' : 'people'} opened your email this period without replying. A call or short follow-up while it's warm converts best.`);
+    if (t.initial + t.followUp && !t.followUp) tips.push('Every touch this period was a first touch. Most replies come on the second or third, so schedule follow-ups.');
+
+    const who = (x) => `<a href="#/company/${esc(x.companyId)}"><strong>${esc(x.company)}</strong></a>${x.contact ? ` <span class="muted">· ${esc(x.contact)}</span>` : ''}`;
+    return `<p class="hint">Prospecting only: calls, emails and LinkedIn messages to prospects you aren't working a deal with. Client, deal, landlord, broker and internal email are left out. A company's first touch is its initial outreach; later touches are follow-ups.</p>
+      <div class="toolbar"><div class="seg">${periods.map(([v, l]) => `<button class="${(f.period || 'thisWeek') === v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="period" data-value="${v}">${l}</button>`).join('')}</div>
+        <span class="muted">${esc(L.fmtDate(r.range.from))} – ${esc(L.fmtDate(r.range.to))}</span>
+        <button class="btn small" data-action="copy-text" data-text="${esc(L.prospectingRecapText(r))}">Copy recap</button></div>
+      <div class="kpis">
+        ${tile('Initial outreach', t.initial, t.companies + ' companies touched')}
+        ${tile('Follow-ups', t.followUp, t.emails + ' emails · ' + t.calls + ' calls · ' + t.linkedin + ' LinkedIn')}
+        ${tile('Opened', t.opened, pct(t.openRate) + ' of emails')}
+        ${tile('Responded', t.responses, pct(t.responseRate) + ' of touches')}
+        ${tile('Meetings', t.meetings, 'with prospects')}
+      </div>
+      <section class="card"><h2>Follow up next <span class="muted">${r.followUps.length}</span></h2>
+        <p class="hint">Prospects whose last touch (3 to 60 days ago) got no reply, ranked by opens, lead temperature and lease timing.</p>
+        ${
+          r.followUps.length
+            ? `<ul class="followups todo">${r.followUps
+                .map((x) => `<li><div class="fu-body"><div>${who(x)} ${emailIcon(x.companyId, x.contactId)}</div><div class="sub">${esc(x.why)}${x.subject ? ' · "' + esc(x.subject) + '"' : ''}</div></div><div class="todo-actions">${contactButtons(x.companyId, x.contactId, { step: 'Follow-up' })} ${touchButtons(x.companyId, x.contactId)}</div></li>`)
+                .join('')}</ul>`
+            : emptyState('Nobody waiting on a follow-up.')
+        }</section>
+      <div class="grid2">
+        <section class="card"><h2>Responded <span class="muted">${r.responded.length}</span></h2>${r.responded.length ? `<ul class="plain added-notes">${r.responded.map((x) => `<li>${who(x)}<div class="sub">${esc(L.fmtDate(x.date))} · ${esc(x.how)}</div></li>`).join('')}</ul>` : emptyState('No responses in this period yet.')}</section>
+        <section class="card"><h2>Opened, no reply <span class="muted">${r.openedNoReply.length}</span></h2>${r.openedNoReply.length ? `<ul class="plain added-notes">${r.openedNoReply.map((x) => `<li>${who(x)} ${emailIcon(x.companyId, '')}<div class="sub">Opened ${x.opens}x · ${esc(x.stage)} sent ${esc(L.fmtDate(x.date))} · "${esc(x.subject || '')}"</div></li>`).join('')}</ul>` : emptyState('None.')}</section>
+      </div>
+      <div class="grid2">
+        <section class="card"><h2>Last 8 weeks</h2>${weekly}</section>
+        <section class="card"><h2>Prospects who responded, by week</h2>${respChart}</section>
+      </div>
+      <section class="card"><h2>What's working <span class="muted">last 90 days</span></h2>
+        ${tips.length ? `<ul class="plain added-notes">${tips.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="muted">Takeaways appear once there are a few weeks of prospecting logged.</p>'}
+        <div class="grid2">
+          <div><h3 class="notes-sub">By template</h3>${statsTable(r.working.byTemplate, 'Template')}</div>
+          <div><h3 class="notes-sub">By touch</h3>${statsTable(r.working.byTouch, 'Touch')}</div>
+        </div>
+        <div class="grid2">
+          <div><h3 class="notes-sub">By day sent</h3>${statsTable(r.working.byDay, 'Day')}</div>
+          <div><h3 class="notes-sub">By channel</h3>${statsTable(r.working.byChannel, 'Channel')}</div>
+        </div>
+      </section>`;
   }
 
   function viewMarketing() {
@@ -1139,7 +1231,7 @@
       { v: 'social', l: `Social (${posts.length})` },
       { v: 'templates', l: `Email templates (${S.all('templates').length})` },
       { v: 'stats', l: 'Market stats' },
-      { v: 'outreach', l: 'Outreach results' },
+      { v: 'outreach', l: 'Prospecting report' },
     ];
     let body = '';
     if (f.tab === 'collateral') {
@@ -1168,7 +1260,8 @@
         <section class="card"><h2>Posted</h2>${posted.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${posted.map(postRow).join('')}</tbody></table></div>` : emptyState('Nothing posted yet.')}</section>`;
     } else if (f.tab === 'templates') {
       const stats = {};
-      L.outreachStats(S.all('activities'), (a) => a.template).forEach((r) => (stats[r.key] = r));
+      const prospecting = L.prospectTouches({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') }, { internalDomain: myEmailDomain() }).touches;
+      L.outreachStats(prospecting, (a) => a.template).forEach((r) => (stats[r.key] = r));
       const list = S.all('templates').slice().sort((a, b) => L.TEMPLATE_STEPS.indexOf(a.step) - L.TEMPLATE_STEPS.indexOf(b.step) || a.name.localeCompare(b.name));
       body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. Market stats placeholders like {MarketStat}, {Vacancy}, {VacancyChange} and {AskingRent} fill in from the latest Research numbers for the company's submarket (see Market stats). They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
         ${
@@ -1184,17 +1277,7 @@
     } else if (f.tab === 'stats') {
       body = marketStatsTab();
     } else {
-      const acts = S.all('activities');
-      const weekday = (a) => (a.date ? L.parseISODate(a.date).toLocaleDateString(undefined, { weekday: 'long' }) : '');
-      body = `<p class="hint">Response = a reply, a live conversation, a meeting, or a clear "not interested". Set the outcome when you log a call or email; emails imported from HubSpot carry their opens and replies.</p>
-        <div class="grid2">
-          <section class="card"><h2>By channel</h2>${statsTable(L.outreachStats(acts, (a) => a.type), 'Channel')}</section>
-          <section class="card"><h2>By template / message</h2>${statsTable(L.outreachStats(acts, (a) => a.template), 'Template')}</section>
-        </div>
-        <div class="grid2">
-          <section class="card"><h2>By day sent</h2>${statsTable(L.outreachStats(acts, weekday), 'Day')}</section>
-          <section class="card"><h2>By lead stage at the time</h2>${acts.some((a) => a.leadStageAtSend) ? statsTable(L.outreachStats(acts.filter((a) => a.leadStageAtSend), (a) => a.leadStageAtSend), 'Stage') : emptyState('Builds up as you log touches from Today.')}</section>
-        </div>`;
+      body = prospectingTab();
     }
 
     return `
@@ -3811,6 +3894,11 @@
         case 'summarize':
           e.preventDefault();
           return openBrief(d.col, d.id);
+        case 'open-report':
+          Object.assign(state.marketing, { tab: 'outreach', period: 'lastWeek' });
+          saveUIState();
+          if (!location.hash.startsWith('#/marketing')) location.hash = '#/marketing';
+          return render();
         case 'insert-market-line': {
           const f = $('#quick-note-form');
           const line = marketLineFor(f.dataset.col, S.get(f.dataset.col, f.dataset.id));
