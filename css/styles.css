@@ -491,3 +491,5 @@ input.cell-input { height: 28px; font-size: 13px; padding: 0 6px; width: auto; m
 .fill-in-note.stale { color: var(--red); font-weight: 600; background: var(--red-soft); border-radius: 4px; padding: 3px 6px; }
 .fill-ins-grid label.fill-in-solo { flex-direction: row; align-items: center; gap: 6px; font-weight: 500; color: var(--text); }
 .fill-ins-grid .fill-in-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.page-section { margin-top: 28px; }
+.section-title { font-family: var(--serif); font-size: 22px; font-weight: 600; margin: 0 0 10px; }

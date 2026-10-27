@@ -24,6 +24,7 @@
       companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '' },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
       sharedList: { sort: 'score', dir: '' },
+      prospecting: { period: 'thisWeek', drill: '' },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
       comps: { tab: 'dates', q: '', asset: 'All' },
@@ -57,6 +58,13 @@
   }
 
   // ---------- field definitions (drive forms) ----------
+
+  // A client gives a budget as a rate (e.g. $32/SF/yr) or as a monthly total (e.g. $5,000/month).
+  const BUDGET_CHOICES = [
+    { value: 'Per RSF', label: 'Rate: $ per SF per year' },
+    { value: 'Total per month', label: 'Monthly budget: total $ per month' },
+  ];
+
 
   const distinct = (col, key) => Array.from(new Set(S.all(col).map((r) => r[key]).filter(Boolean))).sort();
 
@@ -173,9 +181,9 @@
       { key: 'power', label: 'Power (amps / volts)', asset: 'Industrial' },
       { key: 'requirements', label: 'Other requirements', type: 'textarea', wide: true },
       { section: 'Economics' },
-      { key: 'budgetUnit', label: 'Budget is', type: 'select', options: L.BUDGET_UNITS },
-      { key: 'budgetRate', label: 'Target rent ($/SF, or $/month total) – low end, or the single number', type: 'number', step: '0.01' },
-      { key: 'budgetRateMax', label: 'Target rent – high end (if a range)', type: 'number', step: '0.01' },
+      { key: 'budgetUnit', label: 'How the client gave their budget', type: 'select', options: BUDGET_CHOICES, noBlank: true, defaultValue: 'Per RSF' },
+      { key: 'budgetRate', label: 'Budget – rate in $/SF/yr, or total $ per month (low end, or the single number)', type: 'number', step: '0.01' },
+      { key: 'budgetRateMax', label: 'Budget – high end (if a range)', type: 'number', step: '0.01' },
       { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
       { key: 'termMonths', label: 'Term (months)', type: 'number' },
       { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
@@ -675,7 +683,7 @@
     const rec = S.get(col, id);
     if (!rec) return;
     let value = raw;
-    if (['sfOccupied', 'sf', 'headcount'].includes(field)) value = L.parseNumber(raw) === null ? '' : L.parseNumber(raw);
+    if (['sfOccupied', 'sf', 'headcount', 'budgetRate'].includes(field)) value = L.parseNumber(raw) === null ? '' : L.parseNumber(raw);
     if (String(rec[field] === undefined || rec[field] === null ? '' : rec[field]) === String(value)) return render();
     if (col === 'deals' && field === 'stage') {
       const patch = { id, stage: value };
@@ -743,10 +751,6 @@
       .slice(0, 8);
 
     const inMarket = companies.filter(shouldBeInMarket);
-
-    const repExpiring = deals.filter(
-      (d) => d.repAgreementSigned && d.repAgreementExpires && L.OPEN_STAGES.includes(d.stage) && L.daysBetween(today, d.repAgreementExpires) <= 60
-    );
 
     const summary = L.pipelineSummary(open);
     const maxComm = Math.max(1, ...summary.map((x) => x.commission));
@@ -818,23 +822,13 @@
         </section>
       </div>
 
-      <div class="grid2">
-        <section class="card">
-          <h2>Going stale</h2>
-          <p class="hint">Prospects with no logged touch in ${esc(s.staleDays)}+ days.</p>
-          ${stale.length ? companyMiniTable(stale, touches) : emptyState('Every prospect has been touched recently.')}
-        </section>
-        <section class="card">
-          <h2>Rep agreements expiring ≤ 60 days</h2>
-          ${
-            repExpiring.length
-              ? `<table class="tbl compact"><tbody>${repExpiring
-                  .map((d) => `<tr data-href="#/deal/${esc(d.id)}"><td><strong>${esc(d.name)}</strong><div class="sub">${esc(companyName(d.companyId))}</div></td><td class="right">${esc(L.fmtDate(d.repAgreementExpires))}</td></tr>`)
-                  .join('')}</tbody></table>`
-              : emptyState('None.')
-          }
-        </section>
-      </div>`;
+      <section class="card">
+        <h2>Going stale</h2>
+        <p class="hint">Prospects with no logged touch in ${esc(s.staleDays)}+ days.</p>
+        ${stale.length ? companyMiniTable(stale, touches) : emptyState('Every prospect has been touched recently.')}
+      </section>
+
+      <div id="prospecting" class="page-section"><h2 class="section-title">Prospecting report</h2>${prospectingTab()}</div>`;
   }
 
   function companyMiniTable(list, touches) {
@@ -1159,7 +1153,7 @@
 
   // Prospecting report: only touches to prospects (no client or deal email), for a week, a month or 90 days.
   function prospectingTab() {
-    const f = state.marketing;
+    const f = state.prospecting;
     const data = { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') };
     const r = L.prospectingReport(data, { today: L.todayISO(), period: f.period || 'thisWeek', internalDomain: myEmailDomain() });
     const t = r.totals;
@@ -1219,7 +1213,7 @@
 
     const who = (x) => `<a href="#/company/${esc(x.companyId)}"><strong>${esc(x.company)}</strong></a>${x.contact ? ` <span class="muted">· ${esc(x.contact)}</span>` : ''}`;
     return `<p class="hint">Prospecting only: calls, emails and LinkedIn messages to prospects you aren't working a deal with. Client, deal, landlord, broker and internal email are left out. A company's first touch is its initial outreach; later touches are follow-ups.</p>
-      <div class="toolbar"><div class="seg">${periods.map(([v, l]) => `<button class="${(f.period || 'thisWeek') === v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="period" data-value="${v}">${l}</button>`).join('')}</div>
+      <div class="toolbar"><div class="seg">${periods.map(([v, l]) => `<button class="${(f.period || 'thisWeek') === v ? 'on' : ''}" data-action="set-filter" data-scope="prospecting" data-key="period" data-value="${v}">${l}</button>`).join('')}</div>
         <span class="muted">${esc(L.fmtDate(r.range.from))} – ${esc(L.fmtDate(r.range.to))}</span>
         <button class="btn small" data-action="copy-text" data-text="${esc(L.prospectingRecapText(r))}">Copy recap</button></div>
       <div class="kpis">
@@ -1279,9 +1273,9 @@
       { v: 'social', l: `Social (${posts.length})` },
       { v: 'templates', l: `Email templates (${S.all('templates').length})` },
       { v: 'stats', l: 'Market stats' },
-      { v: 'outreach', l: 'Prospecting report' },
     ];
     let body = '';
+    if (!['collateral', 'social', 'templates', 'stats'].includes(f.tab)) f.tab = 'collateral';
     if (f.tab === 'collateral') {
       body = collateral.length
         ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Piece</th><th>Asset</th><th>Submarket</th><th>Partner</th><th>Data</th><th>Status</th><th class="right">Sent</th><th class="right">Responses</th></tr></thead><tbody>${collateral
@@ -1324,8 +1318,6 @@
         }`;
     } else if (f.tab === 'stats') {
       body = marketStatsTab();
-    } else {
-      body = prospectingTab();
     }
 
     return `
@@ -2373,7 +2365,7 @@
       ['Deal type', d.dealType],
       ['Size', L.dealSizeLabel(d) || 'RSF not set yet'],
       ...(L.dealOfficeLabel(d) ? [['Office portion', L.dealOfficeLabel(d)]] : []),
-      ['Budget', L.dealBudgetLabel(d)],
+      ['Budget', `${inlineSelect('deals', d.id, 'budgetUnit', [{ value: 'Per RSF', label: '$/SF per year' }, { value: 'Total per month', label: 'Monthly budget' }], d.budgetUnit || 'Per RSF')} ${editCell('deals', d.id, 'budgetRate', 'number', d.budgetRate, d.budgetRate ? esc(L.dealBudgetLabel(d)) : '')}`, true],
       ['Est. deal SF', L.fmtNumber(d.estSF)],
       ['Target submarkets', d.targetSubmarkets],
       ['Target occupancy', L.fmtDate(d.targetOccupancy)],
@@ -2426,7 +2418,7 @@
         </section>
         <section class="card">
           <h2>Requirement</h2>
-          <dl class="info">${reqs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+          <dl class="info">${reqs.map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('')}</dl>
           ${d.requirements ? `<p class="pre">${esc(d.requirements)}</p>` : ''}
         </section>
         <section class="card">
@@ -2972,7 +2964,7 @@
     let input;
     switch (f.type) {
       case 'select':
-        input = `<select id="${id}" name="${f.key}"${req}>${options(f.options, v, '')}</select>`;
+        input = `<select id="${id}" name="${f.key}"${req}>${options(f.options, v || f.defaultValue, f.noBlank ? undefined : '')}</select>`;
         break;
       case 'ref': {
         // A search box over a hidden select: type to filter, or add a new contact or company by name.
@@ -4149,14 +4141,15 @@
           saveUIState();
           return render();
         case 'drill':
-          state.marketing.drill = state.marketing.drill === d.key ? '' : d.key;
+          state.prospecting.drill = state.prospecting.drill === d.key ? '' : d.key;
           saveUIState();
           return render();
         case 'open-report':
-          Object.assign(state.marketing, { tab: 'outreach', period: 'lastWeek' });
+          Object.assign(state.prospecting, { period: 'lastWeek' });
           saveUIState();
-          if (!location.hash.startsWith('#/marketing')) location.hash = '#/marketing';
-          return render();
+          if (!location.hash.startsWith('#/dashboard')) location.hash = '#/dashboard';
+          else render();
+          return setTimeout(() => $('#prospecting') && $('#prospecting').scrollIntoView({ behavior: 'smooth' }), 150);
         case 'insert-market-line': {
           const f = $('#quick-note-form');
           const line = marketLineFor(f.dataset.col, S.get(f.dataset.col, f.dataset.id));
