@@ -1286,3 +1286,20 @@ test('templateFillIns lists what a template needs, in order', () => {
 test('nextBusinessDays skips weekends', () => {
   assert.deepEqual(L.nextBusinessDays('2026-10-30', 3), ['2026-11-02', '2026-11-03', '2026-11-04']);
 });
+
+test('quoted rates are remembered by building and flagged after 6 months', () => {
+  let rates = L.rememberRate({}, 'Uptown Park', '12.75', '2026-10-27');
+  assert.deepEqual(rates['uptown park'], { building: 'Uptown Park', rate: 12.75, date: '2026-10-27' });
+  const fresh = L.rememberedRate(rates, '100 Uptown Park Pkwy', '2027-02-01');
+  assert.equal(fresh.rate, 12.75);
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.note, 'Saved for Uptown Park on Oct 27, 2026.');
+  const old = L.rememberedRate(rates, 'Uptown Park', '2027-04-27');
+  assert.equal(old.stale, true);
+  assert.equal(old.note, 'Quoted Oct 27, 2026, 6 months ago. Re-confirm the rate at Uptown Park before sending.');
+  assert.equal(L.rememberedRate(rates, 'Acme Tower', '2026-11-01'), null);
+  assert.equal(L.rememberRate(rates, 'Acme Tower', '', '2026-11-01')['acme tower'], undefined);
+  // The draft starts with the rate saved for the tenant's building.
+  const f = L.templateFillIns('{Rate}', { company: { building: 'Uptown Park' }, buildingRates: rates, today: '2027-05-01' });
+  assert.deepEqual([f[0].value, f[0].stale], ['12.75', true]);
+});

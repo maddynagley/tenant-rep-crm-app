@@ -1492,6 +1492,37 @@
     };
   }
 
+  // Quoted rates remembered by building, so the next tenant there starts with the last rate typed. Names match
+  // loosely ("Royal Woods" finds "5238 Royal Woods Pkwy"). A rate 6 months old or more is flagged to re-confirm.
+  const RATE_STALE_MONTHS = 6;
+  function buildingKey(name) {
+    return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  function rememberRate(rates, building, rate, today) {
+    const out = Object.assign({}, rates);
+    const key = buildingKey(building);
+    const r = parseNumber(rate);
+    if (key && r) out[key] = { building: String(building).trim(), rate: r, date: today || todayISO() };
+    return out;
+  }
+  function rememberedRate(rates, building, today) {
+    rates = rates || {};
+    const key = buildingKey(building);
+    if (!key) return null;
+    const near = key.length >= 6 && Object.keys(rates).find((k) => k.length >= 6 && (key.includes(k) || k.includes(key)));
+    const hit = rates[key] || (near && rates[near]);
+    if (!hit) return null;
+    const age = Math.max(0, monthsUntil(today || todayISO(), hit.date) || 0);
+    const stale = age >= RATE_STALE_MONTHS;
+    return Object.assign({}, hit, {
+      ageMonths: age,
+      stale,
+      note: stale
+        ? 'Quoted ' + fmtDate(hit.date) + ', ' + age + ' months ago. Re-confirm the rate at ' + hit.building + ' before sending.'
+        : 'Saved for ' + hit.building + ' on ' + fmtDate(hit.date) + '.',
+    });
+  }
+
   // The outermost [bracketed notes] in a template, e.g. "[specific day]" or "[fact, e.g. "[tenant] renewed"]".
   function bracketSlots(text) {
     const out = [];
@@ -1549,9 +1580,17 @@
       CompBuilding: c.building || c.address || '',
       RentGrowth: Math.round((parseNumber(ctx.rentGrowth) === null ? RENT_GROWTH : parseNumber(ctx.rentGrowth)) * 100),
     };
+    const saved = rememberedRate(ctx.buildingRates, start.CompBuilding || c.building || c.address, ctx.today);
+    if (saved) start.Rate = saved.rate;
     return found
       .sort((a, b) => a.at - b.at)
-      .map((f) => Object.assign({ type: 'text' }, FILL_IN_FIELDS[f.key] || {}, f, { value: start[f.key] === undefined ? '' : String(start[f.key]) }));
+      .map((f) =>
+        Object.assign({ type: 'text' }, FILL_IN_FIELDS[f.key] || {}, f, {
+          value: start[f.key] === undefined ? '' : String(start[f.key]),
+          note: f.key === 'Rate' && saved ? saved.note : '',
+          stale: f.key === 'Rate' && saved ? saved.stale : false,
+        })
+      );
   }
 
   // The next few weekdays after today, for picking a meeting day.
@@ -3397,6 +3436,8 @@
     TEMPLATE_STEPS,
     fillTemplate,
     rentMath,
+    rememberRate,
+    rememberedRate,
     bracketSlots,
     templateFillIns,
     nextBusinessDays,

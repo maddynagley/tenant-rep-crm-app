@@ -487,3 +487,5 @@ input.cell-input { height: 28px; font-size: 13px; padding: 0 6px; width: auto; m
 .help-btn { width: 30px; height: 30px; align-self: center; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--accent); font-weight: 700; font-size: 14px; cursor: pointer; line-height: 1; }
 .help-btn:hover, .help-btn.on { border-color: var(--accent); background: var(--accent); color: #fff; }
 .help-panel ul.plain li { margin: 3px 0; }
+.fill-in-note { font-weight: 400; font-size: 11px; color: var(--muted); }
+.fill-in-note.stale { color: var(--red); font-weight: 600; background: var(--red-soft); border-radius: 4px; padding: 3px 6px; }

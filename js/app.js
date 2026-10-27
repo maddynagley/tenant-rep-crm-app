@@ -3030,7 +3030,7 @@
     const p = S.get('contacts', contactId) || {};
     const deal = S.get('deals', dealId) || S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
     const st = S.settings();
-    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: (deal && deal.partnerBrokers) || c.partner, rentGrowth: st.rentGrowth, deal, market: L.marketStatFor(S.settings().marketStats || [], c, S.settings().marketReports), today: L.todayISO() };
+    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: (deal && deal.partnerBrokers) || c.partner, rentGrowth: st.rentGrowth, buildingRates: st.buildingRates || {}, deal, market: L.marketStatFor(S.settings().marketStats || [], c, S.settings().marketReports), today: L.todayISO() };
   }
 
   // Who to call and their numbers, with click-to-call, copy, and logging the call.
@@ -3157,10 +3157,32 @@
           (f) => `<label${f.bracket ? ' class="wide"' : ''}>${esc(f.bracket ? L.fillTemplate(f.label, ctx) : f.label)}
           <span class="fill-in-row"><input data-fill-in="${esc(f.key)}" type="${f.type === 'date' ? 'date' : 'text'}"${f.type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(f.value)}" />${
             f.saveTo ? `<button type="button" class="btn small" data-action="save-fill-in" data-field="${f.saveTo}" data-key="${esc(f.key)}" title="Save to the company so it fills in next time">Save to company</button>` : ''
-          }</span>${f.type === 'date' ? `<span class="fill-in-days">${days.map((d) => `<button type="button" class="btn small" data-action="pick-day" data-day="${d}">${esc(dayLabel(d))}</button>`).join('')}</span>` : ''}
+          }</span>${f.key === 'Rate' ? `<span class="fill-in-note${f.stale ? ' stale' : ''}" id="rate-note">${esc(f.note || 'Saved for this building when you leave the box, so the next tenant there starts with it.')}</span>` : ''}${f.type === 'date' ? `<span class="fill-in-days">${days.map((d) => `<button type="button" class="btn small" data-action="pick-day" data-day="${d}">${esc(dayLabel(d))}</button>`).join('')}</span>` : ''}
         </label>`
         )
         .join('')}</div>`;
+  }
+  function onRateFillIn(changed) {
+    const rateEl = $('#draft-fillins [data-fill-in="Rate"]');
+    if (!rateEl) return;
+    const f = $('#draft-form');
+    const c = S.get('companies', f.dataset.company) || {};
+    const compEl = $('#draft-fillins [data-fill-in="CompBuilding"]');
+    const building = (compEl && compEl.value.trim()) || c.building || c.address;
+    const rates = S.settings().buildingRates || {};
+    if (changed === 'Rate' && L.parseNumber(rateEl.value) && building) {
+      const saved = L.rememberedRate(rates, building, L.todayISO());
+      // Re-typing the same rate re-confirms it and restarts the 6 months.
+      S.saveSettings({ buildingRates: L.rememberRate(rates, saved ? saved.building : building, rateEl.value, L.todayISO()) });
+    } else if (changed === 'CompBuilding') {
+      const saved = L.rememberedRate(rates, building, L.todayISO());
+      if (saved) rateEl.value = saved.rate;
+      refillTemplateDraft();
+    }
+    const now = L.rememberedRate(S.settings().buildingRates || {}, building, L.todayISO());
+    const note = $('#rate-note');
+    note.textContent = now ? now.note : 'Saved for this building when you leave the box, so the next tenant there starts with it.';
+    note.classList.toggle('stale', Boolean(now && now.stale));
   }
   function readFillIns() {
     const inputs = {};
@@ -4366,6 +4388,8 @@
   document.addEventListener('change', (e) => {
     const d = e.target.dataset || {};
     if (d.inlineCol) saveInline(d.inlineCol, d.inlineId, d.inlineField, e.target.value);
+    // A quoted rate is remembered for its building; picking a building with a saved rate fills it in.
+    if (d.fillIn === 'Rate' || d.fillIn === 'CompBuilding') onRateFillIn(d.fillIn);
     // The rent growth behind {AnnualIncrease} is remembered for every draft.
     if (d.fillIn === 'RentGrowth' && L.parseNumber(e.target.value) !== null) S.saveSettings({ rentGrowth: L.parseNumber(e.target.value) / 100 });
   });
