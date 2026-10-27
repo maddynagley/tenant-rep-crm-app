@@ -1118,3 +1118,29 @@ test('comp import: an earlier copy missing its rent is updated, not held; OpEx i
   const res = L.rowsToRecords([['Building', 'Tenant', 'OpEx ($/SF)', 'Rent'], ['X', 'Y', '9.50', '30']], L.COMP_IMPORT_ALIASES);
   assert.equal(res.records[0].opex, '9.50');
 });
+
+test('submarketBrief: one submarket compared with the market and its last quarter', () => {
+  const stats = [
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'Northside', vacancy: 26.7, askingRent: 32.07, rentType: 'direct', netAbsorption: 327887, ytdAbsorption: 418576, underConstruction: 0, inventory: 26669010, classARent: 33.65, classBRent: 25.8 },
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'Uptown', vacancy: 32.2, askingRent: 47.34 },
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'Riverside', vacancy: 18.8, askingRent: 30.33 },
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'CBD Total', vacancy: 30.9 },
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'Market total', vacancy: 26.1, askingRent: 34.47, inventory: 155510029 },
+    { quarter: '1Q26', assetClass: 'Office', submarket: 'Northside', vacancy: 27.9, askingRent: 31.5 },
+  ];
+  const b = L.submarketBrief(stats, 'Office', 'Northside');
+  assert.equal(b.quarter, '2Q26');
+  assert.equal(b.previousQuarter, '1Q26');
+  assert.deepEqual(b.points, [
+    "Northside's office vacancy is 26.7%, down 120 bps from 1Q26, 0.6 points above the market average of 26.1% (2nd highest of 3 submarkets).",
+    'Direct asking rent averages $32.07/SF, up 1.8% from 1Q26, 7% below the market average of $34.47.',
+    'Class A at $33.65, Class B at $25.80 per SF.',
+    'Tenants absorbed a net 327,887 SF in 2Q26 (more move-ins than move-outs), 418,576 SF year to date.',
+    'Nothing is under construction, so no new supply is coming to compete with existing buildings.',
+    'Northside has 26.7 MSF of office space, 17% of the market.',
+  ]);
+  assert.match(b.paragraph, /In short, Northside is about as available as the market overall, and demand was positive this quarter\.$/);
+  assert.match(L.submarketBrief(stats, 'Office', 'Uptown').paragraph, /more availability than the market overall/);
+  assert.match(L.submarketBrief(stats, 'Office', 'Market total').points[0], /^The market's office vacancy is 26\.1%\.$/);
+  assert.equal(L.submarketBrief(stats, 'Office', 'Nowhere'), null);
+});

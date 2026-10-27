@@ -2382,6 +2382,71 @@
     };
   }
 
+  // One submarket boiled down: plain-English points comparing it with the market and its own last quarter, and a
+  // short paragraph to send a client. stats: all rows; picks the latest quarter on file for the asset class.
+  function submarketBrief(stats, assetClass, submarket, quarter) {
+    const mine = (stats || []).filter((x) => x.assetClass === assetClass);
+    const qs = Array.from(new Set(mine.map((x) => x.quarter))).sort((a, b) => quarterKey(b) - quarterKey(a));
+    const q = quarter || qs[0];
+    const prevQ = qs[qs.indexOf(q) + 1];
+    const row = mine.find((x) => x.quarter === q && x.submarket === submarket);
+    if (!row) return null;
+    const market = mine.find((x) => x.quarter === q && x.submarket === 'Market total');
+    const prev = prevQ ? mine.find((x) => x.quarter === prevQ && x.submarket === submarket) : null;
+    const peers = mine.filter((x) => x.quarter === q && x.submarket !== 'Market total' && !/\btotal\b/i.test(x.submarket));
+    const kind = assetClass.toLowerCase();
+    const sf = (n) => fmtNumber(Math.abs(Math.round(n))) + ' SF';
+    const msf = (n) => (Math.abs(n) >= 1e6 ? (Math.abs(n) / 1e6).toFixed(1) + ' MSF' : sf(n));
+    const ord = (n) => n + (['th', 'st', 'nd', 'rd'][n % 100 > 10 && n % 100 < 14 ? 0 : n % 10] || 'th');
+    const isTotal = submarket === 'Market total';
+    const name = isTotal ? 'The market' : submarket;
+    const points = [];
+    if (row.vacancy !== undefined) {
+      let t = name + "'s " + kind + ' vacancy is ' + row.vacancy.toFixed(1) + '%';
+      if (prev && prev.vacancy !== undefined) {
+        const bps = Math.round((row.vacancy - prev.vacancy) * 100);
+        t += bps === 0 ? ', unchanged from ' + prevQ : ', ' + (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps from ' + prevQ;
+      }
+      if (!isTotal && market && market.vacancy !== undefined) {
+        const gap = Math.round((row.vacancy - market.vacancy) * 10) / 10;
+        t += gap === 0 ? ', in line with the market average' : ', ' + Math.abs(gap).toFixed(1) + ' points ' + (gap > 0 ? 'above' : 'below') + ' the market average of ' + market.vacancy.toFixed(1) + '%';
+      }
+      if (!isTotal && peers.length > 2) {
+        const rank = peers.slice().sort((a, b) => b.vacancy - a.vacancy).findIndex((x) => x === row) + 1;
+        if (rank) t += ' (' + (rank === 1 ? 'the highest' : rank === peers.length ? 'the lowest' : ord(rank) + ' highest') + ' of ' + peers.length + ' submarkets)';
+      }
+      points.push(t + '.');
+    }
+    if (row.askingRent) {
+      const label = (row.rentType === 'direct' ? 'Direct asking rent' : 'Asking rent') + (assetClass === 'Industrial' ? ' (NNN)' : '');
+      let t = label + ' averages $' + row.askingRent.toFixed(2) + '/SF';
+      if (prev && prev.askingRent) {
+        const ch = ((row.askingRent - prev.askingRent) / prev.askingRent) * 100;
+        t += Math.abs(ch) < 0.05 ? ', flat from ' + prevQ : ', ' + (ch < 0 ? 'down ' : 'up ') + Math.abs(ch).toFixed(1) + '% from ' + prevQ;
+      }
+      if (!isTotal && market && market.askingRent) {
+        const d = ((row.askingRent - market.askingRent) / market.askingRent) * 100;
+        t += Math.abs(d) < 0.5 ? ', about the market average' : ', ' + Math.abs(d).toFixed(0) + '% ' + (d > 0 ? 'above' : 'below') + ' the market average of $' + market.askingRent.toFixed(2);
+      }
+      points.push(t + '.');
+    }
+    const tiers = [['classARent', 'Class A'], ['classBRent', 'Class B'], ['whRent', 'Warehouse/distribution'], ['flexRent', 'R&D/flex']].filter(([k]) => row[k]);
+    if (tiers.length) points.push(tiers.map(([k, l]) => l + ' at $' + row[k].toFixed(2)).join(', ') + ' per SF.');
+    if (row.netAbsorption !== undefined) {
+      let t = row.netAbsorption >= 0 ? 'Tenants absorbed a net ' + msf(row.netAbsorption) + ' in ' + q + ' (more move-ins than move-outs)' : 'Net absorption was negative ' + msf(row.netAbsorption) + ' in ' + q + ' (more move-outs than move-ins)';
+      if (row.ytdAbsorption !== undefined) t += ', ' + (row.ytdAbsorption >= 0 ? '' : 'negative ') + msf(row.ytdAbsorption) + ' year to date';
+      points.push(t + '.');
+    }
+    if (row.underConstruction !== undefined) points.push(row.underConstruction > 0 ? msf(row.underConstruction) + ' is under construction' + (row.inventory ? ' (' + ((row.underConstruction / row.inventory) * 100).toFixed(1) + '% of existing inventory)' : '') + '.' : 'Nothing is under construction, so no new supply is coming to compete with existing buildings.');
+    if (!isTotal && row.inventory && market && market.inventory) points.push(name + ' has ' + msf(row.inventory) + ' of ' + kind + ' space, ' + ((row.inventory / market.inventory) * 100).toFixed(0) + '% of the market.');
+    // A short read for a client: where it stands, and which way it's leaning.
+    const lean = [];
+    if (row.vacancy !== undefined && market && market.vacancy !== undefined && !isTotal) lean.push(row.vacancy > market.vacancy + 1 ? 'more availability than the market overall, which gives tenants options and leverage' : row.vacancy < market.vacancy - 1 ? 'tighter than the market overall, so quality space and landlord concessions are harder to come by' : 'about as available as the market overall');
+    if (row.netAbsorption !== undefined) lean.push(row.netAbsorption >= 0 ? 'demand was positive this quarter' : 'more tenants moved out than in this quarter');
+    const paragraph = points.slice(0, 2).join(' ') + (lean.length ? ' In short, ' + (isTotal ? 'the market' : submarket) + ' is ' + lean.join(', and ') + '.' : '');
+    return { quarter: q, previousQuarter: prevQ || '', row, market: market || null, previous: prev || null, points, paragraph };
+  }
+
   // Comp spreadsheets (CoStar exports, broker comp sheets, research tables).
   const COMP_IMPORT_ALIASES = {
     building: ['building', 'building name', 'property', 'property name', 'project', 'bldg'],
@@ -3026,6 +3091,7 @@
     parseResearchReport,
     layoutLines,
     compareQuarters,
+    submarketBrief,
     matchSubmarket,
     MARKET_PLACEHOLDERS,
     normalizeQuarter,

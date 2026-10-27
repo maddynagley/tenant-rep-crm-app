@@ -8,6 +8,7 @@
   --border: #e2dcd0;
   --accent: #8d3a3c;
   --chart: #8d3a3c;
+  --chart-ref: #3f6fa6;
   --accent-soft: #f3e7e4;
   --red: #9b2c2c;
   --red-soft: #f6e3e1;
@@ -42,6 +43,7 @@
     --border: #3a2428;
     --accent: #c6b39a;
     --chart: #c46466;
+    --chart-ref: #5a8ac2;
     --accent-soft: #3b1319;
     --red: #e08a84;
     --red-soft: #3d1a1c;
@@ -435,3 +437,7 @@ h2 .seg.more { margin-left: auto; }
 .snap { display: flex; flex-direction: column; gap: 2px; }
 .snap strong { font-size: 18px; font-family: var(--serif); }
 .market-line { margin: 6px 0; }
+.bar.bar-muted { background: var(--chart-ref); }
+.pair { margin-bottom: 14px; }
+.pair .bar-row { grid-template-columns: minmax(90px, 160px) 1fr 64px; }
+.client-summary { font-size: 15px; line-height: 1.55; margin: 0 0 8px; }

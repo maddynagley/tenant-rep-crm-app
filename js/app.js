@@ -1226,19 +1226,21 @@
       .map((k) => ({ quarter: k.split('|')[0], assetClass: k.split('|')[1], n: stats.filter((x) => x.quarter + '|' + x.assetClass === k).length }))
       .sort((a, b) => L.compareQuarters(b.quarter, a.quarter) || a.assetClass.localeCompare(b.assetClass));
     const mine = quarters.filter((q) => q.assetClass === asset).map((q) => q.quarter);
-    const latest = mine[0];
+    // The quarter being viewed (latest by default) and the one before it, for changes.
+    const latest = mine.includes(f.statsQuarter) ? f.statsQuarter : mine[0];
+    const prevQ = mine[mine.indexOf(latest) + 1];
     const report = reports.find((r) => r.quarter === latest && r.assetClass === asset);
     const rows = stats.filter((x) => x.assetClass === asset && x.quarter === latest);
     const total = rows.find((x) => x.submarket === 'Market total');
-    const prevTotal = mine[1] ? stats.find((x) => x.assetClass === asset && x.quarter === mine[1] && x.submarket === 'Market total') : null;
+    const prevTotal = prevQ ? stats.find((x) => x.assetClass === asset && x.quarter === prevQ && x.submarket === 'Market total') : null;
     const change = (cur, prev, kind) => {
       if (cur === undefined || cur === null || !prev || prev === undefined || prev === null) return '';
       if (kind === 'bps') {
         const bps = Math.round((cur - prev) * 100);
-        return (bps === 0 ? 'flat' : (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps') + ' vs ' + mine[1];
+        return (bps === 0 ? 'flat' : (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps') + ' vs ' + prevQ;
       }
       const pct = ((cur - prev) / Math.abs(prev)) * 100;
-      return (Math.abs(pct) < 0.05 ? 'flat' : (pct < 0 ? 'down ' : 'up ') + Math.abs(pct).toFixed(1) + '%') + ' vs ' + mine[1];
+      return (Math.abs(pct) < 0.05 ? 'flat' : (pct < 0 ? 'down ' : 'up ') + Math.abs(pct).toFixed(1) + '%') + ' vs ' + prevQ;
     };
     const tile = (label, value, sub) => `<div class="kpi"><span class="kpi-label">${esc(label)}</span><span class="kpi-value">${esc(value)}</span><span class="kpi-sub">${esc(sub || '')}</span></div>`;
     const copyList = (list) =>
@@ -1261,14 +1263,17 @@
         </div>`
       : '';
 
-    // Market-wide trend across the quarters on file: one small chart per measure (never two scales on one chart).
-    const series = mine
-      .slice()
-      .reverse()
-      .map((q) => stats.find((x) => x.assetClass === asset && x.quarter === q && x.submarket === 'Market total'))
-      .filter(Boolean);
-    const spark = (key, label, fmt) => {
-      const pts = series.filter((x) => x[key] !== undefined);
+    // Trend across the quarters on file, for the market or one submarket: one small chart per measure (never two
+    // scales on one chart).
+    const seriesFor = (sub) =>
+      mine
+        .slice()
+        .reverse()
+        .filter((q) => L.compareQuarters(q, latest) <= 0)
+        .map((q) => stats.find((x) => x.assetClass === asset && x.quarter === q && x.submarket === sub))
+        .filter(Boolean);
+    const spark = (key, label, fmt, sub) => {
+      const pts = seriesFor(sub || 'Market total').filter((x) => x[key] !== undefined);
       if (pts.length < 2) return '';
       const vals = pts.map((x) => x[key]);
       const lo = Math.min(...vals);
@@ -1281,11 +1286,50 @@
         <text x="${X(0)}" y="82" text-anchor="start">${esc(pts[0].quarter)}</text><text x="${X(pts.length - 1)}" y="82" text-anchor="end">${esc(pts[pts.length - 1].quarter)} · ${esc(fmt(pts[pts.length - 1][key]))}</text>
       </svg></div>`;
     };
-    const trends = [spark('vacancy', 'Market vacancy', (v) => v.toFixed(1) + '%'), spark('askingRent', 'Market asking rent', (v) => '$' + v.toFixed(2)), spark('netAbsorption', 'Quarterly net absorption', fmtMSF)].join('');
+    const trendsFor = (sub, who) => [spark('vacancy', who + ' vacancy', (v) => v.toFixed(1) + '%', sub), spark('askingRent', who + ' asking rent', (v) => '$' + v.toFixed(2), sub), spark('netAbsorption', 'Quarterly net absorption', fmtMSF, sub)].join('');
+    const trends = trendsFor('Market total', 'Market');
 
     const hl = (report && report.highlights) || {};
     const notesFor = (sub) => (report ? (report.submarkets || {})[L.matchSubmarket(Object.keys(report.submarkets || {}), sub)] || [] : []);
-    const view = latest
+    // One submarket on its own: its numbers, how it compares, Research's notes and a client-ready summary.
+    const subRow = f.statsSub && rows.find((x) => x.submarket === f.statsSub);
+    const subView = () => {
+      const b = L.submarketBrief(stats, asset, subRow.submarket, latest);
+      const x = b.row;
+      const m = b.market;
+      const p = b.previous;
+      const vsMkt = (a, mk, kind) => (a === undefined || !mk || mk === undefined ? '' : kind === 'pts' ? 'Market ' + mk.toFixed(1) + '%' : 'Market $' + mk.toFixed(2));
+      const notes = notesFor(x.submarket);
+      const subTrends = trendsFor(x.submarket, x.submarket);
+      // Side-by-side bars against the market (same scale, one measure per pair).
+      const pair = (label, a, mk, fmt) =>
+        a === undefined || !m || mk === undefined
+          ? ''
+          : `<div class="pair"><div class="kpi-label">${esc(label)}</div>${[[x.submarket, a, true], ['Market', mk, false]]
+              .map(([n, v, on]) => `<div class="bar-row" data-tip="${esc(n + ': ' + fmt(v))}"><span class="bar-label">${esc(n)}</span><span class="bar-track"><span class="bar${on ? '' : ' bar-muted'}" style="width:${((v / Math.max(a, mk) / 1.08) * 100).toFixed(1)}%"></span></span><span class="bar-value">${esc(fmt(v))}</span></div>`)
+              .join('')}</div>`;
+      return `
+      <div class="kpis">
+        ${tile('Vacancy', x.vacancy !== undefined ? x.vacancy.toFixed(1) + '%' : '—', [change(x.vacancy, p && p.vacancy, 'bps'), vsMkt(x.vacancy, m && m.vacancy, 'pts')].filter(Boolean).join(' · '))}
+        ${tile(x.rentType === 'direct' ? 'Avg. direct asking rent' : 'Avg. asking rent', x.askingRent ? '$' + x.askingRent.toFixed(2) : '—', [change(x.askingRent, p && p.askingRent), vsMkt(x.askingRent, m && m.askingRent)].filter(Boolean).join(' · '))}
+        ${tile('Net absorption, ' + latest, fmtMSF(x.netAbsorption), x.ytdAbsorption !== undefined ? fmtMSF(x.ytdAbsorption) + ' year to date' : '')}
+        ${tile('Under construction', fmtMSF(x.underConstruction), x.inventory ? fmtMSF(x.inventory) + ' inventory' : '')}
+      </div>
+      <div class="grid2">
+        <section class="card"><h2>Key points · ${esc(x.submarket)} ${esc(latest)} <button class="link more" data-action="copy-text" data-text="${esc(b.points.join('\n'))}">Copy all</button></h2>${copyList(b.points)}</section>
+        <section class="card"><h2>For a client <button class="link more" data-action="copy-text" data-text="${esc(b.paragraph)}">Copy</button></h2><p class="client-summary">${esc(b.paragraph)}</p>
+          <p class="hint">Built from the numbers above. Edit it to fit the conversation; the vacancy and rent lines are safe to quote.</p></section>
+      </div>
+      ${notes.length ? `<section class="card"><h2>What Research says about ${esc(x.submarket)}</h2>${copyList(notes)}</section>` : ''}
+      <div class="grid2">
+        <section class="card"><h2>Compared with the market</h2>${pair('Vacancy', x.vacancy, m && m.vacancy, (v) => v.toFixed(1) + '%')}${pair('Asking rent', x.askingRent, m && m.askingRent, (v) => '$' + v.toFixed(2))}</section>
+        ${subTrends ? `<section class="card"><h2>Trend</h2><div class="trends">${subTrends}</div></section>` : `<section class="card"><h2>Trend</h2><p class="muted">Shows here once a second quarter is on file.</p></section>`}
+      </div>`;
+    };
+
+    const view = subRow
+      ? subView()
+      : latest
       ? `
       <div class="kpis">
         ${tile('Vacancy', total && total.vacancy !== undefined ? total.vacancy.toFixed(1) + '%' : '—', change(total && total.vacancy, prevTotal && prevTotal.vacancy, 'bps'))}
@@ -1309,7 +1353,7 @@
           .sort((a, b) => (a.submarket === 'Market total') - (b.submarket === 'Market total'))
           .map((x) => {
             const notes = notesFor(x.submarket);
-            const prev = mine[1] ? stats.find((y) => y.assetClass === asset && y.quarter === mine[1] && y.submarket === x.submarket) : null;
+            const prev = prevQ ? stats.find((y) => y.assetClass === asset && y.quarter === prevQ && y.submarket === x.submarket) : null;
             return `<tr class="${/total/i.test(x.submarket) ? 'total-row' : ''}"><td><strong>${esc(x.submarket)}</strong>${notes.length ? `<details class="research-details"><summary>What Research says (${notes.length})</summary>${copyList(notes)}</details>` : ''}</td>
               <td class="right">${x.vacancy !== undefined ? x.vacancy.toFixed(1) + '%' : '—'}${prev && prev.vacancy !== undefined ? `<div class="sub">${esc(change(x.vacancy, prev.vacancy, 'bps'))}</div>` : ''}</td>
               <td class="right">${x.askingRent ? '$' + x.askingRent.toFixed(2) : '—'}</td><td class="right">${esc(fmtSF(x.netAbsorption))}</td><td class="right">${esc(fmtSF(x.ytdAbsorption))}</td><td class="right">${esc(fmtSF(x.underConstruction))}</td><td class="right">${esc(fmtSF(x.inventory))}</td></tr>`;
@@ -1319,7 +1363,9 @@
       : emptyState(`No ${asset.toLowerCase()} stats yet. Drop this quarter's Research report above.`);
 
     return `${importPreview && importPreview.kind === 'research' ? researchPreviewCard() : ''}
-      <div class="toolbar"><div class="seg">${['Office', 'Industrial'].map((a) => `<button class="${asset === a ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="statsAsset" data-value="${a}">${a}${quarters.find((q) => q.assetClass === a) ? ' · ' + esc(quarters.find((q) => q.assetClass === a).quarter) : ''}</button>`).join('')}</div></div>
+      <div class="toolbar"><div class="seg">${['Office', 'Industrial'].map((a) => `<button class="${asset === a ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="statsAsset" data-value="${a}">${a}</button>`).join('')}</div>
+        ${rows.length ? `<select data-filter="marketing.statsSub" aria-label="Submarket">${options(rows.map((x) => ({ value: x.submarket === 'Market total' ? '' : x.submarket, label: x.submarket === 'Market total' ? (report && report.market ? report.market : 'Market') + ' overall' : x.submarket })).sort((a, b) => (a.value ? 1 : 0) - (b.value ? 1 : 0) || 0), subRow ? subRow.submarket : '')}</select>` : ''}
+        ${mine.length ? `<select data-filter="marketing.statsQuarter" aria-label="Quarter">${options(mine, latest)}</select>` : ''}</div>
       ${view}
       <div class="drop-zone" data-drop="marketStats"><strong>Drag this quarter's Research report here</strong> (the PDF, or an Excel/CSV stats table) <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="marketStats">Choose a file</button>
         <div class="sub">The submarket statistics, the market observations and each submarket's current conditions are read from the report. You confirm the quarter before anything is saved. Each new quarter is compared with the one before.</div></div>
