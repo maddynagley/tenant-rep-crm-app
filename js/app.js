@@ -86,7 +86,7 @@
       { key: 'city', label: 'Market / city', list: () => distinct('companies', 'city') },
       { key: 'submarket', label: 'Submarket', list: () => distinct('companies', 'submarket') },
       { key: 'sfOccupied', label: 'SF occupied', type: 'number' },
-      { key: 'partner', label: 'Partner on this account (fills {Partner} in emails)', list: () => Array.from(new Set(distinct('companies', 'partner').concat(distinct('deals', 'partnerBrokers')))).sort() },
+      { key: 'partner', label: 'Partner on this account (fills {Partner} in emails; "None" if you work it alone)', list: () => Array.from(new Set(distinct('companies', 'partner').concat(distinct('deals', 'partnerBrokers')))).sort() },
       { key: 'headcount', label: 'Headcount', type: 'number' },
       { key: 'leaseExpiration', label: 'Lease expiration', type: 'date' },
       { key: 'landlord', label: 'Landlord / owner' },
@@ -1613,6 +1613,25 @@
     </section>`;
   }
 
+  // Building quotes saved from the Draft email window; 6 months old or more is flagged to re-confirm.
+  function quotedRates(q) {
+    const list = L.quotedRateList(S.settings().buildingRates || {}, q, L.todayISO());
+    const total = Object.keys(S.settings().buildingRates || {}).length;
+    return `<section class="card"><h2>Quoted rates</h2>
+      <p class="hint">What each building is quoting, saved when you type a rate in the Draft email window. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; typing the rate again in a draft restarts the clock.</p>
+      ${
+        list.length
+          ? `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Building</th><th class="right">Quote</th><th>Saved</th><th></th><th></th></tr></thead><tbody>${list
+              .map(
+                (r) => `<tr><td><strong>${esc(r.building)}</strong></td><td class="right nowrap">${esc(r.text)}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
+              <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : `<span class="muted">${r.ageMonths ? r.ageMonths + ' mo ago' : 'This month'}</span>`}</td>
+              <td class="right"><button class="btn small" data-action="delete-quote" data-key="${esc(r.key)}">Remove</button></td></tr>`
+              )
+              .join('')}</tbody></table></div>`
+          : emptyState(total ? 'No saved quotes match that search.' : 'No quotes saved yet. Type a quoted rate in the Draft email window and it shows up here.')
+      }</section>`;
+  }
+
   function viewComps() {
     const f = state.comps;
     const today = L.todayISO();
@@ -1660,11 +1679,13 @@
         <div class="seg">
           <button class="${f.tab === 'dates' ? 'on' : ''}" data-action="set-filter" data-scope="comps" data-key="tab" data-value="dates">Critical dates (${tp.due.length} due)</button>
           <button class="${f.tab === 'comps' ? 'on' : ''}" data-action="set-filter" data-scope="comps" data-key="tab" data-value="comps">Comps (${S.all('comps').length})</button>
+          <button class="${f.tab === 'quotes' ? 'on' : ''}" data-action="set-filter" data-scope="comps" data-key="tab" data-value="quotes">Quoted rates (${Object.keys(S.settings().buildingRates || {}).length})</button>
         </div>
         ${f.tab === 'comps' ? assetTabs(f.asset, 'comps') + `<input type="search" placeholder="Search building, tenant, submarket…" value="${esc(f.q)}" data-filter="comps.q" id="f-comps-q" />` : ''}
+        ${f.tab === 'quotes' ? `<input type="search" placeholder="Search a building…" value="${esc(f.q)}" data-filter="comps.q" id="f-comps-q" />` : ''}
       </div>
       ${state.comps.help ? compsHelp() : ''}
-      ${f.tab === 'comps' ? compTable + dropZone : dates}`;
+      ${f.tab === 'comps' ? compTable + dropZone : f.tab === 'quotes' ? quotedRates(f.q) : dates}`;
   }
 
   // ----- coach sidebar -----
@@ -3154,11 +3175,15 @@
     box.innerHTML = `<p class="fill-ins-head">Fill-ins <span class="hint">Typing here rewrites the subject and body, so make other edits last.</span></p>
       <div class="fill-ins-grid">${fields
         .map(
-          (f) => `<label${f.bracket ? ' class="wide"' : ''}>${esc(f.bracket ? L.fillTemplate(f.label, ctx) : f.label)}
-          <span class="fill-in-row"><input data-fill-in="${esc(f.key)}" type="${f.type === 'date' ? 'date' : 'text'}"${f.type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(f.value)}" />${
+          (f) => `<${f.solo ? 'div class="fill-in-field"' : 'label'}${f.bracket ? ' class="wide"' : ''}${f.key === 'OpEx' ? ' id="opex-field"' + (fields.some((x) => x.key === 'RateBasis' && x.value === 'NNN + OpEx') ? '' : ' hidden') : ''}>${esc(f.bracket ? L.fillTemplate(f.label, ctx) : f.label)}
+          <span class="fill-in-row">${
+            f.type === 'select'
+              ? `<select data-fill-in="${esc(f.key)}">${options(f.options, f.value)}</select>`
+              : `<input data-fill-in="${esc(f.key)}" type="${f.type === 'date' ? 'date' : 'text'}"${f.type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(f.value)}" />`
+          }${
             f.saveTo ? `<button type="button" class="btn small" data-action="save-fill-in" data-field="${f.saveTo}" data-key="${esc(f.key)}" title="Save to the company so it fills in next time">Save to company</button>` : ''
-          }</span>${f.key === 'Rate' ? `<span class="fill-in-note${f.stale ? ' stale' : ''}" id="rate-note">${esc(f.note || 'Saved for this building when you leave the box, so the next tenant there starts with it.')}</span>` : ''}${f.type === 'date' ? `<span class="fill-in-days">${days.map((d) => `<button type="button" class="btn small" data-action="pick-day" data-day="${d}">${esc(dayLabel(d))}</button>`).join('')}</span>` : ''}
-        </label>`
+          }</span>${f.solo ? `<label class="check fill-in-solo"><input type="checkbox" data-fill-in="Solo"${f.checked ? ' checked' : ''} /> Working this one alone (no partner)</label>` : ''}${f.key === 'Rate' ? `<span class="fill-in-note${f.stale ? ' stale' : ''}" id="rate-note">${esc(f.note || 'Saved for this building when you leave the box, so the next tenant there starts with it.')}</span>` : ''}${f.type === 'date' ? `<span class="fill-in-days">${days.map((d) => `<button type="button" class="btn small" data-action="pick-day" data-day="${d}">${esc(dayLabel(d))}</button>`).join('')}</span>` : ''}
+        </${f.solo ? 'div' : 'label'}>`
         )
         .join('')}</div>`;
   }
@@ -3170,15 +3195,22 @@
     const compEl = $('#draft-fillins [data-fill-in="CompBuilding"]');
     const building = (compEl && compEl.value.trim()) || c.building || c.address;
     const rates = S.settings().buildingRates || {};
-    if (changed === 'Rate' && L.parseNumber(rateEl.value) && building) {
+    const basisEl = $('#draft-fillins [data-fill-in="RateBasis"]');
+    const opexEl = $('#draft-fillins [data-fill-in="OpEx"]');
+    if (['Rate', 'RateBasis', 'OpEx'].includes(changed) && L.parseNumber(rateEl.value) && building) {
       const saved = L.rememberedRate(rates, building, L.todayISO());
       // Re-typing the same rate re-confirms it and restarts the 6 months.
-      S.saveSettings({ buildingRates: L.rememberRate(rates, saved ? saved.building : building, rateEl.value, L.todayISO()) });
+      S.saveSettings({ buildingRates: L.rememberRate(rates, saved ? saved.building : building, rateEl.value, L.todayISO(), basisEl && basisEl.value, opexEl && opexEl.value) });
     } else if (changed === 'CompBuilding') {
       const saved = L.rememberedRate(rates, building, L.todayISO());
-      if (saved) rateEl.value = saved.rate;
+      if (saved) {
+        rateEl.value = saved.rate;
+        if (basisEl) basisEl.value = saved.basis || 'NNN';
+        if (opexEl) opexEl.value = saved.opex || '';
+      }
       refillTemplateDraft();
     }
+    if ($('#opex-field')) $('#opex-field').hidden = !(basisEl && basisEl.value === 'NNN + OpEx');
     const now = L.rememberedRate(S.settings().buildingRates || {}, building, L.todayISO());
     const note = $('#rate-note');
     note.textContent = now ? now.note : 'Saved for this building when you leave the box, so the next tenant there starts with it.';
@@ -3186,7 +3218,7 @@
   }
   function readFillIns() {
     const inputs = {};
-    document.querySelectorAll('#draft-fillins [data-fill-in]').forEach((el) => (inputs[el.dataset.fillIn] = el.value));
+    document.querySelectorAll('#draft-fillins [data-fill-in]').forEach((el) => (inputs[el.dataset.fillIn] = el.type === 'checkbox' ? (el.checked ? 'yes' : 'no') : el.value));
     return inputs;
   }
   function refillTemplateDraft() {
@@ -4147,10 +4179,19 @@
           if (cc) navigator.clipboard.writeText(cc).then(() => toast('Copied ' + cc + '.'));
           return;
         }
+        case 'delete-quote': {
+          const rates = Object.assign({}, S.settings().buildingRates || {});
+          const r = rates[d.key];
+          if (!r || !confirm('Remove the saved quote for ' + r.building + '?')) return;
+          delete rates[d.key];
+          S.saveSettings({ buildingRates: rates });
+          return render();
+        }
         case 'save-fill-in': {
           const f = $('#draft-form');
           const el = f.querySelector(`[data-fill-in="${CSS.escape(d.key)}"]`);
-          const v = el.value.trim();
+          const solo = d.field === 'partner' && $('#draft-fillins [data-fill-in="Solo"]');
+          const v = solo && solo.checked ? 'None' : el.value.trim();
           S.upsert('companies', { id: f.dataset.company, [d.field]: d.field === 'sfOccupied' ? L.parseNumber(v) : v });
           toast('Saved to the company. It will fill in next time.');
           return;
@@ -4389,7 +4430,7 @@
     const d = e.target.dataset || {};
     if (d.inlineCol) saveInline(d.inlineCol, d.inlineId, d.inlineField, e.target.value);
     // A quoted rate is remembered for its building; picking a building with a saved rate fills it in.
-    if (d.fillIn === 'Rate' || d.fillIn === 'CompBuilding') onRateFillIn(d.fillIn);
+    if (['Rate', 'RateBasis', 'OpEx', 'CompBuilding'].includes(d.fillIn)) onRateFillIn(d.fillIn);
     // The rent growth behind {AnnualIncrease} is remembered for every draft.
     if (d.fillIn === 'RentGrowth' && L.parseNumber(e.target.value) !== null) S.saveSettings({ rentGrowth: L.parseNumber(e.target.value) / 100 });
   });

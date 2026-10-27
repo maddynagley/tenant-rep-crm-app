@@ -1275,7 +1275,7 @@ test('templateFillIns lists what a template needs, in order', () => {
   const f = L.templateFillIns('Hi {FirstName} {LastName}, {SF} runs {AnnualIncrease} more. {Partner}, [specific day]', ctx);
   assert.deepEqual(
     f.map((x) => [x.key, x.value]),
-    [['LastName', ''], ['SF', '17000'], ['Rate', ''], ['RentGrowth', '50'], ['Partner', ''], ['[specific day]', '']]
+    [['LastName', ''], ['SF', '17000'], ['Rate', ''], ['RateBasis', 'NNN'], ['OpEx', ''], ['RentGrowth', '50'], ['Partner', ''], ['[specific day]', '']]
   );
   assert.equal(f.find((x) => x.key === 'SF').saveTo, 'sfOccupied');
   assert.equal(f.find((x) => x.key === '[specific day]').label, 'specific day');
@@ -1293,13 +1293,49 @@ test('quoted rates are remembered by building and flagged after 6 months', () =>
   const fresh = L.rememberedRate(rates, '100 Uptown Park Pkwy', '2027-02-01');
   assert.equal(fresh.rate, 12.75);
   assert.equal(fresh.stale, false);
-  assert.equal(fresh.note, 'Saved for Uptown Park on Oct 27, 2026.');
+  assert.equal(fresh.note, 'Saved for Uptown Park on Oct 27, 2026: $12.75 NNN.');
   const old = L.rememberedRate(rates, 'Uptown Park', '2027-04-27');
   assert.equal(old.stale, true);
-  assert.equal(old.note, 'Quoted Oct 27, 2026, 6 months ago. Re-confirm the rate at Uptown Park before sending.');
+  assert.equal(old.note, 'Quoted Oct 27, 2026 ($12.75 NNN), 6 months ago. Re-confirm the rate at Uptown Park before sending.');
   assert.equal(L.rememberedRate(rates, 'Acme Tower', '2026-11-01'), null);
   assert.equal(L.rememberRate(rates, 'Acme Tower', '', '2026-11-01')['acme tower'], undefined);
   // The draft starts with the rate saved for the tenant's building.
   const f = L.templateFillIns('{Rate}', { company: { building: 'Uptown Park' }, buildingRates: rates, today: '2027-05-01' });
   assert.deepEqual([f[0].value, f[0].stale], ['12.75', true]);
+});
+
+test('working a deal alone switches partner wording to first person', () => {
+  const t = '{Partner} and I represent tenants. {Partner} and I are happy to help. Could we grab 15 minutes? If not, let us know.';
+  const ctx = { company: { name: 'Acme' } };
+  assert.equal(L.fillTemplate(t, Object.assign({ partner: 'Jo Smith' }, ctx)), 'Jo Smith and I represent tenants. Jo Smith and I are happy to help. Could we grab 15 minutes? If not, let us know.');
+  const solo = 'I represent tenants. I\'m happy to help. Could I grab 15 minutes? If not, let me know.';
+  assert.equal(L.fillTemplate(t, Object.assign({ inputs: { Solo: 'yes', Partner: 'Jo Smith' } }, ctx)), solo);
+  assert.equal(L.fillTemplate(t, { company: { partner: 'None' } }), solo);
+  // Unticking the box in the draft wins over a saved "None".
+  assert.equal(L.fillTemplate('{Partner} and I', { company: { partner: 'None' }, inputs: { Solo: 'no', Partner: 'Jo Smith' } }), 'Jo Smith and I');
+  assert.equal(L.soloText('My partner {Partner} and I are tenant rep brokers with {MyFirm}.'), "I'm a tenant rep broker with {MyFirm}.");
+  assert.equal(L.soloText('My partner Jo Smith and I spend time in Uptown and wanted to introduce ourselves. We\'re tenant rep brokers.'), "I spend time in Uptown and wanted to introduce myself. I'm a tenant rep broker.");
+  assert.equal(L.templateFillIns('{Partner}', { company: { partner: 'None' } })[0].checked, true);
+});
+
+test('quoted rates can be NNN, NNN plus OpEx, or full service', () => {
+  const ctx = (inputs) => ({ company: { sfOccupied: 17000 }, inputs: Object.assign({ Rate: '12.75' }, inputs) });
+  const t = 'Quoting {Rate} NNN, {SF} runs {MonthlyRent} a month, {AnnualIncrease} more a year.';
+  assert.equal(L.fillTemplate(t, ctx({})), 'Quoting $12.75 NNN, 17,000 SF runs $18,000 a month, $80,000 more a year.');
+  assert.equal(L.fillTemplate(t, ctx({ RateBasis: 'NNN + OpEx', OpEx: '3.50' })), 'Quoting $12.75 NNN plus $3.50 OpEx, 17,000 SF runs $23,000 a month, $80,000 more a year.');
+  assert.equal(L.fillTemplate('{Rate}', ctx({ RateBasis: 'NNN + OpEx' })), '$12.75 NNN plus [OpEx] OpEx');
+  assert.equal(L.fillTemplate('{Rate}', ctx({ Rate: '28', RateBasis: 'Full service' })), '$28.00 full service');
+  const rates = L.rememberRate({}, 'Uptown Park', '12.75', '2026-10-27', 'NNN + OpEx', '3.5');
+  assert.deepEqual(rates['uptown park'], { building: 'Uptown Park', rate: 12.75, date: '2026-10-27', basis: 'NNN + OpEx', opex: 3.5 });
+  assert.equal(L.rememberedRate(rates, 'Uptown Park', '2026-11-01').note, 'Saved for Uptown Park on Oct 27, 2026: $12.75 NNN plus $3.50 OpEx.');
+  const f = L.templateFillIns('{Rate}', { company: { building: 'Uptown Park' }, buildingRates: rates, today: '2026-11-01' });
+  assert.deepEqual(f.map((x) => [x.key, x.value]), [['Rate', '12.75'], ['RateBasis', 'NNN + OpEx'], ['OpEx', '3.5']]);
+});
+
+test('quotedRateList lists saved quotes with their age', () => {
+  let rates = L.rememberRate({}, 'Uptown Park', '12.75', '2026-03-01');
+  rates = L.rememberRate(rates, 'Acme Tower', '28', '2026-10-01', 'Full service');
+  const all = L.quotedRateList(rates, '', '2026-10-27');
+  assert.deepEqual(all.map((r) => [r.building, r.text, r.stale]), [['Acme Tower', '$28.00 full service', false], ['Uptown Park', '$12.75 NNN', true]]);
+  assert.deepEqual(L.quotedRateList(rates, 'uptown', '2026-10-27').map((r) => r.key), ['uptown park']);
 });

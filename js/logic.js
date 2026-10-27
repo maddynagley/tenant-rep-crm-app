@@ -1416,7 +1416,36 @@
 
   // Fills {Placeholders} from the company, contact and your settings. A missing value becomes "[Name]" so it
   // stands out in the draft.
+  // Working a deal alone: the partner wording in a template switches to first person. A partner of "None" (or
+  // "Solo") on the deal or company, or the "Working this alone" box in the draft, means solo.
+  const SOLO_PARTNER = /^\s*(none|solo|n\/a|-+)\s*$/i;
+  const SOLO_REWRITES = [
+    [/\bMy partner (?:\{Partner\}|[A-Z][\w'-]+ [A-Z][\w'-]+) and I are tenant rep brokers\b/g, "I'm a tenant rep broker"],
+    [/\bMy partner and I are tenant rep brokers\b/g, "I'm a tenant rep broker"],
+    [/\b[Mm]y partner (?:\{Partner\} |[A-Z][\w'-]+ [A-Z][\w'-]+ )?and I\b/g, 'I'],
+    [/\{Partner\} and I are\b/g, "I'm"],
+    [/\{Partner\} and I\b/g, 'I'],
+    [/\bWe're tenant rep brokers\b/g, "I'm a tenant rep broker"],
+    [/\b(W|w)e (represent|advocate|work with)\b/g, (m, w, verb) => 'I ' + verb],
+    [/\blet us know\b/g, 'let me know'],
+    [/\b(C|c)ould we\b/g, (m, c) => c + 'ould I'],
+    [/\bwe'd be glad\b/g, "I'd be glad"],
+    [/\bvalue we can add\b/g, 'value I can add'],
+    [/\bintroduce ourselves\b/g, 'introduce myself'],
+    [/\bour goal\b/g, 'my goal'],
+  ];
+  function isSolo(ctx) {
+    const c = ctx.company || {};
+    const inputs = ctx.inputs || {};
+    if (inputs.Solo !== undefined && inputs.Solo !== '') return Boolean(inputs.Solo) && inputs.Solo !== 'no';
+    return SOLO_PARTNER.test(String(inputs.Partner || ctx.partner || c.partner || ''));
+  }
+  function soloText(text) {
+    return SOLO_REWRITES.reduce((t, [re, to]) => t.replace(re, to), String(text || ''));
+  }
+
   function fillTemplate(text, ctx) {
+    if (isSolo(ctx)) text = soloText(text);
     const c = ctx.company || {};
     const p = ctx.contact || {};
     const me = ctx.me || {};
@@ -1451,11 +1480,15 @@
     const sf = parseNumber(inputs.SF) || parseNumber(c.sfOccupied);
     if (parseNumber(inputs.SF)) values.SF = fmtNumber(parseNumber(inputs.SF)) + ' SF';
     const rate = parseNumber(inputs.Rate);
+    const basis = QUOTE_BASES.includes(inputs.RateBasis) ? inputs.RateBasis : 'NNN';
+    const opex = basis === 'NNN + OpEx' ? parseNumber(inputs.OpEx) : null;
     const growth = parseNumber(inputs.RentGrowth);
-    const rent = rentMath(sf, rate, growth === null ? ctx.rentGrowth : growth / 100);
+    const rent = rentMath(sf, rate, growth === null ? ctx.rentGrowth : growth / 100, opex);
+    // "{Rate} NNN" in older templates: the rate now says its own basis.
+    if (rate) text = String(text || '').replace(/\{Rate\}\s+NNN\b/g, '{Rate}');
     const day = parseISODate(inputs.MeetingDay);
     Object.assign(values, {
-      Rate: rate ? '$' + rate.toFixed(2) : '',
+      Rate: rate ? rateText(rate, basis, opex) : '',
       CompBuilding: String(inputs.CompBuilding || '').trim() || values.Building,
       MeetingDay: day ? day.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : '',
       MonthlyRent: rent.monthly,
@@ -1477,19 +1510,30 @@
   // Rent at a quoted rate, and how much more that is than 5 years ago given the market's rent growth
   // (0.6 = rents up 60%, so the old rate was rate / 1.6). Dollar amounts come back rounded and formatted.
   const RENT_GROWTH = 0.6;
-  function rentMath(sf, rate, growth) {
+  // With opex (an NNN rate plus operating expenses), monthly and annual rent are all-in; the increase is on the
+  // rent alone, since the rent growth figure is for asking rents.
+  function rentMath(sf, rate, growth, opex) {
     sf = parseNumber(sf);
     rate = parseNumber(rate);
     if (!sf || !rate) return { monthly: '', annual: '', increase: '' };
     const g = parseNumber(growth) === null ? RENT_GROWTH : parseNumber(growth);
-    const annual = sf * rate;
+    const annual = sf * (rate + (parseNumber(opex) || 0));
     const money = (n, step) => '$' + fmtNumber(Math.round(n / step) * step);
-    const increase = annual * (1 - 1 / (1 + g));
+    const increase = sf * rate * (1 - 1 / (1 + g));
     return {
       monthly: money(annual / 12, annual / 12 < 10000 ? 100 : 1000),
       annual: money(annual, 1000),
       increase: money(increase, increase < 50000 ? 1000 : 5000),
     };
+  }
+
+  // How a quoted rate reads in an email: "$12.75 NNN", "$12.75 NNN plus $3.50 OpEx" or "$28.00 full service".
+  const QUOTE_BASES = ['NNN', 'NNN + OpEx', 'Full service'];
+  function rateText(rate, basis, opex) {
+    const $ = (n) => '$' + Number(n).toFixed(2);
+    if (basis === 'Full service') return $(rate) + ' full service';
+    if (basis === 'NNN + OpEx') return $(rate) + ' NNN plus ' + (parseNumber(opex) ? $(parseNumber(opex)) : '[OpEx]') + ' OpEx';
+    return $(rate) + ' NNN';
   }
 
   // Quoted rates remembered by building, so the next tenant there starts with the last rate typed. Names match
@@ -1498,11 +1542,14 @@
   function buildingKey(name) {
     return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
-  function rememberRate(rates, building, rate, today) {
+  function rememberRate(rates, building, rate, today, basis, opex) {
     const out = Object.assign({}, rates);
     const key = buildingKey(building);
     const r = parseNumber(rate);
-    if (key && r) out[key] = { building: String(building).trim(), rate: r, date: today || todayISO() };
+    if (!key || !r) return out;
+    out[key] = { building: String(building).trim(), rate: r, date: today || todayISO() };
+    if (basis && basis !== 'NNN') out[key].basis = basis;
+    if (basis === 'NNN + OpEx' && parseNumber(opex)) out[key].opex = parseNumber(opex);
     return out;
   }
   function rememberedRate(rates, building, today) {
@@ -1518,9 +1565,18 @@
       ageMonths: age,
       stale,
       note: stale
-        ? 'Quoted ' + fmtDate(hit.date) + ', ' + age + ' months ago. Re-confirm the rate at ' + hit.building + ' before sending.'
-        : 'Saved for ' + hit.building + ' on ' + fmtDate(hit.date) + '.',
+        ? 'Quoted ' + fmtDate(hit.date) + ' (' + rateText(hit.rate, hit.basis || 'NNN', hit.opex) + '), ' + age + ' months ago. Re-confirm the rate at ' + hit.building + ' before sending.'
+        : 'Saved for ' + hit.building + ' on ' + fmtDate(hit.date) + ': ' + rateText(hit.rate, hit.basis || 'NNN', hit.opex) + '.',
     });
+  }
+
+  // Every saved building quote for the Quoted rates list, matching a search, by building name.
+  function quotedRateList(rates, q, today) {
+    q = String(q || '').trim().toLowerCase();
+    return Object.keys(rates || {})
+      .map((key) => Object.assign({ key, text: rateText(rates[key].rate, rates[key].basis || 'NNN', rates[key].opex) }, rememberedRate(rates, rates[key].building, today), rates[key]))
+      .filter((r) => !q || (r.building + ' ' + r.text).toLowerCase().includes(q))
+      .sort((a, b) => a.building.localeCompare(b.building));
   }
 
   // The outermost [bracketed notes] in a template, e.g. "[specific day]" or "[fact, e.g. "[tenant] renewed"]".
@@ -1545,10 +1601,12 @@
   // [bracketed note]. In order of first appearance; `value` is the starting value.
   const FILL_IN_FIELDS = {
     Rate: { label: 'Quoted rate ($/SF/yr)', type: 'number' },
+    RateBasis: { label: 'Rate type', type: 'select', options: QUOTE_BASES },
+    OpEx: { label: 'OpEx ($/SF/yr)', type: 'number' },
     CompBuilding: { label: 'Comp building' },
     MeetingDay: { label: 'Meeting day', type: 'date' },
     SF: { label: 'SF', type: 'number', saveTo: 'sfOccupied' },
-    Partner: { label: 'Partner', saveTo: 'partner' },
+    Partner: { label: 'Partner', saveTo: 'partner', solo: true },
     RentGrowth: { label: 'Rent growth over 5 years (%)', type: 'number' },
   };
   const RENT_KEYS = ['MonthlyRent', 'AnnualRent', 'AnnualIncrease'];
@@ -1558,7 +1616,10 @@
     const crm = fillTemplate(text.replace(/\[|\]/g, ' '), Object.assign({}, ctx, { inputs: {} }));
     const found = [];
     const add = (key, at, extra) => {
-      if (!found.some((f) => f.key === key)) found.push(Object.assign({ key, at }, extra));
+      if (found.some((f) => f.key === key)) return;
+      found.push(Object.assign({ key, at }, extra));
+      // A rate always comes with its type (NNN, NNN + OpEx, full service) and the OpEx box.
+      if (key === 'Rate') ['RateBasis', 'OpEx'].forEach((k) => add(k, at));
     };
     const slots = bracketSlots(text);
     const re = /\{(\w+)\}/g;
@@ -1581,13 +1642,15 @@
       RentGrowth: Math.round((parseNumber(ctx.rentGrowth) === null ? RENT_GROWTH : parseNumber(ctx.rentGrowth)) * 100),
     };
     const saved = rememberedRate(ctx.buildingRates, start.CompBuilding || c.building || c.address, ctx.today);
-    if (saved) start.Rate = saved.rate;
+    start.RateBasis = 'NNN';
+    if (saved) Object.assign(start, { Rate: saved.rate, RateBasis: saved.basis || 'NNN', OpEx: saved.opex || '' });
     return found
       .sort((a, b) => a.at - b.at)
       .map((f) =>
         Object.assign({ type: 'text' }, FILL_IN_FIELDS[f.key] || {}, f, {
           value: start[f.key] === undefined ? '' : String(start[f.key]),
           note: f.key === 'Rate' && saved ? saved.note : '',
+          checked: f.key === 'Partner' ? isSolo(ctx) : undefined,
           stale: f.key === 'Rate' && saved ? saved.stale : false,
         })
       );
@@ -3436,6 +3499,11 @@
     TEMPLATE_STEPS,
     fillTemplate,
     rentMath,
+    rateText,
+    quotedRateList,
+    QUOTE_BASES,
+    soloText,
+    isSolo,
     rememberRate,
     rememberedRate,
     bracketSlots,
