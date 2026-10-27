@@ -907,3 +907,24 @@ test('weeklyRecap: this week on the deal, or a quiet-week note, plus next steps'
   assert.equal(L.recapSent(deal, [{ type: 'Email', date: '2026-10-30', dealId: 'd1', template: 'Weekly recap' }], '2026-10-30'), true);
   assert.equal(L.recapSent(deal, [{ type: 'Email', date: '2026-10-23', dealId: 'd1', template: 'Weekly recap' }], '2026-10-30'), false);
 });
+
+test('recaps carry over to the next Friday; partner brokers are cc\'d from contacts', () => {
+  assert.equal(L.recapFriday('2026-10-30'), '2026-10-30');
+  assert.equal(L.recapFriday('2026-11-02'), '2026-10-30');
+  assert.equal(L.recapFriday('2026-11-05'), '2026-10-30');
+  const deal = { id: 'd1', companyId: 'co1', name: 'Acme HQ', stage: 'RFP', createdAt: '2026-10-01T00:00:00Z' };
+  assert.equal(L.recapDue(deal, [], '2026-10-29'), true, 'Thursday: last Friday\'s recap still owed');
+  const sentMonday = [{ type: 'Email', date: '2026-11-02', dealId: 'd1', template: 'Weekly recap' }];
+  assert.equal(L.recapDue(deal, sentMonday, '2026-11-03'), false, 'a late recap covers the missed Friday');
+  assert.equal(L.recapDue(deal, sentMonday, '2026-11-06'), true, 'and the next Friday is due again');
+  assert.equal(L.recapDue(deal, [{ type: 'Email', date: '2026-11-02', dealId: 'd1', template: 'Weekly recap' }], '2026-11-02'), false);
+  assert.equal(L.recapDue(Object.assign({}, deal, { createdAt: '2026-11-03T00:00:00Z' }), [], '2026-11-04'), false, 'new deal waits for its first Friday');
+  assert.equal(L.recapDue(Object.assign({}, deal, { stage: 'Closed Won' }), [], '2026-10-30'), false);
+  const monday = L.weeklyRecap({ company: { name: 'Acme' }, deal, contact: {}, me: { name: 'Jordan' }, activities: [{ type: 'Call', date: '2026-10-29', dealId: 'd1', subject: 'Check-in' }], today: '2026-11-02' });
+  assert.match(monday.subject, /week of Oct 26/);
+  assert.deepEqual(monday.done, ['Call: Check-in.']);
+  assert.match(monday.body, /Best,\nJordan$/);
+  const contacts = [{ firstName: 'Mitchell', lastName: 'Karrh', email: 'mk@firm.test' }, { firstName: 'RJ', lastName: 'Zurak' }];
+  assert.deepEqual(L.partnerEmails({ partnerBrokers: 'Mitchell Karrh & RJ Zurak' }, contacts), { found: ['mk@firm.test'], missing: ['RJ Zurak'] });
+  assert.equal(L.mailtoLink('a@x.test', 'S', 'B', 'mk@firm.test,b@y.test'), 'mailto:a@x.test?cc=mk@firm.test,b@y.test&subject=S&body=B');
+});

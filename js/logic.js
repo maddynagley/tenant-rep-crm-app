@@ -1406,11 +1406,25 @@
     d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
     return toISODate(d);
   }
-  // Already recapped this week: an email tagged as the weekly recap (or titled like one) on this deal.
+  // The Friday a recap is due for: today if it's Friday, else the last one (a missed recap carries over to the next Friday).
+  function recapFriday(today) {
+    const d = parseISODate(today);
+    d.setDate(d.getDate() - ((d.getDay() + 2) % 7));
+    return toISODate(d);
+  }
+  // A deal needs a recap when it was open by that Friday and none has gone out since that week's Monday.
+  function recapDue(deal, activities, today) {
+    const friday = recapFriday(today);
+    return OPEN_STAGES.includes(normalizeDealStage(deal.stage)) && (!deal.createdAt || String(deal.createdAt).slice(0, 10) <= friday) && !recapSent(deal, activities, today);
+  }
+  // Already recapped for that Friday: an email tagged as the weekly recap (or titled like one) on this deal, sent
+  // from the day before that Friday up to the next one.
   function recapSent(deal, activities, today) {
-    const from = mondayOf(today);
+    const friday = recapFriday(today);
+    const from = addDays(friday, -1);
+    const to = addDays(friday, 6);
     return activities.some(
-      (a) => a.type === 'Email' && !a.inbound && a.date >= from && a.date <= today && (a.dealId === deal.id || (!a.dealId && a.companyId === deal.companyId)) && (a.template === RECAP_TEMPLATE || /weekly (update|recap)/i.test(a.subject || ''))
+      (a) => a.type === 'Email' && !a.inbound && a.date >= from && a.date <= to && (a.dealId === deal.id || (!a.dealId && a.companyId === deal.companyId)) && (a.template === RECAP_TEMPLATE || /weekly (update|recap)/i.test(a.subject || ''))
     );
   }
 
@@ -1419,7 +1433,8 @@
   function weeklyRecap(ctx) {
     const d = ctx.deal;
     const today = ctx.today || todayISO();
-    const from = mondayOf(today);
+    const from = mondayOf(recapFriday(today));
+    const weekend = parseISODate(today).getDay() >= 5 || parseISODate(today).getDay() === 0;
     const inWeek = (iso) => Boolean(iso) && String(iso).slice(0, 10) >= from && String(iso).slice(0, 10) <= today;
     const props = ctx.properties || [];
     const acts = (ctx.activities || []).filter((a) => !a.dealId || a.dealId === d.id);
@@ -1461,12 +1476,31 @@
       'Hi {FirstName},\n\nHere\'s a quick update on ' + (d.name || 'your search') + ' for the week.\n\n' +
       (done.length ? 'This week:\n' + bullets(done) : 'It was a quieter week on this one. I\'m keeping an eye on the market and will flag anything new that fits.') +
       '\n\nNext steps:\n' + bullets(next) +
-      '\n\nLet me know if anything has changed on your end or if you have any questions.\n\nHave a great weekend,\n{MyFirstName}';
+      '\n\nLet me know if anything has changed on your end or if you have any questions.\n\n' + (weekend ? 'Have a great weekend' : 'Best') + ',\n{MyFirstName}';
     return { subject: (d.name || ctx.company.name) + ' – weekly update (week of ' + week + ')', body: fillTemplate(body, ctx), done, next };
   }
 
-  function mailtoLink(to, subject, body) {
-    return 'mailto:' + encodeURIComponent(to || '').replace(/%40/g, '@') + '?subject=' + encodeURIComponent(subject || '') + '&body=' + encodeURIComponent(body || '');
+  function mailtoLink(to, subject, body, cc) {
+    const addr = (v) => encodeURIComponent(v || '').replace(/%40/g, '@').replace(/%2C/g, ',');
+    return 'mailto:' + addr(to) + '?' + (cc ? 'cc=' + addr(cc) + '&' : '') + 'subject=' + encodeURIComponent(subject || '') + '&body=' + encodeURIComponent(body || '');
+  }
+
+  // Emails for a deal's partner brokers (the names in partnerBrokers), from your contacts. Names with no saved
+  // email come back in `missing`, so nothing is guessed.
+  function partnerEmails(deal, contacts) {
+    const names = String((deal && deal.partnerBrokers) || '')
+      .split(/\s*(?:,|;|&|\/|\band\b)\s*/i)
+      .map((n) => n.trim())
+      .filter(Boolean);
+    const key = (n) => String(n || '').toLowerCase().replace(/[^a-z]/g, '');
+    const found = [];
+    const missing = [];
+    names.forEach((n) => {
+      const p = (contacts || []).find((c) => c.email && key([c.firstName, c.lastName].join(' ')) === key(n));
+      if (p) found.push(p.email);
+      else missing.push(n);
+    });
+    return { found, missing };
   }
 
   // ---------- coach ----------
@@ -2452,6 +2486,9 @@
     RECAP_TEMPLATE,
     recapSent,
     weeklyRecap,
+    recapFriday,
+    recapDue,
+    partnerEmails,
     emailSnippet,
     dealBrief,
     briefText,
