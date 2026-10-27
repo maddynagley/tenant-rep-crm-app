@@ -1003,16 +1003,17 @@
       </li>`
     );
 
-    // Fridays: a weekly status email to the client on every open deal. A missed one stays until it's sent or skipped.
-    const recapFri = L.recapFriday(today);
-    const recapLate = recapFri !== today;
-    const recapItems = S.all('deals')
-            .filter((d) => L.recapDue(d, S.all('activities'), today) && !((s.recapSkipped || {})[d.id] >= recapFri))
+    // Fridays only: a weekly status email to the client on every open deal, until it's sent or skipped.
+    const recapItems =
+      L.parseISODate(today).getDay() !== 5
+        ? []
+        : S.all('deals')
+            .filter((d) => L.recapDue(d, S.all('activities'), today) && (s.recapSkipped || {})[d.id] !== today)
             .sort((a, b) => L.dealProbability(b) - L.dealProbability(a))
             .map((d) => {
               const p = reachContact(d.companyId, '');
               const attrs = `data-deal="${esc(d.id)}" data-company="${esc(d.companyId)}" data-contact="${esc(p ? p.id : '')}"`;
-              return `<li><div class="fu-body"><div><a href="#/deal/${esc(d.id)}"><strong>${esc(d.name)}</strong></a> ${badge(d.stage, 'blue')} ${recapLate ? badge('Due ' + L.fmtDate(recapFri), 'red') : ''}</div>
+              return `<li><div class="fu-body"><div><a href="#/deal/${esc(d.id)}"><strong>${esc(d.name)}</strong></a> ${badge(d.stage, 'blue')}</div>
                 <div class="sub">${esc(companyName(d.companyId))}${p ? ' · ' + esc(contactName(p)) : ''}${d.partnerBrokers ? ' · cc ' + esc(d.partnerBrokers) : ''}</div></div>
                 <div class="todo-actions">${p && p.email ? `<button class="btn small" data-action="draft-email" data-recap="1" ${attrs}>Draft recap to ${esc(p.firstName)}</button>` : `<a class="btn small" href="#/company/${esc(d.companyId)}">Find a contact</a>`}
                 <button class="btn small" data-action="recap-sent" ${attrs} title="Log the recap as sent">✓ Sent</button>
@@ -1056,7 +1057,7 @@
         <a class="kpi" href="#/leads"><span class="kpi-label">Leads waiting on a follow-up</span><span class="kpi-value">${plan.remaining.followUps}</span><span class="kpi-sub">${plan.remaining.fresh} new leads not yet touched</span></a>
         <a class="kpi" href="#/pipeline"><span class="kpi-label">Deals needing attention</span><span class="kpi-value">${plan.deals.length}</span><span class="kpi-sub">stale, past due or expiring rep agreement</span></a>
       </div>
-      ${recapItems.length ? section(recapLate ? 'Weekly recaps still to send from Friday' : 'Friday recaps: send each client a weekly update', recapItems, '', '<p class="hint">A short status email on every active deal: what got done this week (even if it was quiet) and what\'s next. It drafts from the deal\'s tours, proposals, meetings and open tasks.</p>') : ''}
+      ${recapItems.length ? section('Friday recaps: send each client a weekly update', recapItems, '', '<p class="hint">A short status email on every active deal: what got done this week (even if it was quiet) and what\'s next. It drafts from the deal\'s tours, proposals, meetings and open tasks.</p>') : ''}
       ${tasks.length ? `<section class="card"><h2>Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
       ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
       ${section(
@@ -1411,7 +1412,7 @@
             .map(({ c, last }) => {
               const p = (contactsBy[c.id] || []).slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker') || Boolean(b.email) - Boolean(a.email))[0];
               return `<tr data-href="#/company/${esc(c.id)}">
-              <td><strong>${esc(c.name)}</strong> ${emailIcon(c.id, p ? p.id : '')} ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
+              <td><strong>${esc(c.name)}</strong> <span class="icon-row">${summarizeIcon('companies', c.id)}${emailIcon(c.id, p ? p.id : '')}</span> ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
               <td><select class="inline" data-lead-stage="${esc(c.id)}">${options(L.LEAD_STAGES, L.leadStage(c))}</select></td>
               <td><select class="inline" data-lead-temp="${esc(c.id)}">${options(L.LEAD_TEMPS, c.leadTemp, '—')}</select></td>
               <td class="right">${c.sfOccupied ? esc(L.fmtNumber(c.sfOccupied)) : '<span class="muted">—</span>'}</td>
