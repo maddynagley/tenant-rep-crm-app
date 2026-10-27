@@ -473,6 +473,22 @@
     return `<button class="mail-icon" data-action="summarize" data-col="${col}" data-id="${esc(id)}" title="Summarize where things stand" aria-label="Summarize"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/><path d="M18 14l1 2.2 2.2 1-2.2 1L18 20.4l-1-2.2-2.2-1 2.2-1z"/></svg></button>`;
   }
 
+  // The company's submarket this quarter, from the Research stats on file, with Research's own talking points.
+  function marketSnapshotCard(c) {
+    const st = S.settings();
+    const m = L.marketStatFor(st.marketStats || [], c, st.marketReports);
+    if (!m) return '';
+    const v = L.marketValues(m, c);
+    const cur = m.current;
+    const item = (label, value, sub) => (value ? `<div class="snap"><span class="kpi-label">${esc(label)}</span><strong>${esc(value)}</strong>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>` : '');
+    return `<section class="card"><h2>Market snapshot · ${esc(v.StatsArea)} ${esc((cur.assetClass || '').toLowerCase())} · ${esc(cur.quarter)} <a class="more" href="#/marketing" data-action="set-filter" data-scope="marketing" data-key="tab" data-value="stats">All market stats</a></h2>
+      ${cur.submarket === 'Market total' && c.submarket ? `<p class="hint">"${esc(c.submarket)}" isn't a submarket in the report, so these are market-wide numbers.</p>` : ''}
+      <div class="snaps">${item('Vacancy', v.Vacancy, v.VacancyChange || (m.market ? 'Market ' + v.MarketVacancy : ''))}${item(cur.rentType === 'direct' ? 'Avg. direct asking rent' : 'Avg. asking rent', v.AskingRent, v.RentChange)}${item('Net absorption', v.NetAbsorption, cur.ytdAbsorption !== undefined ? v.YTDAbsorption + ' YTD' : '')}${item('Under construction', v.UnderConstruction)}</div>
+      ${v.MarketStat ? `<p class="market-line">${esc(v.MarketStat)} <button class="link" data-action="copy-text" data-text="${esc(v.MarketStat)}">Copy</button></p>` : ''}
+      ${m.notes.length ? `<details class="research-details"><summary>What Research says about ${esc(v.StatsArea)} (${m.notes.length})</summary><ul class="plain added-notes research-points">${m.notes.map((b) => `<li><span>${esc(b)}</span> <button class="link" data-action="copy-text" data-text="${esc(b)}">Copy</button></li>`).join('')}</ul></details>` : ''}
+    </section>`;
+  }
+
   function openBrief(col, id) {
     const deal = col === 'deals' ? S.get('deals', id) : null;
     const company = S.get('companies', deal ? deal.companyId : id);
@@ -497,6 +513,13 @@
     dlg.showModal();
   }
 
+  function marketLineFor(col, rec) {
+    const c = col === 'deals' ? S.get('companies', rec.companyId) : rec;
+    if (!c) return '';
+    const m = L.marketStatFor(S.settings().marketStats || [], c, S.settings().marketReports);
+    return m ? L.marketValues(m, c).MarketStat : '';
+  }
+
   function openQuickNote(col, id) {
     const rec = S.get(col, id);
     if (!rec) return;
@@ -506,7 +529,7 @@
       <header><h2>Add a note to ${esc(rec.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
       <div class="form-grid">
         <label class="wide">Note<textarea name="note" rows="5" required placeholder="What happened, what's next…"></textarea></label>
-        <p class="hint wide">Saved at the top of the notes with today's date.</p>
+        <p class="hint wide">Saved at the top of the notes with today's date.${marketLineFor(col, rec) ? ' <button type="button" class="link" data-action="insert-market-line">Insert this quarter\'s market stats</button>' : ''}</p>
         ${rec.notes ? `<details class="wide"><summary>Earlier notes</summary><p class="pre">${esc(rec.notes)}</p></details>` : ''}
       </div>
       <footer><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Add note</button></footer>
@@ -1191,34 +1214,121 @@
 
   // Quarterly Research stats by submarket: they feed the {MarketStat}-style template placeholders.
   function marketStatsTab() {
-    const stats = S.settings().marketStats || [];
-    const fmtPct = (n) => (n === undefined || n === null ? '<span class="muted">—</span>' : Number(n).toFixed(1) + '%');
-    const fmtSF = (n) => (n === undefined || n === null ? '<span class="muted">—</span>' : esc(L.fmtNumber(Math.round(n))));
+    const f = state.marketing;
+    const st = S.settings();
+    const stats = st.marketStats || [];
+    const reports = st.marketReports || [];
+    const asset = f.statsAsset || 'Office';
+    const fmtSF = (n) => (n === undefined || n === null ? '—' : L.fmtNumber(Math.round(n)));
+    const fmtMSF = (n) => (n === undefined || n === null ? '—' : Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(1) + ' MSF' : L.fmtNumber(Math.round(n)) + ' SF');
     const quarters = Array.from(new Set(stats.map((x) => x.quarter + '|' + x.assetClass)))
       .map((k) => ({ quarter: k.split('|')[0], assetClass: k.split('|')[1], n: stats.filter((x) => x.quarter + '|' + x.assetClass === k).length }))
       .sort((a, b) => L.compareQuarters(b.quarter, a.quarter) || a.assetClass.localeCompare(b.assetClass));
-    const tables = ['Office', 'Industrial']
-      .map((asset) => {
-        const latest = quarters.find((q) => q.assetClass === asset);
-        if (!latest) return '';
-        const rows = stats.filter((x) => x.assetClass === asset && x.quarter === latest.quarter).sort((a, b) => (a.submarket === 'Market total') - (b.submarket === 'Market total') || a.submarket.localeCompare(b.submarket));
-        return `<section class="card"><h2>${esc(asset)} · ${esc(latest.quarter)}</h2><div class="table-wrap"><table class="tbl compact"><thead><tr><th>Submarket</th><th class="right">Vacancy</th><th>vs. last qtr</th><th class="right">Asking rent</th><th class="right">Net absorption</th><th class="right">Under construction</th><th class="right">Inventory</th></tr></thead><tbody>${rows
+    const mine = quarters.filter((q) => q.assetClass === asset).map((q) => q.quarter);
+    const latest = mine[0];
+    const report = reports.find((r) => r.quarter === latest && r.assetClass === asset);
+    const rows = stats.filter((x) => x.assetClass === asset && x.quarter === latest);
+    const total = rows.find((x) => x.submarket === 'Market total');
+    const prevTotal = mine[1] ? stats.find((x) => x.assetClass === asset && x.quarter === mine[1] && x.submarket === 'Market total') : null;
+    const change = (cur, prev, kind) => {
+      if (cur === undefined || cur === null || !prev || prev === undefined || prev === null) return '';
+      if (kind === 'bps') {
+        const bps = Math.round((cur - prev) * 100);
+        return (bps === 0 ? 'flat' : (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps') + ' vs ' + mine[1];
+      }
+      const pct = ((cur - prev) / Math.abs(prev)) * 100;
+      return (Math.abs(pct) < 0.05 ? 'flat' : (pct < 0 ? 'down ' : 'up ') + Math.abs(pct).toFixed(1) + '%') + ' vs ' + mine[1];
+    };
+    const tile = (label, value, sub) => `<div class="kpi"><span class="kpi-label">${esc(label)}</span><span class="kpi-value">${esc(value)}</span><span class="kpi-sub">${esc(sub || '')}</span></div>`;
+    const copyList = (list) =>
+      `<ul class="plain added-notes research-points">${list.map((b) => `<li><span>${esc(b)}</span> <button class="link" data-action="copy-text" data-text="${esc(b)}">Copy</button></li>`).join('')}</ul>`;
+
+    // Horizontal bars by submarket (one series, so no legend: the title names it), with the market as a reference line.
+    const metric = f.statsMetric === 'askingRent' ? 'askingRent' : 'vacancy';
+    const fmtMetric = (n) => (metric === 'vacancy' ? Number(n).toFixed(1) + '%' : '$' + Number(n).toFixed(2));
+    const bars = rows.filter((x) => x.submarket !== 'Market total' && !/total/i.test(x.submarket) && x[metric] !== undefined).sort((a, b) => b[metric] - a[metric]);
+    const max = Math.max(...bars.map((x) => x[metric]), total && total[metric] ? total[metric] : 0) * 1.08 || 1;
+    const tip = (x) => [x.submarket, 'Vacancy ' + (x.vacancy !== undefined ? x.vacancy.toFixed(1) + '%' : '—'), 'Asking rent ' + (x.askingRent ? '$' + x.askingRent.toFixed(2) + '/SF' : '—'), 'Net absorption ' + fmtSF(x.netAbsorption) + ' SF', 'Under construction ' + fmtSF(x.underConstruction) + ' SF'].join('\n');
+    const chart = bars.length
+      ? `<div class="bar-chart" role="img" aria-label="${esc((metric === 'vacancy' ? 'Vacancy' : 'Average asking rent') + ' by submarket, ' + latest)}">
+          ${total && total[metric] ? `<div class="bar-ref-key"><span class="ref-swatch"></span>Market ${esc(fmtMetric(total[metric]))}</div>` : ''}
+          ${bars
+            .map(
+              (x) => `<div class="bar-row" data-tip="${esc(tip(x))}"><span class="bar-label">${esc(x.submarket)}</span><span class="bar-track"><span class="bar" style="width:${((x[metric] / max) * 100).toFixed(1)}%"></span>${total && total[metric] ? `<span class="bar-ref" style="left:${((total[metric] / max) * 100).toFixed(1)}%"></span>` : ''}</span><span class="bar-value">${esc(fmtMetric(x[metric]))}</span></div>`
+            )
+            .join('')}
+        </div>`
+      : '';
+
+    // Market-wide trend across the quarters on file: one small chart per measure (never two scales on one chart).
+    const series = mine
+      .slice()
+      .reverse()
+      .map((q) => stats.find((x) => x.assetClass === asset && x.quarter === q && x.submarket === 'Market total'))
+      .filter(Boolean);
+    const spark = (key, label, fmt) => {
+      const pts = series.filter((x) => x[key] !== undefined);
+      if (pts.length < 2) return '';
+      const vals = pts.map((x) => x[key]);
+      const lo = Math.min(...vals);
+      const hi = Math.max(...vals);
+      const X = (i) => 20 + (i * 260) / (pts.length - 1);
+      const Y = (v) => (hi === lo ? 40 : 66 - ((v - lo) / (hi - lo)) * 50);
+      return `<div class="trend"><div class="kpi-label">${esc(label)}</div><svg viewBox="0 0 300 84" role="img" aria-label="${esc(label + ' by quarter')}">
+        <polyline points="${pts.map((x, i) => X(i) + ',' + Y(x[key])).join(' ')}" />
+        ${pts.map((x, i) => `<circle cx="${X(i)}" cy="${Y(x[key])}" r="4" data-tip="${esc(x.quarter + ': ' + fmt(x[key]))}"></circle>`).join('')}
+        <text x="${X(0)}" y="82" text-anchor="start">${esc(pts[0].quarter)}</text><text x="${X(pts.length - 1)}" y="82" text-anchor="end">${esc(pts[pts.length - 1].quarter)} · ${esc(fmt(pts[pts.length - 1][key]))}</text>
+      </svg></div>`;
+    };
+    const trends = [spark('vacancy', 'Market vacancy', (v) => v.toFixed(1) + '%'), spark('askingRent', 'Market asking rent', (v) => '$' + v.toFixed(2)), spark('netAbsorption', 'Quarterly net absorption', fmtMSF)].join('');
+
+    const hl = (report && report.highlights) || {};
+    const notesFor = (sub) => (report ? (report.submarkets || {})[L.matchSubmarket(Object.keys(report.submarkets || {}), sub)] || [] : []);
+    const view = latest
+      ? `
+      <div class="kpis">
+        ${tile('Vacancy', total && total.vacancy !== undefined ? total.vacancy.toFixed(1) + '%' : '—', change(total && total.vacancy, prevTotal && prevTotal.vacancy, 'bps'))}
+        ${tile(total && total.rentType === 'direct' ? 'Avg. direct asking rent' : 'Avg. asking rent', total && total.askingRent ? '$' + total.askingRent.toFixed(2) : '—', change(total && total.askingRent, prevTotal && prevTotal.askingRent) || (asset === 'Office' ? 'per SF, full service' : 'per SF, NNN'))}
+        ${tile('Net absorption, ' + latest, total ? fmtMSF(total.netAbsorption) : '—', total && total.ytdAbsorption !== undefined ? fmtMSF(total.ytdAbsorption) + ' year to date' : '')}
+        ${tile('Under construction', total ? fmtMSF(total.underConstruction) : '—', total && total.inventory ? fmtMSF(total.inventory) + ' inventory' : '')}
+      </div>
+      ${
+        hl['Leasing Market Fundamentals'] || hl.Outlook
+          ? `<div class="grid2">
+          ${hl['Leasing Market Fundamentals'] ? `<section class="card"><h2>What changed this quarter</h2>${copyList(hl['Leasing Market Fundamentals'])}</section>` : ''}
+          ${hl.Outlook ? `<section class="card"><h2>Outlook</h2>${copyList(hl.Outlook)}</section>` : ''}
+        </div>`
+          : ''
+      }
+      ${trends ? `<section class="card"><h2>Trend</h2><div class="trends">${trends}</div></section>` : ''}
+      <section class="card"><h2>By submarket · ${esc(latest)} <span class="seg small more">${[['vacancy', 'Vacancy'], ['askingRent', 'Asking rent']].map(([v, l]) => `<button class="${metric === v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="statsMetric" data-value="${v}">${l}</button>`).join('')}</span></h2>
+        ${chart}
+        <div class="table-wrap"><table class="tbl compact stats-table"><thead><tr><th>Submarket</th><th class="right">Vacancy</th><th class="right">${total && total.rentType === 'direct' ? 'Direct asking rent' : 'Asking rent'}</th><th class="right">Net absorption</th><th class="right">YTD absorption</th><th class="right">Under construction</th><th class="right">Inventory</th></tr></thead><tbody>${rows
+          .slice()
+          .sort((a, b) => (a.submarket === 'Market total') - (b.submarket === 'Market total'))
           .map((x) => {
-            const v = L.marketValues(L.marketStatFor(stats, { assetClass: asset, submarket: x.submarket }), {});
-            return `<tr${x.submarket === 'Market total' ? ' class="total-row"' : ''}><td><strong>${esc(x.submarket)}</strong></td><td class="right">${fmtPct(x.vacancy)}</td><td class="muted">${esc(v.VacancyChange || '')}</td><td class="right">${x.askingRent ? '$' + Number(x.askingRent).toFixed(2) : '<span class="muted">—</span>'}</td><td class="right">${fmtSF(x.netAbsorption)}</td><td class="right">${fmtSF(x.underConstruction)}</td><td class="right">${fmtSF(x.inventory)}</td></tr>`;
+            const notes = notesFor(x.submarket);
+            const prev = mine[1] ? stats.find((y) => y.assetClass === asset && y.quarter === mine[1] && y.submarket === x.submarket) : null;
+            return `<tr class="${/total/i.test(x.submarket) ? 'total-row' : ''}"><td><strong>${esc(x.submarket)}</strong>${notes.length ? `<details class="research-details"><summary>What Research says (${notes.length})</summary>${copyList(notes)}</details>` : ''}</td>
+              <td class="right">${x.vacancy !== undefined ? x.vacancy.toFixed(1) + '%' : '—'}${prev && prev.vacancy !== undefined ? `<div class="sub">${esc(change(x.vacancy, prev.vacancy, 'bps'))}</div>` : ''}</td>
+              <td class="right">${x.askingRent ? '$' + x.askingRent.toFixed(2) : '—'}</td><td class="right">${esc(fmtSF(x.netAbsorption))}</td><td class="right">${esc(fmtSF(x.ytdAbsorption))}</td><td class="right">${esc(fmtSF(x.underConstruction))}</td><td class="right">${esc(fmtSF(x.inventory))}</td></tr>`;
           })
-          .join('')}</tbody></table></div></section>`;
-      })
-      .join('');
-    return `<p class="hint">Drop each quarter's Research stats here (Excel or CSV, one row per submarket plus a market total). Email templates and recommended follow-ups then quote the latest numbers for each company's submarket, with the change from the quarter before, so your emails update as the stats do.</p>
-      <div class="drop-zone" data-drop="marketStats"><strong>Drag a quarterly stats sheet here</strong> <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="marketStats">Choose a file</button>
-        <div class="sub">Columns like Submarket, Inventory, Vacancy, Net Absorption, Under Construction and Asking Rent are matched automatically. You confirm the quarter and asset class before saving.</div></div>
-      ${tables || emptyState('No market stats yet. Drop your first Research sheet above.')}
-      ${quarters.length ? `<section class="card"><h2>Quarters on file</h2><ul class="plain added-notes">${quarters.map((q) => `<li>${esc(q.quarter)} · ${esc(q.assetClass)} <span class="muted">· ${q.n} rows</span> <button class="link" data-action="remove-stats" data-quarter="${esc(q.quarter)}" data-asset="${esc(q.assetClass)}">Remove</button></li>`).join('')}</ul></section>` : ''}
+          .join('')}</tbody></table></div></section>
+      ${hl['Major Transactions'] ? `<section class="card"><h2>Major transactions</h2>${copyList(hl['Major Transactions'])}</section>` : ''}`
+      : emptyState(`No ${asset.toLowerCase()} stats yet. Drop this quarter's Research report above.`);
+
+    return `${importPreview && importPreview.kind === 'research' ? researchPreviewCard() : ''}
+      <div class="toolbar"><div class="seg">${['Office', 'Industrial'].map((a) => `<button class="${asset === a ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="statsAsset" data-value="${a}">${a}${quarters.find((q) => q.assetClass === a) ? ' · ' + esc(quarters.find((q) => q.assetClass === a).quarter) : ''}</button>`).join('')}</div></div>
+      ${view}
+      <div class="drop-zone" data-drop="marketStats"><strong>Drag this quarter's Research report here</strong> (the PDF, or an Excel/CSV stats table) <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="marketStats">Choose a file</button>
+        <div class="sub">The submarket statistics, the market observations and each submarket's current conditions are read from the report. You confirm the quarter before anything is saved. Each new quarter is compared with the one before.</div></div>
+      ${quarters.length ? `<section class="card"><h2>Quarters on file</h2><ul class="plain added-notes">${quarters.map((q) => `<li>${esc(q.quarter)} · ${esc(q.assetClass)} <span class="muted">· ${q.n} rows${reports.some((r) => r.quarter === q.quarter && r.assetClass === q.assetClass) ? ' · report notes' : ''}</span> <button class="link" data-action="remove-stats" data-quarter="${esc(q.quarter)}" data-asset="${esc(q.assetClass)}">Remove</button></li>`).join('')}</ul></section>` : ''}
       <section class="card"><h2>Placeholders for templates</h2>
-        <p class="hint">Use these in Marketing → Email templates. They come from the company's submarket (or the market total when its submarket isn't in the sheet), for its asset class.</p>
+        <p class="hint">Use these in Marketing → Email templates. They come from the company's submarket (or the market total when its submarket isn't in the report), for its asset class, and update each time you load a new quarter.</p>
         <dl class="info">${[
           ['{MarketStat}', 'A ready sentence: "Northside office vacancy was 24.1% in 3Q26, down 40 bps from 2Q26, asking rents averaged $43.10/SF (up 1.4% from 2Q26) and net absorption was -45,000 SF."'],
+          ['{ResearchNote}', "Research's own line on the submarket's vacancy this quarter"],
+          ['{MarketTrend}', "Research's first line on the market this quarter"],
           ['{Vacancy} / {VacancyChange}', '24.1% / down 40 bps from 2Q26'],
           ['{AskingRent} / {RentChange}', '$43.10/SF / up 1.4% from 2Q26'],
           ['{NetAbsorption}, {UnderConstruction}, {Deliveries}', 'In SF'],
@@ -1227,6 +1337,30 @@
         ]
           .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`)
           .join('')}</dl></section>`;
+  }
+
+  function researchPreviewCard() {
+    const p = importPreview;
+    const r = p.report;
+    const hl = Object.entries(r.highlights || {});
+    const subs = Object.keys(r.submarkets || {});
+    return `<section class="card import-preview">
+      <h2>Review report: ${esc(p.filename)}</h2>
+      ${
+        r.rows.length
+          ? `<p>Found ${r.rows.length} rows of submarket statistics${hl.length ? `, ${hl.reduce((n, [, v]) => n + v.length, 0)} market observations` : ''}${subs.length ? ` and notes for ${subs.length} submarkets (${esc(subs.join(', '))})` : ''}.</p>`
+          : '<p class="red-text">No submarket statistics table was found in this PDF. Market observations and submarket notes are still saved if found.</p>'
+      }
+      <div class="table-wrap"><table class="tbl compact"><thead><tr><th>Submarket</th><th class="right">Vacancy</th><th class="right">Asking rent</th><th class="right">Net absorption</th><th class="right">Under construction</th></tr></thead><tbody>${r.rows
+        .map((x) => `<tr><td>${esc(x.submarket)}</td><td class="right">${x.vacancy !== undefined ? x.vacancy.toFixed(1) + '%' : '—'}</td><td class="right">${x.askingRent ? '$' + x.askingRent.toFixed(2) : '—'}</td><td class="right">${esc(L.fmtNumber(x.netAbsorption))}</td><td class="right">${esc(L.fmtNumber(x.underConstruction))}</td></tr>`)
+        .join('')}</tbody></table></div>
+      <form id="research-form" class="form-grid">
+        <label>Quarter<input name="quarter" value="${esc(r.quarter)}" placeholder="2Q26" required pattern="[1-4][Qq][0-9]{2}" /></label>
+        <label>Asset class<select name="assetClass">${options(['Office', 'Industrial'], r.assetClass)}</select></label>
+        <div class="wide actions"><button class="btn primary" type="submit">Save ${esc(r.quarter)} ${esc(r.assetClass.toLowerCase())} stats</button><button class="btn" type="button" data-action="cancel-import">Cancel</button></div>
+        <p class="hint wide">Saving replaces any stats already on file for the same quarter and asset class.</p>
+      </form>
+    </section>`;
   }
 
   // ----- comps & critical dates -----
@@ -1717,6 +1851,7 @@
         </section>
       </div>
       <section class="card">${notesCard('companies', c)}</section>
+      ${marketSnapshotCard(c)}
       ${sharedListCard(c)}
       ${criticalDatesCard(id)}
 
@@ -2354,7 +2489,7 @@
     const counts = S.COLLECTIONS.map((c) => `${S.all(c).length} ${c}`).join(' · ');
     return `
       <div class="page-head"><h1>Import, Export & Settings</h1></div>
-      ${importPreview ? importPreviewCard() : ''}
+      ${importPreview && importPreview.kind !== 'research' ? importPreviewCard() : ''}
       <div class="grid2">
         <section class="card">
           <h2>Import from CSV or Excel</h2>
@@ -2617,7 +2752,7 @@
     const p = S.get('contacts', contactId) || {};
     const deal = S.get('deals', dealId) || S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
     const st = S.settings();
-    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, deal, market: L.marketStatFor(S.settings().marketStats || [], c), today: L.todayISO() };
+    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, deal, market: L.marketStatFor(S.settings().marketStats || [], c, S.settings().marketReports), today: L.todayISO() };
   }
 
   // Who to call and their numbers, with click-to-call, copy, and logging the call.
@@ -3157,7 +3292,19 @@
       showImportPreview(kind, file.name, L.parseCSV(text));
     };
     if (/\.pdf$/i.test(file.name)) {
-      alert('PDF reports can\'t be read automatically yet. Import the Excel or CSV version of the stats table, or send the PDF to the CRM Updates chat.');
+      if (kind !== 'marketStats') return alert('PDFs can be read on Marketing → Market stats (Research reports). For this import, use an Excel or CSV file.');
+      toast('Reading ' + file.name + '…');
+      readPdfLines(file).then(
+        (lines) => {
+          importPreview = { kind: 'research', filename: file.name, report: L.parseResearchReport(lines, file.name) };
+          state.marketing.tab = 'stats';
+          state.marketing.statsAsset = importPreview.report.assetClass;
+          if (!location.hash.startsWith('#/marketing')) location.hash = '#/marketing';
+          else render();
+          window.scrollTo(0, 0);
+        },
+        (e) => alert(e.message)
+      );
       return;
     }
     if (kind !== 'backup' && isExcel(file)) {
@@ -3194,6 +3341,33 @@
       document.head.appendChild(el);
     });
   }
+  // PDFs are read in the browser by pdf.js (loaded only when one is dropped); the file never leaves the computer.
+  const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+  function loadPDFJS() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    return new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = PDFJS + 'pdf.min.js';
+      el.onload = () => {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
+        resolve(window.pdfjsLib);
+      };
+      el.onerror = () => reject(new Error('Could not load the PDF reader. Check your connection and try again.'));
+      document.head.appendChild(el);
+    });
+  }
+  function readPdfLines(file) {
+    return Promise.all([loadPDFJS(), file.arrayBuffer()]).then(async ([pdfjs, buf]) => {
+      const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+      const lines = [];
+      for (let n = 1; n <= doc.numPages; n++) {
+        const content = await (await doc.getPage(n)).getTextContent();
+        lines.push(...L.layoutLines(content.items.map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }))));
+      }
+      return lines;
+    });
+  }
+
   // Rows of the sheet whose columns best match what's being imported (a workbook may hold several tabs).
   function readExcelRows(file, aliases) {
     return Promise.all([loadXLSX(), file.arrayBuffer()]).then(([XLSX, buf]) => {
@@ -3513,6 +3687,7 @@
           if (d.scope === 'companies' || d.scope === 'leads') state[d.scope].limit = 100;
           saveUIState();
           if (d.scope === 'companies' && !location.hash.startsWith('#/companies')) location.hash = '#/companies';
+          if (d.scope === 'marketing' && !location.hash.startsWith('#/marketing')) location.hash = '#/marketing';
           return render();
         case 'set-stage': {
           const patch = { id: d.id, stage: d.stage };
@@ -3539,7 +3714,8 @@
         }
         case 'remove-stats': {
           if (!confirm(`Remove the ${d.quarter} ${d.asset} market stats?`)) return;
-          S.saveSettings({ marketStats: (S.settings().marketStats || []).filter((x) => !(x.quarter === d.quarter && x.assetClass === d.asset)) });
+          const keep = (x) => !(x.quarter === d.quarter && x.assetClass === d.asset);
+          S.saveSettings({ marketStats: (S.settings().marketStats || []).filter(keep), marketReports: (S.settings().marketReports || []).filter(keep) });
           return toast('Removed.');
         }
         case 'recap-sent': {
@@ -3586,6 +3762,12 @@
         case 'summarize':
           e.preventDefault();
           return openBrief(d.col, d.id);
+        case 'insert-market-line': {
+          const f = $('#quick-note-form');
+          const line = marketLineFor(f.dataset.col, S.get(f.dataset.col, f.dataset.id));
+          f.elements.note.value = (f.elements.note.value.trim() ? f.elements.note.value.trim() + ' ' : '') + line;
+          return f.elements.note.focus();
+        }
         case 'quick-note':
           e.preventDefault();
           return openQuickNote(d.col, d.id);
@@ -3744,7 +3926,7 @@
         case 'pick-file': {
           const input = $('#file-input');
           input.dataset.kind = d.kind;
-          input.accept = d.kind === 'backup' ? '.json,application/json' : '.csv,text/csv,.xlsx,.xls,.xlsm';
+          input.accept = d.kind === 'backup' ? '.json,application/json' : '.csv,text/csv,.xlsx,.xls,.xlsm' + (d.kind === 'marketStats' ? ',.pdf,application/pdf' : '');
           input.value = '';
           return input.click();
         }
@@ -3831,6 +4013,22 @@
       const to = e.target.querySelector('select[name=targetId]').value;
       if (!to) return toast('Pick the company to keep.');
       if (confirm(`Merge ${companyName(e.target.dataset.from)} into ${companyName(to)}? This can't be undone.`)) mergeCompanies(e.target.dataset.from, to);
+    } else if (e.target.id === 'research-form') {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const quarter = String(fd.get('quarter')).toUpperCase();
+      const assetClass = fd.get('assetClass');
+      const r = importPreview.report;
+      const st = S.settings();
+      const same = (x) => x.quarter === quarter && x.assetClass === assetClass;
+      S.saveSettings({
+        marketStats: (st.marketStats || []).filter((x) => !same(x)).concat(r.rows.map((x) => Object.assign({}, x, { quarter, assetClass }))),
+        marketReports: (st.marketReports || []).filter((x) => !same(x)).concat([{ quarter, assetClass, market: r.market, highlights: r.highlights, submarkets: r.submarkets, filename: importPreview.filename, importedAt: L.todayISO() }]),
+      });
+      importPreview = null;
+      state.marketing.statsAsset = assetClass;
+      toast(`Saved ${quarter} ${assetClass.toLowerCase()} market stats.`);
+      render();
     } else if (e.target.id === 'quick-note-form') {
       e.preventDefault();
       const f = e.target;
@@ -3878,6 +4076,23 @@
       render();
       toast(msg);
     }
+  });
+
+  // Hover tooltip for chart marks ([data-tip]); the text lives on the mark, one line per row.
+  const chartTip = document.createElement('div');
+  chartTip.id = 'chart-tip';
+  chartTip.hidden = true;
+  document.body.appendChild(chartTip);
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest && e.target.closest('[data-tip]');
+    if (!el) return (chartTip.hidden = true);
+    chartTip.textContent = el.dataset.tip;
+    chartTip.hidden = false;
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (chartTip.hidden) return;
+    chartTip.style.left = Math.min(innerWidth - chartTip.offsetWidth - 8, e.clientX + 14) + 'px';
+    chartTip.style.top = e.clientY + 14 + 'px';
   });
 
   // Drop a comp sheet anywhere on the Comps tab, or a Research stats sheet on Marketing → Market stats.

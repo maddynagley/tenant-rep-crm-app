@@ -2147,6 +2147,39 @@
     return out.map((b) => b.replace(/\s+/g, ' ').replace(/(\w)- (\w)/g, '$1-$2').trim()).filter((b) => b.length > 20);
   }
 
+  // Positioned text from a PDF page ({ str, x, y, w }) → lines laid out like the page: items on the same baseline
+  // join into one line, placed at a column proportional to x, so table columns and page columns stay apart.
+  function layoutLines(items) {
+    items = (items || []).filter((it) => it && String(it.str || '').trim());
+    if (!items.length) return [];
+    const widths = items.filter((it) => String(it.str).trim().length >= 3 && it.w > 0).map((it) => it.w / String(it.str).length).sort((a, b) => a - b);
+    const cw = (widths[Math.floor(widths.length / 2)] || 5) * 0.9;
+    const rows = [];
+    items
+      .slice()
+      .sort((a, b) => b.y - a.y || a.x - b.x)
+      .forEach((it) => {
+        const row = rows.find((r) => Math.abs(r.y - it.y) <= 2);
+        if (row) row.items.push(it);
+        else rows.push({ y: it.y, items: [it] });
+      });
+    const minX = Math.min(...items.map((it) => it.x));
+    return rows.map((r) => {
+      let line = '';
+      let end = -Infinity;
+      r.items
+        .sort((a, b) => a.x - b.x)
+        .forEach((it) => {
+          const col = Math.max(0, Math.round((it.x - minX) / cw));
+          const str = String(it.str);
+          if (it.x - end < cw * 0.6 && line) line += str;
+          else line = (line + ' '.repeat(Math.max(line ? 1 : 0, col - line.length))) + str;
+          end = it.x + (it.w || str.length * cw);
+        });
+      return line.replace(/\s+$/, '');
+    });
+  }
+
   function parseResearchReport(lines, filename) {
     lines = (lines || []).map((l) => String(l).replace(/\t/g, '    '));
     const text = lines.join('\n');
@@ -2188,6 +2221,8 @@
           keys.forEach((k, j) => r.values[j] !== null && r.values[j] !== undefined && (rec[k] = r.values[j]));
           const clean = cleanMarketStat(rec, { quarter, assetClass });
           ['classARent', 'classBRent', 'whRent', 'flexRent'].forEach((k) => rec[k] !== undefined && (clean[k] = firstNumber(rec[k])));
+          // The table's rent is the direct asking rent; the report's text quotes the total (with sublease), which differs.
+          if (/Direct\s+Asking/i.test(head)) clean.rentType = 'direct';
           rows.push(clean);
           if (clean.submarket === 'Market total') break;
         }
@@ -2267,21 +2302,42 @@
 
   // The stats that apply to a company: its submarket in the latest quarter on file (else the market total), with
   // the quarter before for comparison.
-  function marketStatFor(stats, company) {
+  // The report's name for a submarket the CRM spells its own way: "Midtown - West" → "Midtown",
+  // "Northeast - I-85 Outside I-285" → "Northeast", "Northwest/I-75" → "Northwest/I-75 Corridor".
+  function matchSubmarket(names, sub) {
+    const key = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const k = key(sub);
+    if (!k) return '';
+    const real = names.filter((n) => n !== 'Market total' && !/\btotal\b/i.test(n));
+    const exact = real.find((n) => key(n) === k);
+    if (exact) return exact;
+    const head = key(String(sub).split(/\s+-\s+|\s*\(/)[0]);
+    return real.find((n) => key(n) === head) || real.find((n) => key(n).startsWith(head) || head.startsWith(key(n))) || real.find((n) => key(n).startsWith(k) || k.startsWith(key(n))) || '';
+  }
+
+  // reports: imported Research PDFs ({ quarter, assetClass, highlights, submarkets }), for talking points.
+  function marketStatFor(stats, company, reports) {
     const asset = company.assetClass === 'Industrial' ? 'Industrial' : 'Office';
-    const mine = (stats || []).filter((x) => x.assetClass === asset || (x.assetClass === 'Office & Industrial' && asset));
+    const mine = (stats || []).filter((x) => x.assetClass === asset);
     if (!mine.length) return null;
     const qs = Array.from(new Set(mine.map((x) => x.quarter))).sort((a, b) => quarterKey(b) - quarterKey(a));
-    const key = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const find = (q, sub) => mine.find((x) => x.quarter === q && key(x.submarket) === key(sub));
-    const sub = company.submarket && find(qs[0], company.submarket) ? company.submarket : 'Market total';
+    const find = (q, sub) => mine.find((x) => x.quarter === q && x.submarket === sub);
+    const sub = matchSubmarket(mine.filter((x) => x.quarter === qs[0]).map((x) => x.submarket), company.submarket) || 'Market total';
     const cur = find(qs[0], sub);
     if (!cur) return null;
-    return { current: cur, previous: qs[1] ? find(qs[1], sub) || null : null, market: sub === 'Market total' ? null : find(qs[0], 'Market total') || null };
+    const report = (reports || []).find((r) => r.quarter === qs[0] && r.assetClass === asset);
+    const noteName = report ? matchSubmarket(Object.keys(report.submarkets || {}), sub === 'Market total' ? '' : sub) : '';
+    return {
+      current: cur,
+      previous: qs[1] ? find(qs[1], sub) || null : null,
+      market: sub === 'Market total' ? null : find(qs[0], 'Market total') || null,
+      notes: noteName ? report.submarkets[noteName] : [],
+      highlights: report ? report.highlights || {} : {},
+    };
   }
 
   // Template placeholders from market stats ({Vacancy}, {VacancyChange}, {AskingRent}, {MarketStat}…).
-  const MARKET_PLACEHOLDERS = ['Quarter', 'StatsArea', 'Vacancy', 'VacancyChange', 'Availability', 'AskingRent', 'RentChange', 'NetAbsorption', 'YTDAbsorption', 'UnderConstruction', 'Deliveries', 'MarketVacancy', 'MarketStat'];
+  const MARKET_PLACEHOLDERS = ['Quarter', 'StatsArea', 'Vacancy', 'VacancyChange', 'Availability', 'AskingRent', 'RentChange', 'NetAbsorption', 'YTDAbsorption', 'UnderConstruction', 'Deliveries', 'MarketVacancy', 'MarketStat', 'ResearchNote', 'MarketTrend'];
   function marketValues(m, company) {
     if (!m) return MARKET_PLACEHOLDERS.reduce((o, k) => Object.assign(o, { [k]: '' }), {});
     const c = m.current;
@@ -2302,7 +2358,7 @@
     }
     const parts = [];
     if (c.vacancy !== undefined) parts.push(area + ' ' + asset + ' vacancy was ' + pctFmt(c.vacancy) + ' in ' + c.quarter + (vacChange ? ', ' + vacChange : ''));
-    if (c.askingRent) parts.push('asking rents averaged $' + Number(c.askingRent).toFixed(2) + '/SF' + (rentChange ? ' (' + rentChange + ')' : ''));
+    if (c.askingRent) parts.push((c.rentType === 'direct' ? 'direct ' : '') + 'asking rents averaged $' + Number(c.askingRent).toFixed(2) + '/SF' + (rentChange ? ' (' + rentChange + ')' : ''));
     if (c.netAbsorption !== undefined) parts.push('net absorption was ' + sfFmt(c.netAbsorption));
     let sentence = parts.length ? parts.slice(0, -1).join(', ') + (parts.length > 1 ? ' and ' : '') + parts[parts.length - 1] + '.' : '';
     sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
@@ -2320,6 +2376,9 @@
       Deliveries: sfFmt(c.deliveries),
       MarketVacancy: m.market ? pctFmt(m.market.vacancy) : pctFmt(c.vacancy),
       MarketStat: sentence,
+      // Research's own words on the submarket (the vacancy line when there is one) and on the market.
+      ResearchNote: (m.notes || []).find((b) => /vacancy/i.test(b)) || (m.notes || [])[0] || '',
+      MarketTrend: ((m.highlights || {})['Leasing Market Fundamentals'] || [])[0] || '',
     };
   }
 
@@ -2961,7 +3020,9 @@
     COMP_IMPORT_ALIASES,
     MARKET_STAT_ALIASES,
     parseResearchReport,
+    layoutLines,
     compareQuarters,
+    matchSubmarket,
     MARKET_PLACEHOLDERS,
     normalizeQuarter,
     cleanMarketStat,

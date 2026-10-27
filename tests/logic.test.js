@@ -1025,3 +1025,83 @@ test('comp import: defaults are marked so an update keeps the existing comp\'s v
   assert.equal(Object.keys(c).includes('guessed'), false);
   assert.deepEqual(L.cleanImportedComp({ building: 'X', source: 'CoStar', assetClass: 'Office', rateBasis: 'NNN' }).guessed, []);
 });
+
+test('research report PDFs: stats table, observations and submarket bullets from page-shaped lines', () => {
+  const pad = (s, n) => s + ' '.repeat(Math.max(1, n - s.length));
+  const lines = [
+    'Market Overview',
+    'Market Observations',
+    pad('           Economy', 100) + 'Leasing Market Fundamentals',
+    pad(' –   Jobs grew 1.0% year over year in the metro,', 100) + '–   Asking rates rose 1.1% quarter over quarter to',
+    pad('     ahead of the national rate.', 100) + '    a new high of $33.93/SF.',
+    pad('           Major Transactions', 100) + 'Outlook',
+    pad(' –   A firm signed the largest lease of the quarter at 165,000 SF.', 100) + '–   Rents should keep rising, at a slower pace than last year.',
+    'Table of Contents',
+    'Riverside Office Submarket Overview',
+    '  Submarket Statistics – All Classes',
+    '                     Total Inventory     Under          Total Vacancy   Qtr Absorption   YTD Absorption   Class A Direct Rent   Class B Direct Rent   Average Direct Asking',
+    '                           (SF)     Construction (SF)       Rate            (SF)             (SF)            (Price/SF)            (Price/SF)           Rent (Price/SF)',
+    ' Northside          14,875,838          0          32.9 %        96,302          115,116           $32.95            $27.06           $31.83',
+    ' North Central/GA 400 Corridor   24,629,724   362,071   7.9 %   -10,877   147,061   $9.82   $15.75   $12.07',
+    ' Market            155,510,029          0          26.1 %       603,703          934,425           $37.30            $28.03           $34.47',
+    '                                                                                    F I R M   16',
+    'Northside Office Submarket Overview',
+    '        14.9 MSF        32.9%',
+    'Current Conditions                                                     Average Asking Rents ($/SF FS) & Vacancy',
+    '                                                                       $32.00',
+    ' •   In the second quarter of 2026, the average asking rent in',
+    '                                                                       $26.00',
+    '     Northside rose by 0.5% quarter over quarter to $31.45/SF.',
+    ' •   The vacancy rate decreased by 70 basis points quarter       Notable Lease Transactions',
+    '     over quarter to 32.9%.',
+    '                                                                                    F I R M   18',
+  ];
+  const r = L.parseResearchReport(lines, 'Riverside-Office-Report.pdf');
+  assert.equal(r.quarter, '2Q26', 'from "the second quarter of 2026"');
+  assert.equal(r.assetClass, 'Office');
+  assert.equal(r.market, 'Riverside');
+  assert.equal(r.rows[0].rentType, 'direct');
+  assert.match(L.marketValues({ current: r.rows[0] }, {}).MarketStat, /direct asking rents averaged \$31\.83\/SF/);
+  assert.deepEqual(r.rows.map((x) => [x.submarket, x.vacancy, x.askingRent, x.netAbsorption, x.classARent]), [
+    ['Northside', 32.9, 31.83, 96302, 32.95],
+    ['North Central/GA 400 Corridor', 7.9, 12.07, -10877, 9.82],
+    ['Market total', 26.1, 34.47, 603703, 37.3],
+  ]);
+  assert.deepEqual(r.highlights['Leasing Market Fundamentals'], ['Asking rates rose 1.1% quarter over quarter to a new high of $33.93/SF.']);
+  assert.deepEqual(r.highlights.Outlook, ['Rents should keep rising, at a slower pace than last year.']);
+  assert.equal(r.highlights.Economy[0], 'Jobs grew 1.0% year over year in the metro, ahead of the national rate.');
+  assert.deepEqual(r.submarkets.Northside, ['In the second quarter of 2026, the average asking rent in Northside rose by 0.5% quarter over quarter to $31.45/SF.', 'The vacancy rate decreased by 70 basis points quarter over quarter to 32.9%.']);
+  assert.equal(L.parseResearchReport(lines, '3Q26 report.pdf').quarter, '3Q26', 'file name wins');
+});
+
+test('layoutLines: PDF text pieces on one baseline join, columns stay apart', () => {
+  const items = [
+    { str: 'Northside', x: 20, y: 500, w: 45 },
+    { str: '32.9', x: 220, y: 500.5, w: 20 },
+    { str: ' %', x: 240, y: 500, w: 8 },
+    { str: 'Market', x: 20, y: 480, w: 30 },
+    { str: '26.1 %', x: 220, y: 480, w: 28 },
+  ];
+  const lines = L.layoutLines(items);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^Northside\s{3,}32\.9 %$/);
+  assert.match(lines[1], /^Market\s{3,}26\.1 %$/);
+});
+
+test('market stats: CRM submarket names match the report\'s, with Research talking points', () => {
+  const names = ['Northside', 'Uptown', 'Northwest/I-75 Corridor', 'CBD Total', 'Market total'];
+  assert.equal(L.matchSubmarket(names, 'Uptown - West'), 'Uptown');
+  assert.equal(L.matchSubmarket(names, 'Northwest/I-75'), 'Northwest/I-75 Corridor');
+  assert.equal(L.matchSubmarket(names, 'northside'), 'Northside');
+  assert.equal(L.matchSubmarket(names, 'Lakeview'), '');
+  const stats = [
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'Uptown', vacancy: 32.2 },
+    { quarter: '2Q26', assetClass: 'Office', submarket: 'Market total', vacancy: 26.1 },
+  ];
+  const reports = [{ quarter: '2Q26', assetClass: 'Office', highlights: { 'Leasing Market Fundamentals': ['Rents hit a new high.'] }, submarkets: { Uptown: ['Rents rose 0.5%.', 'The vacancy rate fell 70 bps to 32.2%.'] } }];
+  const m = L.marketStatFor(stats, { assetClass: 'Office', submarket: 'Uptown - West' }, reports);
+  assert.equal(m.current.submarket, 'Uptown');
+  const v = L.marketValues(m, {});
+  assert.equal(v.ResearchNote, 'The vacancy rate fell 70 bps to 32.2%.');
+  assert.equal(v.MarketTrend, 'Rents hit a new high.');
+});
