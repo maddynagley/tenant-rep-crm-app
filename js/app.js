@@ -1609,7 +1609,7 @@
       <div class="sub">Columns like Building, Tenant, SF, Signed, Term, Rent, Escalations, Free Rent and TI are matched automatically. You review them before anything is saved.</div></div>`;
     return `
       <div class="page-head"><h1>Comps & Critical Dates</h1>
-        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="btn" data-action="pick-file" data-kind="comps">Import comps</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
+        <div class="actions"><button class="btn" data-action="new" data-col="criticalDates">+ Critical date</button><button class="btn" data-action="pick-file" data-kind="comps">Import comps</button><button class="btn" data-action="pick-file" data-kind="compsAlign" title="Compare the CRM with a comp sheet and fix what differs">Match a file</button><button class="btn" data-action="export-comps">Export comps</button><button class="btn primary" data-action="new" data-col="comps">+ Comp</button></div>
       </div>
       <div class="toolbar">
         <div class="seg">
@@ -2756,6 +2756,69 @@
     const comps = p.result.records.map((r) => L.cleanImportedComp(r, Object.assign({ termUnit: p.termUnit }, opts || {})));
     return L.planCompImport(comps, S.all('comps'));
   }
+  // "Match a file": the CRM's comps lined up with a sheet, with every difference and what to do about it.
+  function alignPlan(p) {
+    const comps = p.result.records.map((r) => L.cleanImportedComp(r, { termUnit: p.termUnit, assetClass: p.alignAsset || p.assetClass }));
+    return Object.assign({ comps }, L.alignComps(comps, S.all('comps')));
+  }
+  const COMP_LABELS = { building: 'Building', address: 'Address', city: 'City', submarket: 'Submarket', assetClass: 'Asset', landlord: 'Landlord', tenant: 'Tenant', dealType: 'Type', sf: 'RSF', signedDate: 'Signed', commencement: 'Commencement', termMonths: 'Term', leaseExpiration: 'LXD', startingRent: 'Rent', rateBasis: 'Basis', escalationPct: 'Escalation', freeRentMonths: 'Free rent', tiAllowance: 'TI', opex: 'OpEx', yearBuilt: 'Built', clearHeight: 'Clear height', notes: 'Notes' };
+  function compValue(field, v) {
+    if (v === '' || v === undefined || v === null) return 'blank';
+    if (field === 'termMonths' || field === 'freeRentMonths') return v + ' mo';
+    if (field === 'escalationPct') return Number(v) === 0 ? '0% (flat)' : v + '%';
+    if (['startingRent', 'tiAllowance', 'opex'].includes(field)) return '$' + Number(v).toFixed(2);
+    if (field === 'sf') return L.fmtNumber(v);
+    if (field === 'rateBasis') return String(v).replace(/\s*\(.*\)/, '');
+    return String(v);
+  }
+  function alignPreviewCard() {
+    const p = importPreview;
+    const a = alignPlan(p);
+    const label = (c) => esc([c.tenant, c.building].filter(Boolean).join(' · '));
+    const fix = a.matched.filter((m) => m.diffs.length);
+    const ok = a.matched.length - fix.length;
+    const leftovers = a.extras.filter((e) => e.leftover);
+    const others = a.extras.filter((e) => !e.leftover);
+    return `<section class="card import-preview">
+      <h2>Make comps match: ${esc(p.filename)}</h2>
+      <p>${a.comps.length} rows in the file. <strong>${ok}</strong> already match the CRM exactly${fix.length ? `, <strong>${fix.length}</strong> differ` : ''}${a.missing.length ? `, <strong>${a.missing.length}</strong> aren't in the CRM` : ''}${leftovers.length ? `, and <strong>${leftovers.length}</strong> look like leftover copies` : ''}. Nothing changes until you apply.</p>
+      <form id="align-form" class="form-grid">
+        <label>Asset class for rows without one<select id="align-asset">${options(['Office', 'Industrial'], p.alignAsset || p.assetClass)}</select></label>
+        <div class="wide">
+        ${
+          fix.length
+            ? `<h3 class="notes-sub">Fix ${fix.length} comp${fix.length > 1 ? 's' : ''} to match the file</h3><div class="table-wrap"><table class="tbl compact"><thead><tr><th></th><th>Comp</th><th>What changes (CRM → file)</th></tr></thead><tbody>${fix
+                .map((m) => `<tr><td><input type="checkbox" name="fix-${m.row}" checked /></td><td><strong>${label(m.comp)}</strong></td><td>${m.diffs.map((d) => `<div><span class="muted">${esc(COMP_LABELS[d.field] || d.field)}:</span> ${esc(compValue(d.field, d.crm))} → <strong>${esc(compValue(d.field, d.file))}</strong></div>`).join('')}</td></tr>`)
+                .join('')}</tbody></table></div>`
+            : ''
+        }
+        ${
+          a.missing.length
+            ? `<h3 class="notes-sub">Add ${a.missing.length} comp${a.missing.length > 1 ? 's' : ''} that aren't in the CRM</h3><div class="table-wrap"><table class="tbl compact"><thead><tr><th></th><th>Comp</th><th>Terms</th><th></th></tr></thead><tbody>${a.missing
+                .map((m) => `<tr><td><input type="checkbox" name="add-${m.row}" ${m.repeatOf >= 0 ? '' : 'checked'} /></td><td><strong>${label(m.comp)}</strong></td><td>${esc([compValue('sf', m.comp.sf) + ' SF', m.comp.startingRent ? compValue('startingRent', m.comp.startingRent) : '', m.comp.termMonths ? m.comp.termMonths + ' mo' : ''].filter((x) => x && x !== 'blank SF').join(' · '))}</td><td>${m.repeatOf >= 0 ? badge('Possible duplicate of row ' + (m.repeatOf + 1), 'amber') + ' <span class="sub">Tick to add it anyway</span>' : ''}</td></tr>`)
+                .join('')}</tbody></table></div>`
+            : ''
+        }
+        ${
+          leftovers.length
+            ? `<h3 class="notes-sub">Delete ${leftovers.length} leftover cop${leftovers.length > 1 ? 'ies' : 'y'}</h3><p class="hint">Comps for a tenant that's in the file, but not the one matched to its row (usually saved by an earlier import). Untick any you want to keep.</p><div class="table-wrap"><table class="tbl compact"><tbody>${leftovers
+                .map((e) => `<tr><td><input type="checkbox" name="del-${esc(e.existing.id)}" checked /></td><td><strong>${label(e.existing)}</strong></td><td>${esc([compValue('sf', e.existing.sf) + ' SF', e.existing.startingRent ? compValue('startingRent', e.existing.startingRent) : 'no rent', e.existing.termMonths ? e.existing.termMonths + ' mo' : ''].join(' · '))}</td></tr>`)
+                .join('')}</tbody></table></div>`
+            : ''
+        }
+        ${
+          others.length
+            ? `<details><summary>${others.length} other ${esc(p.alignAsset || p.assetClass).toLowerCase()} comp${others.length > 1 ? 's' : ''} in the CRM that aren't in this file (kept)</summary><p class="hint">Tick any you want to delete.</p><div class="table-wrap"><table class="tbl compact"><tbody>${others
+                .map((e) => `<tr><td><input type="checkbox" name="del-${esc(e.existing.id)}" /></td><td>${label(e.existing)}</td><td>${esc(e.existing.source || '')}</td></tr>`)
+                .join('')}</tbody></table></div></details>`
+            : ''
+        }
+        </div>
+        <div class="wide actions"><button class="btn primary" type="submit">Apply</button><button class="btn" type="button" data-action="cancel-import">Cancel</button></div>
+      </form>
+    </section>`;
+  }
+
   function compDuplicateReview(p) {
     const plan = compPlan(p);
     const flagged = plan.map((x, i) => Object.assign({ i }, x)).filter((x) => x.status !== 'new');
@@ -2778,6 +2841,7 @@
 
   function importPreviewCard() {
     const p = importPreview;
+    if (p.kind === 'compsAlign') return alignPreviewCard();
     const mapped = Object.keys(p.result.mapping);
     const required = { companies: 'name', contacts: 'company', portfolio: 'company', comps: 'building', marketStats: 'submarket' }[p.kind];
     const isComps = p.kind === 'comps';
@@ -3481,7 +3545,7 @@
     reader.readAsText(file);
   }
 
-  const IMPORT_ALIASES = { companies: L.COMPANY_IMPORT_ALIASES, contacts: L.CONTACT_IMPORT_ALIASES, portfolio: L.PORTFOLIO_IMPORT_ALIASES, comps: L.COMP_IMPORT_ALIASES, marketStats: L.MARKET_STAT_ALIASES };
+  const IMPORT_ALIASES = { companies: L.COMPANY_IMPORT_ALIASES, contacts: L.CONTACT_IMPORT_ALIASES, portfolio: L.PORTFOLIO_IMPORT_ALIASES, comps: L.COMP_IMPORT_ALIASES, compsAlign: L.COMP_IMPORT_ALIASES, marketStats: L.MARKET_STAT_ALIASES };
   const isExcel = (file) => /\.(xlsx|xlsm|xls)$/i.test(file.name);
 
   function showImportPreview(kind, filename, rows) {
@@ -4006,6 +4070,14 @@
           S.upsert('companies', { id: c.id, snoozeUntil: L.addDays(L.todayISO(), 7) });
           return toast(`${c.name} hidden from Today for a week.`);
         }
+        case 'export-comps':
+          return download(
+            'comps-' + stamp() + '.csv',
+            L.toCSV(
+              S.all('comps'),
+              L.COMP_FIELDS.map((k) => ({ key: k, label: COMP_LABELS[k] || k })).concat([{ key: 'source', label: 'Source' }, { label: 'Confidential', value: (c) => (c.confidential ? 'Yes' : '') }])
+            )
+          );
         case 'export-companies':
           return exportCompanies(
             filteredCompanies().map((r) => r.c),
@@ -4181,6 +4253,10 @@
   document.addEventListener('change', (e) => {
     if (e.target.dataset.filter && e.target.type !== 'search') onFilterChange(e);
     if (e.target.closest('#draft-form') && ['template', 'contact'].includes(e.target.name)) fillDraft();
+    if (e.target.id === 'align-asset' && importPreview) {
+      importPreview.alignAsset = e.target.value;
+      render();
+    }
     if (e.target.dataset.leadTemp) S.upsert('companies', { id: e.target.dataset.leadTemp, leadTemp: e.target.value });
     if (e.target.dataset.leadStage) setLeadStage(e.target.dataset.leadStage, e.target.value);
     const form = e.target.closest('#record-form');
@@ -4193,6 +4269,37 @@
       const to = e.target.querySelector('select[name=targetId]').value;
       if (!to) return toast('Pick the company to keep.');
       if (confirm(`Merge ${companyName(e.target.dataset.from)} into ${companyName(to)}? This can't be undone.`)) mergeCompanies(e.target.dataset.from, to);
+    } else if (e.target.id === 'align-form') {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const a = alignPlan(importPreview);
+      let fixed = 0;
+      let added = 0;
+      let deleted = 0;
+      a.matched.forEach((m) => {
+        if (!m.diffs.length || fd.get('fix-' + m.row) !== 'on') return;
+        const patch = { id: m.existing.id };
+        m.diffs.forEach((d) => (patch[d.field] = d.file));
+        S.upsert('comps', patch, { silent: true });
+        fixed++;
+      });
+      a.missing.forEach((m) => {
+        if (fd.get('add-' + m.row) !== 'on') return;
+        S.upsert('comps', m.comp, { silent: true });
+        added++;
+      });
+      Array.from(fd.keys())
+        .filter((k) => k.startsWith('del-'))
+        .forEach((k) => {
+          S.remove('comps', k.slice(4), true);
+          deleted++;
+        });
+      S.saveSettings({});
+      importPreview = null;
+      state.comps.tab = 'comps';
+      location.hash = '#/comps';
+      render();
+      toast(`Comps: ${fixed} fixed, ${added} added, ${deleted} deleted.`);
     } else if (e.target.id === 'research-form') {
       e.preventDefault();
       const fd = new FormData(e.target);

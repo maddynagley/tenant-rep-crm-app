@@ -1215,3 +1215,30 @@ test('prospecting: a conversation after a reply and repeat log entries are not c
   assert.equal(r.totals.conversation, 2);
   assert.equal(r.totals.followUp, 0);
 });
+
+test('alignComps: pairs sheet rows with CRM comps whatever their terms, lists differences, missing rows and leftovers', () => {
+  const sheet = [
+    L.cleanImportedComp({ tenant: 'Acme, Inc.', building: 'The Tower', address: '6 Main St', sf: '4495', termMonths: '7', startingRent: '41', rateBasis: 'FS', escalationPct: '0', assetClass: 'Office' }, { termUnit: 'months', source: 'X' }),
+    L.cleanImportedComp({ tenant: 'Birch', address: '2 Side St', sf: '2000', startingRent: '20', assetClass: 'Office' }, { termUnit: 'months' }),
+    L.cleanImportedComp({ tenant: 'Birch Co', address: '2 Side St', sf: '2000', startingRent: '19', assetClass: 'Office' }, { termUnit: 'months' }),
+  ];
+  const crm = [
+    { id: 'old', tenant: 'Acme', building: 'The Tower', sf: 4495, termMonths: 84, assetClass: 'Office', source: 'Mine' },
+    { id: 'old2', tenant: 'ACME INC', building: 'The Tower', sf: 4495, assetClass: 'Office' },
+    { id: 'other', tenant: 'Cedar', building: 'Elsewhere', sf: 9000, assetClass: 'Office' },
+    { id: 'ind', tenant: 'Dune', building: 'Warehouse', assetClass: 'Industrial' },
+  ];
+  const a = L.alignComps(sheet, crm);
+  assert.equal(a.matched.length, 1);
+  assert.equal(a.matched[0].existing.id, 'old');
+  assert.deepEqual(a.matched[0].diffs.map((d) => [d.field, d.crm, d.file]), [
+    ['address', '', '6 Main St'],
+    ['tenant', 'Acme', 'Acme, Inc.'],
+    ['termMonths', 84, 7],
+    ['startingRent', '', 41],
+    ['rateBasis', '', 'Full Service ($/SF/yr)'],
+    ['escalationPct', '', 0],
+  ]);
+  assert.deepEqual(a.missing.map((m) => [m.row, m.repeatOf]), [[1, -1], [2, 1]]);
+  assert.deepEqual(a.extras.map((e) => [e.existing.id, e.leftover]), [['old2', true], ['other', false]]);
+});

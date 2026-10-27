@@ -2798,6 +2798,48 @@
     });
   }
 
+  // Lines up the comps in a sheet with the CRM's, so the CRM can be made to match the sheet exactly.
+  // Each sheet row is paired with the CRM comp for the same tenant at the same building/address (or size), whatever
+  // its terms say, since earlier imports may have saved them wrong. Returns:
+  //   matched: [{ row, comp, existing, diffs: [{ field, crm, file }] }]   (diffs empty = already aligned)
+  //   missing: [{ row, comp, repeatOf }]   sheet rows not in the CRM (repeatOf: an earlier row for the same deal)
+  //   extras:  [{ existing, leftover }]    CRM comps of the sheet's asset classes that aren't in it; leftover = a
+  //                                         second copy of a tenant that is in the sheet (likely from an old import)
+  const COMP_FIELDS = ['building', 'address', 'city', 'submarket', 'assetClass', 'landlord', 'tenant', 'dealType', 'sf', 'signedDate', 'commencement', 'termMonths', 'leaseExpiration', 'startingRent', 'rateBasis', 'escalationPct', 'freeRentMonths', 'tiAllowance', 'opex', 'yearBuilt', 'clearHeight', 'notes'];
+  function alignComps(comps, existing) {
+    const t = (c) => tenantKey(c.tenant);
+    const near = (a, b) => t(a) && t(b) && (t(a) === t(b) || t(a).startsWith(t(b)) || t(b).startsWith(t(a)));
+    const place = (a, b) => (keyOf(a.building) && keyOf(a.building) === keyOf(b.building)) || (keyOf(a.address) && keyOf(a.address) === keyOf(b.address)) || (keyOf(a.address) && keyOf(a.address) === keyOf(b.building)) || (keyOf(a.building) && keyOf(a.building) === keyOf(b.address));
+    const size = (a, b) => parseNumber(a.sf) && Math.abs(parseNumber(a.sf) - (parseNumber(b.sf) || 0)) <= 0.02 * parseNumber(a.sf);
+    const assets = new Set(comps.map((c) => c.assetClass).filter(Boolean));
+    const pool = (existing || []).filter((e) => !assets.size || assets.has(e.assetClass) || !e.assetClass);
+    const used = new Set();
+    const same = (a, b) => {
+      const x = a === undefined || a === null ? '' : a;
+      const y = b === undefined || b === null ? '' : b;
+      if (parseNumber(x) !== null && parseNumber(y) !== null && typeof x !== 'boolean') return Math.abs(parseNumber(x) - parseNumber(y)) < 0.005;
+      return String(x).trim().toLowerCase() === String(y).trim().toLowerCase();
+    };
+    const matched = [];
+    const missing = [];
+    comps.forEach((c, i) => {
+      // Closest match first; between equal copies, keep the fuller record (it carries your own edits).
+      const score = (e) => (t(e) === t(c) ? 4 : 3) + (place(c, e) ? 2 : 0) + (size(c, e) ? 1 : 0);
+      const filled = (e) => Object.keys(e).filter((k) => e[k] !== '' && e[k] !== null && e[k] !== undefined).length;
+      const best = pool.filter((e) => !used.has(e.id) && near(c, e) && (place(c, e) || size(c, e))).sort((a, b) => score(b) - score(a) || filled(b) - filled(a))[0];
+      if (best) {
+        used.add(best.id);
+        const diffs = COMP_FIELDS.filter((f) => c[f] !== undefined && c[f] !== '' && !(c.guessed || []).includes(f) && !same(c[f], best[f])).map((f) => ({ field: f, crm: best[f] === undefined ? '' : best[f], file: c[f] }));
+        matched.push({ row: i, comp: c, existing: best, diffs });
+      } else {
+        const repeatOf = comps.findIndex((o, j) => j < i && compKey(o) === compKey(c));
+        missing.push({ row: i, comp: c, repeatOf });
+      }
+    });
+    const extras = pool.filter((e) => !used.has(e.id)).map((e) => ({ existing: e, leftover: comps.some((c) => near(c, e)) }));
+    return { matched, missing, extras };
+  }
+
   // A term like "5 years", "5 yrs", "62 mo" or a bare number of months.
   function parseTermMonths(v) {
     if (v === null || v === undefined || v === '') return null;
@@ -3311,6 +3353,8 @@
     cleanImportedComp,
     compKey,
     planCompImport,
+    alignComps,
+    COMP_FIELDS,
     parseTermMonths,
     normalizeDealType,
     SHEET_COLUMNS,
