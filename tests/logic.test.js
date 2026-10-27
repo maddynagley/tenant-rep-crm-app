@@ -1242,3 +1242,47 @@ test('alignComps: pairs sheet rows with CRM comps whatever their terms, lists di
   assert.deepEqual(a.missing.map((m) => [m.row, m.repeatOf]), [[1, -1], [2, 1]]);
   assert.deepEqual(a.extras.map((e) => [e.existing.id, e.leftover]), [['old2', true], ['other', false]]);
 });
+
+test('rentMath works out monthly rent and the increase over 5 years', () => {
+  assert.deepEqual(L.rentMath(17000, 12.75), { monthly: '$18,000', annual: '$217,000', increase: '$80,000' });
+  assert.deepEqual(L.rentMath('2,000', '$15'), { monthly: '$2,500', annual: '$30,000', increase: '$11,000' });
+  assert.equal(L.rentMath(17000, 12.75, 0.3).increase, '$50,000');
+  assert.deepEqual(L.rentMath('', 12.75), { monthly: '', annual: '', increase: '' });
+});
+
+test('bracketSlots finds the outermost bracketed notes', () => {
+  const t = 'A [fact, e.g. "[tenant] renewed"] on [day].';
+  assert.deepEqual(L.bracketSlots(t).map((b) => b.raw), ['[fact, e.g. "[tenant] renewed"]', '[day]']);
+  assert.deepEqual(L.bracketSlots('no notes'), []);
+});
+
+test('fillTemplate uses fill-ins typed in the draft dialog', () => {
+  const ctx = { company: { name: 'Acme', building: 'Uptown Park' }, contact: { firstName: 'Sam' } };
+  const t = 'With {CompBuilding} quoting {Rate} NNN, {SF} runs {MonthlyRent} a month, {AnnualIncrease} more a year. {Partner} and I, {MeetingDay}? [note]';
+  assert.equal(L.fillTemplate(t, ctx), 'With Uptown Park quoting [Rate] NNN, [SF] runs [MonthlyRent] a month, [AnnualIncrease] more a year. [Partner] and I, [MeetingDay]? [note]');
+  const inputs = { Rate: '12.75', SF: '17000', CompBuilding: 'Royal Ridge', Partner: 'Jo Smith', MeetingDay: '2026-11-10', '[note]': 'Thanks' };
+  assert.equal(
+    L.fillTemplate(t, Object.assign({ inputs }, ctx)),
+    'With Royal Ridge quoting $12.75 NNN, 17,000 SF runs $18,000 a month, $80,000 more a year. Jo Smith and I, Tuesday, Nov 10? Thanks'
+  );
+  // The company's SF and partner fill in on their own; a deal partner wins.
+  assert.equal(L.fillTemplate('{SF} {Partner}', { company: { sfOccupied: 5000, partner: 'Lee Park' } }), '5,000 SF Lee Park');
+  assert.equal(L.fillTemplate('{Partner}', { company: { partner: 'Lee Park' }, partner: 'Jo Smith' }), 'Jo Smith');
+});
+
+test('templateFillIns lists what a template needs, in order', () => {
+  const ctx = { company: { name: 'Acme', building: 'Uptown Park', sfOccupied: 17000 }, contact: { firstName: 'Sam' }, rentGrowth: 0.5 };
+  const f = L.templateFillIns('Hi {FirstName} {LastName}, {SF} runs {AnnualIncrease} more. {Partner}, [specific day]', ctx);
+  assert.deepEqual(
+    f.map((x) => [x.key, x.value]),
+    [['LastName', ''], ['SF', '17000'], ['Rate', ''], ['RentGrowth', '50'], ['Partner', ''], ['[specific day]', '']]
+  );
+  assert.equal(f.find((x) => x.key === 'SF').saveTo, 'sfOccupied');
+  assert.equal(f.find((x) => x.key === '[specific day]').label, 'specific day');
+  // A placeholder inside a bracketed note is part of that note, not a fill-in of its own.
+  assert.deepEqual(L.templateFillIns('[fact about {Submarket}]', ctx).map((x) => x.key), ['[fact about {Submarket}]']);
+});
+
+test('nextBusinessDays skips weekends', () => {
+  assert.deepEqual(L.nextBusinessDays('2026-10-30', 3), ['2026-11-02', '2026-11-03', '2026-11-04']);
+});

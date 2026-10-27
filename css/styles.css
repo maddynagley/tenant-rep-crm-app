@@ -470,3 +470,15 @@ select.inline.quiet:hover, select.inline.quiet:focus { border-color: var(--borde
 .cell-edit { display: inline-block; min-width: 40px; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; border: 1px dashed transparent; cursor: text; }
 .cell-edit:hover, .cell-edit:focus { border-color: var(--border); background: var(--panel); outline: none; }
 input.cell-input { height: 28px; font-size: 13px; padding: 0 6px; width: auto; min-width: 120px; max-width: 220px; }
+
+/* Draft email fill-ins */
+.fill-ins { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); padding: 10px 12px; }
+.fill-ins-head { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--text); }
+.fill-ins-head .hint { font-weight: 400; margin-left: 6px; }
+.fill-ins-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.fill-ins-grid .wide { grid-column: 1 / -1; }
+.fill-in-row { display: flex; gap: 6px; align-items: center; }
+.fill-in-row input { flex: 1; min-width: 0; }
+.fill-in-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.fill-in-days .btn { font-weight: 500; }
+@media (max-width: 640px) { .fill-ins-grid { grid-template-columns: 1fr; } }

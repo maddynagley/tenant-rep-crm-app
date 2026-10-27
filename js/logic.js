@@ -1440,14 +1440,130 @@
       MyFirstName: String(me.name || '').split(' ')[0],
       MyName: me.name,
       MyFirm: me.firm,
-      Partner: ctx.partner,
+      Partner: ctx.partner || c.partner,
     };
     Object.assign(values, marketValues(ctx.market, c));
-    return String(text || '').replace(/\{(\w+)\}/g, (m, key) => {
+    const inputs = ctx.inputs || {};
+    Object.keys(inputs).forEach((k) => {
+      if (/^\w+$/.test(k) && String(inputs[k] == null ? '' : inputs[k]).trim()) values[k] = inputs[k];
+    });
+    // Fill-ins that only exist in the Draft email dialog, and the rent math worked out from them.
+    const sf = parseNumber(inputs.SF) || parseNumber(c.sfOccupied);
+    if (parseNumber(inputs.SF)) values.SF = fmtNumber(parseNumber(inputs.SF)) + ' SF';
+    const rate = parseNumber(inputs.Rate);
+    const growth = parseNumber(inputs.RentGrowth);
+    const rent = rentMath(sf, rate, growth === null ? ctx.rentGrowth : growth / 100);
+    const day = parseISODate(inputs.MeetingDay);
+    Object.assign(values, {
+      Rate: rate ? '$' + rate.toFixed(2) : '',
+      CompBuilding: String(inputs.CompBuilding || '').trim() || values.Building,
+      MeetingDay: day ? day.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : '',
+      MonthlyRent: rent.monthly,
+      AnnualRent: rent.annual,
+      AnnualIncrease: rent.increase,
+    });
+    // A [bracketed note] in the template is replaced by what was typed for it.
+    const slotted = bracketSlots(text).reduceRight((t, b) => {
+      const v = String(inputs[b.raw] == null ? '' : inputs[b.raw]).trim();
+      return v ? t.slice(0, b.start) + v + t.slice(b.end) : t;
+    }, String(text || ''));
+    return slotted.replace(/\{(\w+)\}/g, (m, key) => {
       if (!(key in values)) return m;
       const v = values[key];
       return v === undefined || v === null || String(v).trim() === '' ? '[' + key + ']' : String(v).trim();
     });
+  }
+
+  // Rent at a quoted rate, and how much more that is than 5 years ago given the market's rent growth
+  // (0.6 = rents up 60%, so the old rate was rate / 1.6). Dollar amounts come back rounded and formatted.
+  const RENT_GROWTH = 0.6;
+  function rentMath(sf, rate, growth) {
+    sf = parseNumber(sf);
+    rate = parseNumber(rate);
+    if (!sf || !rate) return { monthly: '', annual: '', increase: '' };
+    const g = parseNumber(growth) === null ? RENT_GROWTH : parseNumber(growth);
+    const annual = sf * rate;
+    const money = (n, step) => '$' + fmtNumber(Math.round(n / step) * step);
+    const increase = annual * (1 - 1 / (1 + g));
+    return {
+      monthly: money(annual / 12, annual / 12 < 10000 ? 100 : 1000),
+      annual: money(annual, 1000),
+      increase: money(increase, increase < 50000 ? 1000 : 5000),
+    };
+  }
+
+  // The outermost [bracketed notes] in a template, e.g. "[specific day]" or "[fact, e.g. "[tenant] renewed"]".
+  function bracketSlots(text) {
+    const out = [];
+    let depth = 0;
+    let start = -1;
+    String(text || '').split('').forEach((ch, i) => {
+      if (ch === '[') {
+        if (depth === 0) start = i;
+        depth++;
+      } else if (ch === ']' && depth > 0) {
+        depth--;
+        if (depth === 0) out.push({ start, end: i + 1, raw: text.slice(start, i + 1), label: text.slice(start + 1, i) });
+      }
+    });
+    return out;
+  }
+
+  // What the Draft email dialog asks for before a template reads right: the rate and meeting day for templates
+  // that use them, SF and partner (which can be saved back to the company), CRM details that are blank, and each
+  // [bracketed note]. In order of first appearance; `value` is the starting value.
+  const FILL_IN_FIELDS = {
+    Rate: { label: 'Quoted rate ($/SF/yr)', type: 'number' },
+    CompBuilding: { label: 'Comp building' },
+    MeetingDay: { label: 'Meeting day', type: 'date' },
+    SF: { label: 'SF', type: 'number', saveTo: 'sfOccupied' },
+    Partner: { label: 'Partner', saveTo: 'partner' },
+    RentGrowth: { label: 'Rent growth over 5 years (%)', type: 'number' },
+  };
+  const RENT_KEYS = ['MonthlyRent', 'AnnualRent', 'AnnualIncrease'];
+  function templateFillIns(text, ctx) {
+    text = String(text || '');
+    const c = ctx.company || {};
+    const crm = fillTemplate(text.replace(/\[|\]/g, ' '), Object.assign({}, ctx, { inputs: {} }));
+    const found = [];
+    const add = (key, at, extra) => {
+      if (!found.some((f) => f.key === key)) found.push(Object.assign({ key, at }, extra));
+    };
+    const slots = bracketSlots(text);
+    const re = /\{(\w+)\}/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const key = m[1];
+      if (slots.some((b) => m.index > b.start && m.index < b.end)) continue; // part of a [bracketed note]
+      if (RENT_KEYS.includes(key)) {
+        add('Rate', m.index);
+        add('SF', m.index);
+        if (key === 'AnnualIncrease') add('RentGrowth', m.index);
+      } else if (FILL_IN_FIELDS[key]) add(key, m.index);
+      else if (crm.includes('[' + key + ']')) add(key, m.index, { label: key });
+    }
+    slots.forEach((b) => add(b.raw, b.start, { label: b.label, bracket: true }));
+    const start = {
+      SF: parseNumber(c.sfOccupied) || '',
+      Partner: ctx.partner || c.partner || '',
+      CompBuilding: c.building || c.address || '',
+      RentGrowth: Math.round((parseNumber(ctx.rentGrowth) === null ? RENT_GROWTH : parseNumber(ctx.rentGrowth)) * 100),
+    };
+    return found
+      .sort((a, b) => a.at - b.at)
+      .map((f) => Object.assign({ type: 'text' }, FILL_IN_FIELDS[f.key] || {}, f, { value: start[f.key] === undefined ? '' : String(start[f.key]) }));
+  }
+
+  // The next few weekdays after today, for picking a meeting day.
+  function nextBusinessDays(today, n) {
+    const out = [];
+    let d = today;
+    while (out.length < n) {
+      d = addDays(d, 1);
+      const wd = parseISODate(d).getDay();
+      if (wd !== 0 && wd !== 6) out.push(d);
+    }
+    return out;
   }
 
   // Picks the template that fits where the company is: a follow-up after an unanswered touch, the lease-expiration
@@ -3280,6 +3396,10 @@
     coachTips,
     TEMPLATE_STEPS,
     fillTemplate,
+    rentMath,
+    bracketSlots,
+    templateFillIns,
+    nextBusinessDays,
     suggestTemplate,
     followUpDraft,
     RECAP_TEMPLATE,

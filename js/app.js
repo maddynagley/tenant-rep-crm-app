@@ -86,6 +86,7 @@
       { key: 'city', label: 'Market / city', list: () => distinct('companies', 'city') },
       { key: 'submarket', label: 'Submarket', list: () => distinct('companies', 'submarket') },
       { key: 'sfOccupied', label: 'SF occupied', type: 'number' },
+      { key: 'partner', label: 'Partner on this account (fills {Partner} in emails)', list: () => Array.from(new Set(distinct('companies', 'partner').concat(distinct('deals', 'partnerBrokers')))).sort() },
       { key: 'headcount', label: 'Headcount', type: 'number' },
       { key: 'leaseExpiration', label: 'Lease expiration', type: 'date' },
       { key: 'landlord', label: 'Landlord / owner' },
@@ -1310,7 +1311,7 @@
       const prospecting = L.prospectTouches({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') }, { internalDomain: myEmailDomain() }).touches;
       L.outreachStats(prospecting, (a) => a.template).forEach((r) => (stats[r.key] = r));
       const list = S.all('templates').slice().sort((a, b) => L.TEMPLATE_STEPS.indexOf(a.step) - L.TEMPLATE_STEPS.indexOf(b.step) || a.name.localeCompare(b.name));
-      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. Market stats placeholders like {MarketStat}, {Vacancy}, {VacancyChange} and {AskingRent} fill in from the latest Research numbers for the company's submarket (see Market stats). They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
+      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. Market stats placeholders like {MarketStat}, {Vacancy}, {VacancyChange} and {AskingRent} fill in from the latest Research numbers for the company's submarket (see Market stats). For rent emails, {Rate}, {CompBuilding}, {MonthlyRent}, {AnnualRent}, {AnnualIncrease} and {MeetingDay} become fill-ins in the Draft email window: type the quoted rate and the rent math is done for you. So does any [bracketed note]. They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
         ${
           list.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Template</th><th>When</th><th>Subject</th><th class="right">Sent</th><th class="right">Response rate</th></tr></thead><tbody>${list
@@ -3007,7 +3008,7 @@
     const p = S.get('contacts', contactId) || {};
     const deal = S.get('deals', dealId) || S.all('deals').find((d) => d.companyId === companyId && L.OPEN_STAGES.includes(d.stage));
     const st = S.settings();
-    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: deal && deal.partnerBrokers, deal, market: L.marketStatFor(S.settings().marketStats || [], c, S.settings().marketReports), today: L.todayISO() };
+    return { company: c, contact: p, me: { name: st.brokerName, firm: st.myFirm }, partner: (deal && deal.partnerBrokers) || c.partner, rentGrowth: st.rentGrowth, deal, market: L.marketStatFor(S.settings().marketStats || [], c, S.settings().marketReports), today: L.todayISO() };
   }
 
   // Who to call and their numbers, with click-to-call, copy, and logging the call.
@@ -3066,6 +3067,7 @@
           )}</select></label>
           <label class="wide">Cc<span class="draft-to"><input name="cc" placeholder="Optional" /><button type="button" class="btn small" data-action="copy-draft-cc" title="Copy the cc addresses">Copy</button></span></label>
           <p class="hint wide" id="draft-why"></p>
+          <div class="wide fill-ins" id="draft-fillins" hidden></div>
           <label class="wide">Subject<input name="subject" /></label>
           <label class="wide">Body<textarea name="body" rows="14"></textarea></label>
           <p class="hint wide">Anything in [brackets] is missing from the CRM. Fill it in here, or on the company, before sending.</p>
@@ -3103,13 +3105,53 @@
       if (!(ctx.deal && L.OPEN_STAGES.includes(ctx.deal.stage)) && f.dataset.replySubject) draft.subject = f.dataset.replySubject;
     } else {
       const t = S.get('templates', f.elements.template.value);
+      renderFillIns(t, ctx);
+      ctx.inputs = readFillIns();
       draft = { subject: f.dataset.replySubject || L.fillTemplate(t.subject, ctx), body: L.fillTemplate(t.body, ctx), why: '' };
     }
+    if (!S.get('templates', f.elements.template.value)) renderFillIns(null, ctx);
     f.elements.subject.value = draft.subject;
     f.elements.body.value = draft.body;
     f.elements.cc.value = draft.cc || '';
     $('#draft-why').textContent = draft.why;
     $('#draft-why').hidden = !draft.why;
+    updateDraftLink();
+  }
+  // Fill-ins for the chosen template (rate, meeting day, SF, partner, blank CRM details, [bracketed notes]).
+  // Typing in one rewrites the subject and body.
+  function renderFillIns(t, ctx) {
+    const box = $('#draft-fillins');
+    const fields = t ? L.templateFillIns((t.subject || '') + '\n' + (t.body || ''), ctx) : [];
+    box.hidden = !fields.length;
+    if (!fields.length) {
+      box.innerHTML = '';
+      return;
+    }
+    const days = L.nextBusinessDays(L.todayISO(), 5);
+    const dayLabel = (iso) => L.parseISODate(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    box.innerHTML = `<p class="fill-ins-head">Fill-ins <span class="hint">Typing here rewrites the subject and body, so make other edits last.</span></p>
+      <div class="fill-ins-grid">${fields
+        .map(
+          (f) => `<label${f.bracket ? ' class="wide"' : ''}>${esc(f.bracket ? L.fillTemplate(f.label, ctx) : f.label)}
+          <span class="fill-in-row"><input data-fill-in="${esc(f.key)}" type="${f.type === 'date' ? 'date' : 'text'}"${f.type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(f.value)}" />${
+            f.saveTo ? `<button type="button" class="btn small" data-action="save-fill-in" data-field="${f.saveTo}" data-key="${esc(f.key)}" title="Save to the company so it fills in next time">Save to company</button>` : ''
+          }</span>${f.type === 'date' ? `<span class="fill-in-days">${days.map((d) => `<button type="button" class="btn small" data-action="pick-day" data-day="${d}">${esc(dayLabel(d))}</button>`).join('')}</span>` : ''}
+        </label>`
+        )
+        .join('')}</div>`;
+  }
+  function readFillIns() {
+    const inputs = {};
+    document.querySelectorAll('#draft-fillins [data-fill-in]').forEach((el) => (inputs[el.dataset.fillIn] = el.value));
+    return inputs;
+  }
+  function refillTemplateDraft() {
+    const f = $('#draft-form');
+    const t = S.get('templates', f.elements.template.value);
+    if (!t) return;
+    const ctx = Object.assign(draftContext(f.dataset.company, f.elements.contact.value, f.dataset.deal), { inputs: readFillIns() });
+    f.elements.subject.value = f.dataset.replySubject || L.fillTemplate(t.subject, ctx);
+    f.elements.body.value = L.fillTemplate(t.body, ctx);
     updateDraftLink();
   }
   function updateDraftLink() {
@@ -4057,6 +4099,20 @@
           if (cc) navigator.clipboard.writeText(cc).then(() => toast('Copied ' + cc + '.'));
           return;
         }
+        case 'save-fill-in': {
+          const f = $('#draft-form');
+          const el = f.querySelector(`[data-fill-in="${CSS.escape(d.key)}"]`);
+          const v = el.value.trim();
+          S.upsert('companies', { id: f.dataset.company, [d.field]: d.field === 'sfOccupied' ? L.parseNumber(v) : v });
+          toast('Saved to the company. It will fill in next time.');
+          return;
+        }
+        case 'pick-day': {
+          const el = $('#draft-fillins [type="date"]');
+          el.value = d.day;
+          refillTemplateDraft();
+          return;
+        }
         case 'copy-draft': {
           const f = $('#draft-form');
           navigator.clipboard.writeText('Subject: ' + f.elements.subject.value + '\n\n' + f.elements.body.value).then(() => toast('Copied. Paste it into Outlook.'));
@@ -4277,12 +4333,15 @@
   document.addEventListener('input', (e) => {
     if (e.target.classList.contains('ref-search')) renderRefMenu(e.target);
     if (e.target.closest('#draft-form') && ['subject', 'body', 'cc'].includes(e.target.name)) updateDraftLink();
+    if (e.target.dataset && e.target.dataset.fillIn !== undefined) refillTemplateDraft();
     if (e.target.type === 'search') onFilterChange(e);
   });
   // Inline table edits: a quiet dropdown saves on change; a text cell becomes an input when clicked.
   document.addEventListener('change', (e) => {
     const d = e.target.dataset || {};
     if (d.inlineCol) saveInline(d.inlineCol, d.inlineId, d.inlineField, e.target.value);
+    // The rent growth behind {AnnualIncrease} is remembered for every draft.
+    if (d.fillIn === 'RentGrowth' && L.parseNumber(e.target.value) !== null) S.saveSettings({ rentGrowth: L.parseNumber(e.target.value) / 100 });
   });
   function openCellEdit(cell) {
     const d = cell.dataset;
