@@ -1105,3 +1105,16 @@ test('market stats: CRM submarket names match the report\'s, with Research talki
   assert.equal(v.ResearchNote, 'The vacancy rate fell 70 bps to 32.2%.');
   assert.equal(v.MarketTrend, 'Rents hit a new high.');
 });
+
+test('comp import: an earlier copy missing its rent is updated, not held; OpEx is read', () => {
+  const broken = { id: 'c1', building: 'The Tower', tenant: 'Acme', sf: 4495, termMonths: 84, escalationPct: 0 };
+  const row = L.cleanImportedComp({ building: 'The Tower', tenant: 'Acme', sf: '4495', termMonths: '7', startingRent: '41', escalationPct: '0', opex: '$11.25' }, { termUnit: 'months' });
+  assert.deepEqual([row.termMonths, row.startingRent, row.escalationPct, row.opex], [7, 41, 0, 11.25]);
+  const [plan] = L.planCompImport([row], [broken]);
+  assert.equal(plan.status, 'duplicate');
+  assert.match(plan.reason, /missing its rent/);
+  // With its rent on file, different terms still need a decision.
+  assert.equal(L.planCompImport([row], [Object.assign({}, broken, { startingRent: 38 })])[0].status, 'possible');
+  const res = L.rowsToRecords([['Building', 'Tenant', 'OpEx ($/SF)', 'Rent'], ['X', 'Y', '9.50', '30']], L.COMP_IMPORT_ALIASES);
+  assert.equal(res.records[0].opex, '9.50');
+});

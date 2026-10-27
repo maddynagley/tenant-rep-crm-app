@@ -309,6 +309,7 @@
     { key: 'escalationPct', label: 'Annual escalation %', type: 'number', step: '0.1' },
     { key: 'freeRentMonths', label: 'Free rent (months)', type: 'number' },
     { key: 'tiAllowance', label: 'TI allowance ($/SF)', type: 'number', step: '0.01' },
+    { key: 'opex', label: 'Operating expenses ($/SF/yr)', type: 'number', step: '0.01' },
     // Internal comps are labeled with your firm's name (Import / Settings → Your firm).
     { key: 'source', label: 'Source', type: 'select', get options() { return ['My deal', S.settings().myFirm || 'My firm', 'Outside broker', 'CoStar', 'Research']; } },
     { key: 'confidential', label: 'Confidential (internal use only)', type: 'checkbox' },
@@ -1433,8 +1434,10 @@
       <section class="card"><h2>Lease rights & options <span class="muted">${rights.length}</span> <button class="link more" data-action="new" data-col="criticalDates">+ Add</button></h2>
         <p class="hint">Renewal, termination, expansion and contraction options, ROFO/ROFR and other rights for any tenant: clients, prospects or companies you're watching.</p>
         ${rights.length ? criticalDatesTable(rights, true) : emptyState('None tracked yet. Add them here or from a company page.')}</section>`;
+    // OpEx gets its own column once any comp has it.
+    const showOpex = comps.some((c) => L.parseNumber(c.opex));
     const compTable = comps.length
-      ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th><th>LXD</th><th>Source</th></tr></thead><tbody>${comps
+      ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th>${showOpex ? '<th class="right">OpEx</th>' : ''}<th>LXD</th><th>Source</th></tr></thead><tbody>${comps
           .map(
             (c) => `<tr class="clickable" data-action="edit" data-col="comps" data-id="${esc(c.id)}">
             <td><strong>${esc(c.building)}</strong>${c.confidential ? ' ' + badge('Confidential', 'red') : ''}<div class="sub">${esc([c.address, c.city, c.submarket].filter(Boolean).join(' · '))}</div>${c.clearHeight || c.yearBuilt || c.landlord ? `<div class="sub">${esc([c.clearHeight ? c.clearHeight + "' clear" : '', c.yearBuilt ? 'Built ' + c.yearBuilt : '', c.landlord ? 'LL: ' + c.landlord : ''].filter(Boolean).join(' · '))}</div>` : ''}</td>
@@ -1442,8 +1445,8 @@
             <td class="right">${esc(L.fmtNumber(c.sf))}</td><td class="nowrap">${esc(L.fmtDate(c.signedDate))}</td>
             <td class="right">${c.termMonths ? esc(c.termMonths) + ' mo' : ''}</td>
             <td class="right nowrap">${c.startingRent ? '$' + esc(Number(c.startingRent).toFixed(2)) + ' <span class="muted">' + esc(String(c.rateBasis || '').replace(/\s*\(.*\)/, '')) + '</span>' : ''}</td>
-            <td class="right">${c.escalationPct ? esc(c.escalationPct) + '%' : ''}</td><td class="right">${c.freeRentMonths ? esc(c.freeRentMonths) + ' mo' : ''}</td>
-            <td class="right">${c.tiAllowance ? '$' + esc(c.tiAllowance) : ''}</td><td class="nowrap">${compLXDCell(c)}</td><td>${esc(c.source)}</td></tr>`
+            <td class="right nowrap">${c.escalationPct ? esc(c.escalationPct) + '%' : c.escalationPct === 0 || c.escalationPct === '0' ? '0% <span class="sub">flat</span>' : ''}</td><td class="right">${c.freeRentMonths ? esc(c.freeRentMonths) + ' mo' : ''}</td>
+            <td class="right">${c.tiAllowance ? '$' + esc(c.tiAllowance) : ''}</td>${showOpex ? `<td class="right">${c.opex ? '$' + esc(Number(c.opex).toFixed(2)) : ''}</td>` : ''}<td class="nowrap">${compLXDCell(c)}</td><td>${esc(c.source)}</td></tr>`
           )
           .join('')}</tbody></table></div>`
       : S.all('comps').length

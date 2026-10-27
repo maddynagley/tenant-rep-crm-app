@@ -2403,6 +2403,7 @@
     rateBasis: ['rent basis', 'rate basis', 'rate type', 'basis', 'service type', 'lease structure', 'expense structure', 'rent type'],
     escalationPct: ['escalation', 'escalations', 'annual escalation', 'bumps', 'annual increase', 'esc', 'rent escalation', 'increases'],
     freeRentMonths: ['free rent', 'free rent months', 'free rent mos', 'abatement', 'free', 'rent abatement', 'abated rent'],
+    opex: ['opex', 'op ex', 'op exp', 'opex/sf', 'opex psf', 'operating expenses', 'operating expense', 'operating expenses/sf', 'expenses', 'est opex', 'estimated opex', 'nnn charges', 'nnns', 'nnn expenses', 'cam', 'cam charges', 'additional rent', 'pass throughs', 'pass-throughs'],
     tiAllowance: ['ti', 'ti allowance', 'tis', 'ti/sf', 'ti psf', 'tenant improvements', 'tia', 'improvement allowance', 'work letter'],
     source: ['source'],
     notes: ['notes', 'comments', 'remarks', 'note'],
@@ -2438,7 +2439,7 @@
     // "Lease type" columns often hold the rent basis (Full Service, NNN) rather than the deal type.
     const basisInType = rec.dealType && normalizeRateBasis(rec.dealType, '') && !normalizeDealType(String(rec.dealType).replace(/lease/i, ''));
     if (rec.dealType && !basisInType && normalizeDealType(rec.dealType)) out.dealType = normalizeDealType(rec.dealType);
-    ['sf', 'yearBuilt', 'clearHeight', 'tiAllowance', 'freeRentMonths', 'escalationPct'].forEach((k) => {
+    ['sf', 'yearBuilt', 'clearHeight', 'tiAllowance', 'freeRentMonths', 'escalationPct', 'opex'].forEach((k) => {
       const n = firstNumber(rec[k]);
       if (n !== null) out[k] = n;
     });
@@ -2486,7 +2487,7 @@
   }
   // Terms agree when every term both comps have is the same (a blank on either side doesn't count against it).
   function sameTerms(a, b) {
-    return ['startingRent', 'termMonths', 'escalationPct', 'freeRentMonths', 'tiAllowance', 'sf'].every((k) => {
+    return ['startingRent', 'termMonths', 'escalationPct', 'freeRentMonths', 'tiAllowance', 'opex', 'sf'].every((k) => {
       const x = parseNumber(a[k]);
       const y = parseNumber(b[k]);
       return x === null || y === null || Math.abs(x - y) < 0.005;
@@ -2506,6 +2507,9 @@
       const check = (list, where) => {
         const exact = list.find((o) => compKey(o) === compKey(c));
         if (exact && sameTerms(exact, c)) return { status: 'duplicate', where, match: exact, reason: 'Same tenant, building, size and terms' };
+        // The same deal saved earlier without its rent (e.g. from an older import): fill it in rather than hold it.
+        if (exact && where === 'crm' && parseNumber(exact.startingRent) === null && parseNumber(c.startingRent) !== null)
+          return { status: 'duplicate', where, match: exact, reason: 'Same deal; the CRM copy is missing its rent and terms' };
         const close = exact || list.find((o) => near(o) && sameSpace(o));
         if (close) {
           const diffs = [];
