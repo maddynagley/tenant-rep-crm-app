@@ -662,6 +662,29 @@
     return `<th class="sortable${on ? ' on' : ''}${cls ? ' ' + cls : ''}" data-action="sort-by" data-scope="${scope}" data-key="${key}" aria-sort="${dir ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}" title="Sort by ${esc(label.toLowerCase())}">${esc(label)}<span class="sort-arrow">${dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : ''}</span></th>`;
   }
 
+  // Edit in place in list tables. Choices are quiet dropdowns; dates, numbers and text show as text and turn into an
+  // input when clicked, saving on Enter or when you click away (Esc cancels).
+  function inlineSelect(col, id, field, list, value, blank) {
+    return `<select class="inline quiet" data-inline-col="${col}" data-inline-id="${esc(id)}" data-inline-field="${field}" aria-label="${esc(field)}">${options(list, value, blank)}</select>`;
+  }
+  function editCell(col, id, field, type, value, display) {
+    return `<span class="cell-edit" tabindex="0" role="button" title="Click to edit" data-edit-col="${col}" data-edit-id="${esc(id)}" data-edit-field="${field}" data-edit-type="${type}" data-edit-value="${esc(value === undefined || value === null ? '' : value)}">${display || '<span class="muted">—</span>'}</span>`;
+  }
+  function saveInline(col, id, field, raw) {
+    const rec = S.get(col, id);
+    if (!rec) return;
+    let value = raw;
+    if (['sfOccupied', 'sf', 'headcount'].includes(field)) value = L.parseNumber(raw) === null ? '' : L.parseNumber(raw);
+    if (String(rec[field] === undefined || rec[field] === null ? '' : rec[field]) === String(value)) return render();
+    if (col === 'deals' && field === 'stage') {
+      const patch = { id, stage: value };
+      if (value === 'Closed Won' && !rec.closedDate) patch.closedDate = L.todayISO();
+      if (value === 'Closed Won' && rec.stage !== 'Closed Won') celebrate();
+      S.upsert('deals', patch);
+    } else S.upsert(col, { id, [field]: value });
+    toast('Saved.');
+  }
+
   function assetTabs(current, scope) {
     return `<div class="seg" role="tablist">${['All', 'Office', 'Industrial']
       .map((a) => `<button class="${current === a ? 'on' : ''}" data-action="set-filter" data-scope="${scope}" data-key="asset" data-value="${a}">${a}</button>`)
@@ -1744,16 +1767,17 @@
       ${
         rows.length
           ? `<div class="table-wrap"><table class="tbl">
-          <thead><tr>${sortHead('leads', 'name', 'Company')}${sortHead('leads', 'stage', 'Stage')}${sortHead('leads', 'temp', 'Temp.')}${sortHead('leads', 'sf', 'RSF', 'right')}${sortHead('leads', 'expiration', 'Lease expiration')}${sortHead('leads', 'lastTouch', 'Last touch')}<th>Best contact</th></tr></thead>
+          <thead><tr>${sortHead('leads', 'name', 'Company')}<th>Asset</th>${sortHead('leads', 'stage', 'Stage')}${sortHead('leads', 'temp', 'Temp.')}${sortHead('leads', 'sf', 'RSF', 'right')}${sortHead('leads', 'expiration', 'Lease expiration')}${sortHead('leads', 'lastTouch', 'Last touch')}<th>Best contact</th></tr></thead>
           <tbody>${shown
             .map(({ c, last }) => {
               const p = (contactsBy[c.id] || []).slice().sort((a, b) => (b.role === 'Decision Maker') - (a.role === 'Decision Maker') || Boolean(b.email) - Boolean(a.email))[0];
               return `<tr data-href="#/company/${esc(c.id)}">
-              <td><strong>${esc(c.name)}</strong> <span class="icon-row">${summarizeIcon('companies', c.id)}${emailIcon(c.id, p ? p.id : '')}</span> ${assetBadge(c.assetClass)}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
+              <td><strong>${esc(c.name)}</strong> <span class="icon-row">${summarizeIcon('companies', c.id)}${emailIcon(c.id, p ? p.id : '')}</span><div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
+              <td>${inlineSelect('companies', c.id, 'assetClass', L.ASSET_CLASSES, c.assetClass, '—')}</td>
               <td><select class="inline" data-lead-stage="${esc(c.id)}">${options(L.LEAD_STAGES, L.leadStage(c))}</select></td>
               <td><select class="inline" data-lead-temp="${esc(c.id)}">${options(L.LEAD_TEMPS, c.leadTemp, '—')}</select></td>
-              <td class="right">${c.sfOccupied ? esc(L.fmtNumber(c.sfOccupied)) : '<span class="muted">—</span>'}</td>
-              <td>${expirationBadge(c.leaseExpiration)}</td>
+              <td class="right">${editCell('companies', c.id, 'sfOccupied', 'number', c.sfOccupied, c.sfOccupied ? esc(L.fmtNumber(c.sfOccupied)) : '')}</td>
+              <td>${editCell('companies', c.id, 'leaseExpiration', 'date', c.leaseExpiration, c.leaseExpiration ? expirationBadge(c.leaseExpiration) : '')}</td>
               <td>${last ? esc(L.fmtDate(last)) : '<span class="muted">Never</span>'}</td>
               <td>${p ? `${esc(contactName(p))}<div class="sub">${esc(p.title)}</div>` : '<span class="muted">None yet</span>'}</td></tr>`;
             })
@@ -1918,11 +1942,11 @@
               ({ c, score, last }) => `<tr data-href="#/company/${esc(c.id)}">
               <td>${scoreChip(score)}</td>
               <td><strong>${esc(c.name)}</strong> <span class="icon-row">${summarizeIcon('companies', c.id)}${emailIcon(c.id, '')}</span> ${c.priority ? badge(c.priority, 'prio') : ''}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
-              <td>${assetBadge(c.assetClass)}</td>
-              <td>${statusBadge(c.status)}</td>
-              <td>${esc(c.submarket)}</td>
-              <td class="right">${esc(L.fmtNumber(c.sfOccupied))}</td>
-              <td>${expirationBadge(c.leaseExpiration)}${shouldBeInMarket(c) ? ' <span class="flag" title="Inside typical lead time and not engaged">⚑</span>' : ''}</td>
+              <td>${inlineSelect('companies', c.id, 'assetClass', L.ASSET_CLASSES, c.assetClass, '—')}</td>
+              <td>${inlineSelect('companies', c.id, 'status', L.COMPANY_STATUSES, c.status, '—')}</td>
+              <td>${editCell('companies', c.id, 'submarket', 'text', c.submarket, esc(c.submarket))}</td>
+              <td class="right">${editCell('companies', c.id, 'sfOccupied', 'number', c.sfOccupied, esc(L.fmtNumber(c.sfOccupied)))}</td>
+              <td>${editCell('companies', c.id, 'leaseExpiration', 'date', c.leaseExpiration, c.leaseExpiration ? expirationBadge(c.leaseExpiration) : '')}${shouldBeInMarket(c) ? ' <span class="flag" title="Inside typical lead time and not engaged">⚑</span>' : ''}</td>
               <td>${last ? esc(L.fmtDate(last)) : '<span class="muted">Never</span>'}</td></tr>`
             )
             .join('')}</tbody></table></div>
@@ -2198,9 +2222,9 @@
               (c) => `<tr>
               <td><strong>${esc(contactName(c))}</strong> ${verificationBadge(c.verification)}<div class="sub">${esc(c.title)}</div></td>
               <td>${linkCompany(c.companyId)}</td>
-              <td>${c.role ? badge(c.role, c.role === 'Decision Maker' ? 'green' : 'gray') : ''}</td>
-              <td>${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ''}</td>
-              <td class="nowrap">${phoneLink(c.phone, c.phoneDNC)}${c.mobile ? `<div class="sub">${phoneLink(c.mobile, c.mobileDNC, '(m)')}</div>` : ''}</td>
+              <td>${inlineSelect('contacts', c.id, 'role', FIELDS.contacts.find((x) => x.key === 'role').options, c.role, '—')}</td>
+              <td>${editCell('contacts', c.id, 'email', 'email', c.email, esc(c.email))}${c.email ? ` <a class="icon-btn" href="mailto:${esc(c.email)}" title="Email">↗</a>` : ''}</td>
+              <td class="nowrap">${editCell('contacts', c.id, 'phone', 'tel', c.phone, c.phone ? esc(c.phone) + (c.phoneDNC ? ' ' + badge('DNC', 'red') : '') : '')}${c.mobile ? `<div class="sub">${phoneLink(c.mobile, c.mobileDNC, '(m)')}</div>` : ''}</td>
               <td>${touches[c.id] ? esc(L.fmtDate(touches[c.id])) : '<span class="muted">Never</span>'}</td>
               <td class="right nowrap">${c.linkedin ? `<a class="icon-btn" href="${esc(c.linkedin)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}
                 <button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(c.companyId)}" data-contact="${esc(c.id)}" title="Log activity">Log</button>
@@ -2256,12 +2280,12 @@
           .map((d) => {
             const est = L.estimatedCommission(d);
             return `<tr data-href="#/deal/${esc(d.id)}"><td><strong>${esc(d.name)}</strong> ${L.OPEN_STAGES.includes(d.stage) ? emailIcon(d.companyId, '', { deal: d.id }) : ''}<div class="sub">${esc(companyName(d.companyId))}</div></td>
-              <td>${esc(d.dealType)}</td><td>${assetBadge(d.assetClass)}</td><td>${esc(d.stage)}</td>
+              <td>${inlineSelect('deals', d.id, 'dealType', L.DEAL_TYPES, d.dealType, '—')}</td><td>${inlineSelect('deals', d.id, 'assetClass', L.ASSET_CLASSES, d.assetClass)}</td><td>${inlineSelect('deals', d.id, 'stage', L.DEAL_STAGES.map((x) => x.name), d.stage)}</td>
               <td class="right nowrap">${esc(L.dealSizeLabel(d)) || badge('Add RSF', 'amber')}${L.dealOfficeLabel(d) ? `<div class="sub">${esc(L.dealOfficeLabel(d))}</div>` : ''}</td>
               <td class="right">${L.fmtMoney(est.aggregateValue, true)}</td>
               <td class="right">${L.fmtMoney(est.myShare)}</td>
               <td class="right">${L.dealProbability(d)}%</td>
-              <td>${esc(L.fmtDate(d.targetClose))}</td></tr>`;
+              <td>${editCell('deals', d.id, 'targetClose', 'date', d.targetClose, esc(L.fmtDate(d.targetClose)))}</td></tr>`;
           })
           .join('')}</tbody></table></div>`;
     }
@@ -3860,6 +3884,11 @@
   // ---------- events ----------
 
   document.addEventListener('click', (e) => {
+    const cell = e.target.closest && e.target.closest('.cell-edit');
+    if (cell) {
+      e.preventDefault();
+      return openCellEdit(cell);
+    }
     if (e.target.id === 'draft-open') {
       // Remember which template this email came from, so it's tagged when HubSpot logs it (or when you tap ✓ Emailed).
       const f = $('#draft-form');
@@ -4200,7 +4229,7 @@
       return;
     }
     const row = e.target.closest('tr[data-href]');
-    if (row && !e.target.closest('a, button, input, select')) location.hash = row.dataset.href;
+    if (row && !e.target.closest('a, button, input, select, .cell-edit')) location.hash = row.dataset.href;
   });
 
   function onFilterChange(e) {
@@ -4250,6 +4279,42 @@
     if (e.target.closest('#draft-form') && ['subject', 'body', 'cc'].includes(e.target.name)) updateDraftLink();
     if (e.target.type === 'search') onFilterChange(e);
   });
+  // Inline table edits: a quiet dropdown saves on change; a text cell becomes an input when clicked.
+  document.addEventListener('change', (e) => {
+    const d = e.target.dataset || {};
+    if (d.inlineCol) saveInline(d.inlineCol, d.inlineId, d.inlineField, e.target.value);
+  });
+  function openCellEdit(cell) {
+    const d = cell.dataset;
+    const input = document.createElement('input');
+    // Numbers go in a text box so "12,500" can be typed; they're saved as numbers.
+    input.type = d.editType === 'number' ? 'text' : d.editType;
+    if (d.editType === 'number') input.inputMode = 'decimal';
+    input.className = 'inline cell-input';
+    input.value = d.editValue;
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      if (save) saveInline(d.editCol, d.editId, d.editField, input.value.trim());
+      else render();
+    };
+    input.addEventListener('keydown', (k) => {
+      if (k.key === 'Enter') finish(true);
+      if (k.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+    cell.replaceWith(input);
+    input.focus();
+    if (input.select && input.type !== 'date') input.select();
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('cell-edit')) {
+      e.preventDefault();
+      openCellEdit(e.target);
+    }
+  });
+
   document.addEventListener('change', (e) => {
     if (e.target.dataset.filter && e.target.type !== 'search') onFilterChange(e);
     if (e.target.closest('#draft-form') && ['template', 'contact'].includes(e.target.name)) fillDraft();

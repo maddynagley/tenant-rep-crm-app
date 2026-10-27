@@ -463,3 +463,10 @@ button.kpi-drill { text-align: left; font: inherit; cursor: pointer; }
 button.kpi-drill:hover { border-color: var(--accent); }
 button.kpi-drill.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .kpi-more { font-size: 11px; color: var(--accent); margin-top: 6px; }
+
+/* Edit in place in tables */
+select.inline.quiet { border-color: transparent; background-color: transparent; padding: 0 2px; max-width: 170px; cursor: pointer; }
+select.inline.quiet:hover, select.inline.quiet:focus { border-color: var(--border); background-color: var(--panel); }
+.cell-edit { display: inline-block; min-width: 40px; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; border: 1px dashed transparent; cursor: text; }
+.cell-edit:hover, .cell-edit:focus { border-color: var(--border); background: var(--panel); outline: none; }
+input.cell-input { height: 28px; font-size: 13px; padding: 0 6px; width: auto; min-width: 120px; max-width: 220px; }
