@@ -1569,7 +1569,7 @@
             .map(
               ({ c, score, last }) => `<tr data-href="#/company/${esc(c.id)}">
               <td>${scoreChip(score)}</td>
-              <td><strong>${esc(c.name)}</strong> ${c.priority ? badge(c.priority, 'prio') : ''}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
+              <td><strong>${esc(c.name)}</strong> <span class="icon-row">${summarizeIcon('companies', c.id)}${emailIcon(c.id, '')}</span> ${c.priority ? badge(c.priority, 'prio') : ''}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
               <td>${assetBadge(c.assetClass)}</td>
               <td>${statusBadge(c.status)}</td>
               <td>${esc(c.submarket)}</td>
