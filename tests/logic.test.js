@@ -1339,3 +1339,18 @@ test('quotedRateList lists saved quotes with their age', () => {
   assert.deepEqual(all.map((r) => [r.building, r.text, r.stale]), [['Acme Tower', '$28.00 full service', false], ['Uptown Park', '$12.75 NNN', true]]);
   assert.deepEqual(L.quotedRateList(rates, 'uptown', '2026-10-27').map((r) => r.key), ['uptown park']);
 });
+
+test('meeting days read as one, two or three dates', () => {
+  assert.equal(L.meetingDays('2026-11-10'), 'Tuesday, Nov 10');
+  assert.equal(L.meetingDays('2026-11-11,2026-11-10'), 'Tuesday, Nov 10 or Wednesday, Nov 11');
+  assert.equal(L.meetingDays('2026-11-10,2026-11-11,2026-11-12'), 'Tuesday, Nov 10, Wednesday, Nov 11 or Thursday, Nov 12');
+  assert.equal(L.meetingDays(''), '');
+});
+
+test('the standard closing switches to first person when working alone', () => {
+  const close = "We'd love 15 minutes to see if we can help your team find the right long-term option. How does {MeetingDay} look for a brief call with our team?";
+  assert.equal(
+    L.fillTemplate(close, { company: { partner: 'None' }, inputs: { MeetingDay: '2026-11-10' } }),
+    "I'd love 15 minutes to see if I can help your team find the right long-term option. How does Tuesday, Nov 10 look for a brief call?"
+  );
+});

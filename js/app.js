@@ -1609,18 +1609,37 @@
   function quotedRates(q) {
     const list = L.quotedRateList(S.settings().buildingRates || {}, q, L.todayISO());
     const total = Object.keys(S.settings().buildingRates || {}).length;
+    const buildings = Array.from(
+      new Set(
+        S.all('companies')
+          .map((c) => c.building)
+          .concat(S.all('comps').map((c) => c.building), Object.values(S.settings().buildingRates || {}).map((r) => r.building))
+          .filter(Boolean)
+      )
+    ).sort();
+    const form = `<form id="quote-form" class="quote-form">
+        <input type="hidden" name="key" />
+        <label>Building<input name="building" list="quote-buildings" placeholder="e.g. Royal Woods" required /></label>
+        <label>Rate ($/SF/yr)<input name="rate" inputmode="decimal" placeholder="12.75" required /></label>
+        <label>Type<select name="basis">${options(L.QUOTE_BASES, 'NNN')}</select></label>
+        <label id="quote-opex" hidden>OpEx ($/SF/yr)<input name="opex" inputmode="decimal" placeholder="3.50" /></label>
+        <label>Date quoted<input type="date" name="date" value="${L.todayISO()}" /></label>
+        <span class="quote-form-buttons"><button type="submit" class="btn primary">Save quote</button><button type="button" class="btn" data-action="clear-quote" hidden>Cancel edit</button></span>
+        <datalist id="quote-buildings">${buildings.map((b) => `<option value="${esc(b)}"></option>`).join('')}</datalist>
+      </form>`;
     return `<section class="card"><h2>Quoted rates</h2>
-      <p class="hint">What each building is quoting, saved when you type a rate in the Draft email window. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; typing the rate again in a draft restarts the clock.</p>
+      <p class="hint">What each building is quoting. Add one here, or type a rate in the Draft email window and it's saved for that building. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; saving the rate again restarts the clock.</p>
+      ${form}
       ${
         list.length
           ? `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Building</th><th class="right">Quote</th><th>Saved</th><th></th><th></th></tr></thead><tbody>${list
               .map(
                 (r) => `<tr><td><strong>${esc(r.building)}</strong></td><td class="right nowrap">${esc(r.text)}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
               <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : `<span class="muted">${r.ageMonths ? r.ageMonths + ' mo ago' : 'This month'}</span>`}</td>
-              <td class="right"><button class="btn small" data-action="delete-quote" data-key="${esc(r.key)}">Remove</button></td></tr>`
+              <td class="right nowrap"><button class="btn small" data-action="edit-quote" data-key="${esc(r.key)}">Edit</button> <button class="btn small" data-action="delete-quote" data-key="${esc(r.key)}">Remove</button></td></tr>`
               )
               .join('')}</tbody></table></div>`
-          : emptyState(total ? 'No saved quotes match that search.' : 'No quotes saved yet. Type a quoted rate in the Draft email window and it shows up here.')
+          : emptyState(total ? 'No saved quotes match that search.' : 'No quotes saved yet. Add one above, or type a quoted rate in the Draft email window.')
       }</section>`;
   }
 
@@ -3162,8 +3181,6 @@
       box.innerHTML = '';
       return;
     }
-    const days = L.nextBusinessDays(L.todayISO(), 5);
-    const dayLabel = (iso) => L.parseISODate(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
     box.innerHTML = `<p class="fill-ins-head">Fill-ins <span class="hint">Typing here rewrites the subject and body, so make other edits last.</span></p>
       <div class="fill-ins-grid">${fields
         .map(
@@ -3171,10 +3188,12 @@
           <span class="fill-in-row">${
             f.type === 'select'
               ? `<select data-fill-in="${esc(f.key)}">${options(f.options, f.value)}</select>`
-              : `<input data-fill-in="${esc(f.key)}" type="${f.type === 'date' ? 'date' : 'text'}"${f.type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(f.value)}" />`
+              : f.type === 'date'
+                ? `<input type="hidden" data-fill-in="${esc(f.key)}" value="${esc(f.value)}" /><input type="date" id="add-day" title="Add another day" />`
+                : `<input data-fill-in="${esc(f.key)}" type="text"${f.type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(f.value)}" />`
           }${
             f.saveTo ? `<button type="button" class="btn small" data-action="save-fill-in" data-field="${f.saveTo}" data-key="${esc(f.key)}" title="Save to the company so it fills in next time">Save to company</button>` : ''
-          }</span>${f.solo ? `<label class="check fill-in-solo"><input type="checkbox" data-fill-in="Solo"${f.checked ? ' checked' : ''} /> Working this one alone (no partner)</label>` : ''}${f.key === 'Rate' ? `<span class="fill-in-note${f.stale ? ' stale' : ''}" id="rate-note">${esc(f.note || 'Saved for this building when you leave the box, so the next tenant there starts with it.')}</span>` : ''}${f.type === 'date' ? `<span class="fill-in-days">${days.map((d) => `<button type="button" class="btn small" data-action="pick-day" data-day="${d}">${esc(dayLabel(d))}</button>`).join('')}</span>` : ''}
+          }</span>${f.solo ? `<label class="check fill-in-solo"><input type="checkbox" data-fill-in="Solo"${f.checked ? ' checked' : ''} /> Working this one alone (no partner)</label>` : ''}${f.key === 'Rate' ? `<span class="fill-in-note${f.stale ? ' stale' : ''}" id="rate-note">${esc(f.note || 'Saved for this building when you leave the box, so the next tenant there starts with it.')}</span>` : ''}${f.type === 'date' ? `<span class="fill-in-days" id="fill-in-days">${dayChips(f.value)}</span><span class="fill-in-note">Tap 1 to 3 days; they read as "Tuesday, Nov 3 or Wednesday, Nov 4".</span>` : ''}
         </${f.solo ? 'div' : 'label'}>`
         )
         .join('')}</div>`;
@@ -3207,6 +3226,22 @@
     const note = $('#rate-note');
     note.textContent = now ? now.note : 'Saved for this building when you leave the box, so the next tenant there starts with it.';
     note.classList.toggle('stale', Boolean(now && now.stale));
+  }
+  // Meeting-day buttons: the next 5 weekdays plus any day added with the date box; picked ones are highlighted.
+  function dayChips(value) {
+    const picked = String(value || '').split(',').filter(Boolean);
+    const days = Array.from(new Set(L.nextBusinessDays(L.todayISO(), 5).concat(picked))).sort();
+    const label = (iso) => L.parseISODate(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return days.map((d) => `<button type="button" class="btn small${picked.includes(d) ? ' on' : ''}" data-action="pick-day" data-day="${d}" aria-pressed="${picked.includes(d)}">${esc(label(d))}</button>`).join('');
+  }
+  function toggleMeetingDay(day, add) {
+    const el = $('#draft-fillins [data-fill-in="MeetingDay"]');
+    if (!el || !day) return;
+    const picked = el.value.split(',').filter(Boolean);
+    const next = picked.includes(day) && !add ? picked.filter((d) => d !== day) : Array.from(new Set(picked.concat(day)));
+    el.value = next.sort().join(',');
+    $('#fill-in-days').innerHTML = dayChips(el.value);
+    refillTemplateDraft();
   }
   function readFillIns() {
     const inputs = {};
@@ -4172,6 +4207,25 @@
           if (cc) navigator.clipboard.writeText(cc).then(() => toast('Copied ' + cc + '.'));
           return;
         }
+        case 'edit-quote': {
+          const r = (S.settings().buildingRates || {})[d.key];
+          const form = $('#quote-form');
+          if (!r || !form) return;
+          const el = form.elements;
+          el.key.value = d.key;
+          el.building.value = r.building;
+          el.rate.value = r.rate;
+          el.basis.value = r.basis || 'NNN';
+          el.opex.value = r.opex || '';
+          el.date.value = r.date || L.todayISO();
+          $('#quote-opex').hidden = el.basis.value !== 'NNN + OpEx';
+          form.querySelector('[data-action="clear-quote"]').hidden = false;
+          form.scrollIntoView({ block: 'nearest' });
+          el.rate.focus();
+          return;
+        }
+        case 'clear-quote':
+          return render();
         case 'delete-quote': {
           const rates = Object.assign({}, S.settings().buildingRates || {});
           const r = rates[d.key];
@@ -4189,12 +4243,8 @@
           toast('Saved to the company. It will fill in next time.');
           return;
         }
-        case 'pick-day': {
-          const el = $('#draft-fillins [type="date"]');
-          el.value = d.day;
-          refillTemplateDraft();
-          return;
-        }
+        case 'pick-day':
+          return toggleMeetingDay(d.day);
         case 'copy-draft': {
           const f = $('#draft-form');
           navigator.clipboard.writeText('Subject: ' + f.elements.subject.value + '\n\n' + f.elements.body.value).then(() => toast('Copied. Paste it into Outlook.'));
@@ -4424,6 +4474,11 @@
     if (d.inlineCol) saveInline(d.inlineCol, d.inlineId, d.inlineField, e.target.value);
     // A quoted rate is remembered for its building; picking a building with a saved rate fills it in.
     if (['Rate', 'RateBasis', 'OpEx', 'CompBuilding'].includes(d.fillIn)) onRateFillIn(d.fillIn);
+    if (e.target.name === 'basis' && e.target.closest('#quote-form')) $('#quote-opex').hidden = e.target.value !== 'NNN + OpEx';
+    if (e.target.id === 'add-day' && e.target.value) {
+      toggleMeetingDay(e.target.value, true);
+      e.target.value = '';
+    }
     // The rent growth behind {AnnualIncrease} is remembered for every draft.
     if (d.fillIn === 'RentGrowth' && L.parseNumber(e.target.value) !== null) S.saveSettings({ rentGrowth: L.parseNumber(e.target.value) / 100 });
   });
@@ -4472,6 +4527,19 @@
   });
 
   document.addEventListener('submit', (e) => {
+    if (e.target.id === 'quote-form') {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const building = String(fd.get('building') || '').trim();
+      if (!building || !L.parseNumber(fd.get('rate'))) return toast('Add the building and the rate.');
+      let rates = Object.assign({}, S.settings().buildingRates || {});
+      // Editing a quote under a new building name moves it rather than leaving the old one behind.
+      if (fd.get('key')) delete rates[fd.get('key')];
+      rates = L.rememberRate(rates, building, fd.get('rate'), fd.get('date') || L.todayISO(), fd.get('basis'), fd.get('opex'));
+      S.saveSettings({ buildingRates: rates });
+      toast('Saved the quote for ' + building + '.');
+      return render();
+    }
     if (e.target.id === 'merge-form') {
       e.preventDefault();
       const to = e.target.querySelector('select[name=targetId]').value;

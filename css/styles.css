@@ -493,3 +493,9 @@ input.cell-input { height: 28px; font-size: 13px; padding: 0 6px; width: auto; m
 .fill-ins-grid .fill-in-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .page-section { margin-top: 28px; }
 .section-title { font-family: var(--serif); font-size: 22px; font-weight: 600; margin: 0 0 10px; }
+.fill-in-days .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.quote-form { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr auto; gap: 8px 10px; align-items: end; margin: 4px 0 14px; }
+.quote-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.quote-form label[hidden] { display: none; }
+.quote-form-buttons { display: flex; gap: 6px; }
+@media (max-width: 900px) { .quote-form { grid-template-columns: 1fr 1fr; } .quote-form label:first-of-type { grid-column: 1 / -1; } }

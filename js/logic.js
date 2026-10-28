@@ -1428,6 +1428,9 @@
     [/\bWe're tenant rep brokers\b/g, "I'm a tenant rep broker"],
     [/\b(W|w)e (represent|advocate|work with)\b/g, (m, w, verb) => 'I ' + verb],
     [/\blet us know\b/g, 'let me know'],
+    [/\bWe'd love\b/g, "I'd love"],
+    [/\b(W|w)e can help\b/g, (m, w) => 'I can help'],
+    [/\ba brief call with our team\b/g, 'a brief call'],
     [/\b(C|c)ould we\b/g, (m, c) => c + 'ould I'],
     [/\bwe'd be glad\b/g, "I'd be glad"],
     [/\bvalue we can add\b/g, 'value I can add'],
@@ -1486,11 +1489,11 @@
     const rent = rentMath(sf, rate, growth === null ? ctx.rentGrowth : growth / 100, opex);
     // "{Rate} NNN" in older templates: the rate now says its own basis.
     if (rate) text = String(text || '').replace(/\{Rate\}\s+NNN\b/g, '{Rate}');
-    const day = parseISODate(inputs.MeetingDay);
+    const days = meetingDays(inputs.MeetingDay);
     Object.assign(values, {
       Rate: rate ? rateText(rate, basis, opex) : '',
       CompBuilding: String(inputs.CompBuilding || '').trim() || values.Building,
-      MeetingDay: day ? day.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : '',
+      MeetingDay: days,
       MonthlyRent: rent.monthly,
       AnnualRent: rent.annual,
       AnnualIncrease: rent.increase,
@@ -1604,7 +1607,7 @@
     RateBasis: { label: 'Rate type', type: 'select', options: QUOTE_BASES },
     OpEx: { label: 'OpEx ($/SF/yr)', type: 'number' },
     CompBuilding: { label: 'Comp building' },
-    MeetingDay: { label: 'Meeting day', type: 'date' },
+    MeetingDay: { label: 'Meeting day(s)', type: 'date' },
     SF: { label: 'SF', type: 'number', saveTo: 'sfOccupied' },
     Partner: { label: 'Partner', saveTo: 'partner', solo: true },
     RentGrowth: { label: 'Rent growth over 5 years (%)', type: 'number' },
@@ -1654,6 +1657,14 @@
           stale: f.key === 'Rate' && saved ? saved.stale : false,
         })
       );
+  }
+
+  // One or more meeting days (ISO dates, comma separated) as words: "Tuesday, Nov 3",
+  // "Tuesday, Nov 3 or Wednesday, Nov 4", "Tuesday, Nov 3, Wednesday, Nov 4 or Thursday, Nov 5".
+  function meetingDays(value) {
+    const list = Array.from(new Set(String(value || '').split(/[,\s]+/).filter((d) => parseISODate(d)))).sort();
+    const words = list.map((d) => parseISODate(d).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }));
+    return words.length > 1 ? words.slice(0, -1).join(', ') + ' or ' + words[words.length - 1] : words[0] || '';
   }
 
   // The next few weekdays after today, for picking a meeting day.
@@ -3509,6 +3520,7 @@
     bracketSlots,
     templateFillIns,
     nextBusinessDays,
+    meetingDays,
     suggestTemplate,
     followUpDraft,
     RECAP_TEMPLATE,
