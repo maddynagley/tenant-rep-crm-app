@@ -25,6 +25,7 @@
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
       sharedList: { sort: 'score', dir: '' },
       prospecting: { period: 'thisWeek', drill: '' },
+      research: { statsAsset: 'Office', statsSub: '', statsQuarter: '', statsMetric: 'vacancy' },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
       comps: { tab: 'dates', q: '', asset: 'All' },
@@ -491,7 +492,7 @@
     const v = L.marketValues(m, c);
     const cur = m.current;
     const item = (label, value, sub) => (value ? `<div class="snap"><span class="kpi-label">${esc(label)}</span><strong>${esc(value)}</strong>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>` : '');
-    return `<section class="card"><h2>Market snapshot · ${esc(v.StatsArea)} ${esc((cur.assetClass || '').toLowerCase())} · ${esc(cur.quarter)} <a class="more" href="#/marketing" data-action="set-filter" data-scope="marketing" data-key="tab" data-value="stats">All market stats</a></h2>
+    return `<section class="card"><h2>Market snapshot · ${esc(v.StatsArea)} ${esc((cur.assetClass || '').toLowerCase())} · ${esc(cur.quarter)} <a class="more" href="#/research">All market stats</a></h2>
       ${cur.submarket === 'Market total' && c.submarket ? `<p class="hint">"${esc(c.submarket)}" isn't a submarket in the report, so these are market-wide numbers.</p>` : ''}
       <div class="snaps">${item('Vacancy', v.Vacancy, v.VacancyChange || (m.market ? 'Market ' + v.MarketVacancy : ''))}${item(cur.rentType === 'direct' ? 'Avg. direct asking rent' : 'Avg. asking rent', v.AskingRent, v.RentChange)}${item('Net absorption', v.NetAbsorption, cur.ytdAbsorption !== undefined ? v.YTDAbsorption + ' YTD' : '')}${item('Under construction', v.UnderConstruction)}</div>
       ${v.MarketStat ? `<p class="market-line">${esc(v.MarketStat)} <button class="link" data-action="copy-text" data-text="${esc(v.MarketStat)}">Copy</button></p>` : ''}
@@ -1272,10 +1273,9 @@
       { v: 'collateral', l: `Collateral (${collateral.length})` },
       { v: 'social', l: `Social (${posts.length})` },
       { v: 'templates', l: `Email templates (${S.all('templates').length})` },
-      { v: 'stats', l: 'Market stats' },
     ];
     let body = '';
-    if (!['collateral', 'social', 'templates', 'stats'].includes(f.tab)) f.tab = 'collateral';
+    if (!['collateral', 'social', 'templates'].includes(f.tab)) f.tab = 'collateral';
     if (f.tab === 'collateral') {
       body = collateral.length
         ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Piece</th><th>Asset</th><th>Submarket</th><th>Partner</th><th>Data</th><th>Status</th><th class="right">Sent</th><th class="right">Responses</th></tr></thead><tbody>${collateral
@@ -1305,7 +1305,7 @@
       const prospecting = L.prospectTouches({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') }, { internalDomain: myEmailDomain() }).touches;
       L.outreachStats(prospecting, (a) => a.template).forEach((r) => (stats[r.key] = r));
       const list = S.all('templates').slice().sort((a, b) => L.TEMPLATE_STEPS.indexOf(a.step) - L.TEMPLATE_STEPS.indexOf(b.step) || a.name.localeCompare(b.name));
-      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. Market stats placeholders like {MarketStat}, {Vacancy}, {VacancyChange} and {AskingRent} fill in from the latest Research numbers for the company's submarket (see Market stats). For rent emails, {Rate}, {CompBuilding}, {MonthlyRent}, {AnnualRent}, {AnnualIncrease} and {MeetingDay} become fill-ins in the Draft email window: type the quoted rate and the rent math is done for you. So does any [bracketed note]. They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
+      body = `<p class="hint">Use placeholders like {FirstName}, {Company}, {Building}, {Submarket}, {LeaseExpiration}, {MonthsToExpiration}, {SF}, {MyFirstName} and {MyFirm}. Market stats placeholders like {MarketStat}, {Vacancy}, {VacancyChange} and {AskingRent} fill in from the latest Research numbers for the company's submarket (see Research). For rent emails, {Rate}, {CompBuilding}, {MonthlyRent}, {AnnualRent}, {AnnualIncrease} and {MeetingDay} become fill-ins in the Draft email window: type the quoted rate and the rent math is done for you. So does any [bracketed note]. They fill in when you click Draft email on a company or on Today. Results come from emails tagged with the template's name.</p>
         ${
           list.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Template</th><th>When</th><th>Subject</th><th class="right">Sent</th><th class="right">Response rate</th></tr></thead><tbody>${list
@@ -1316,13 +1316,11 @@
                 .join('')}</tbody></table></div>`
             : emptyState('No templates yet.', '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>')
         }`;
-    } else if (f.tab === 'stats') {
-      body = marketStatsTab();
     }
 
     return `
       <div class="page-head"><h1>Marketing</h1>
-        <div class="actions">${f.tab === 'stats' ? '<button class="btn primary" data-action="pick-file" data-kind="marketStats">Import stats</button>' : f.tab === 'templates' ? '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>' : `<button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button>`}</div>
+        <div class="actions">${f.tab === 'templates' ? '<button class="btn primary" data-action="new" data-col="templates">+ Template</button>' : `<button class="btn primary" data-action="new" data-col="marketing">+ ${f.tab === 'social' ? 'Post idea' : 'Collateral'}</button>`}</div>
       </div>
       <div class="kpis">
         <div class="kpi ${goal && thisWeek >= goal ? 'good' : ''}"><span class="kpi-label">Posts this week</span><span class="kpi-value">${thisWeek} / ${goal}</span><span class="kpi-sub">weekly goal (Settings)</span></div>
@@ -1331,14 +1329,22 @@
       </div>
       <div class="toolbar">
         <div class="seg">${tabs.map((t) => `<button class="${f.tab === t.v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="tab" data-value="${t.v}">${esc(t.l)}</button>`).join('')}</div>
-        ${f.tab === 'outreach' || f.tab === 'stats' ? '' : `<input type="search" placeholder="Search title, submarket, partner…" value="${esc(f.q)}" data-filter="marketing.q" id="f-marketing-q" />`}
+        ${f.tab === 'outreach' ? '' : `<input type="search" placeholder="Search title, submarket, partner…" value="${esc(f.q)}" data-filter="marketing.q" id="f-marketing-q" />`}
       </div>
       ${body}`;
   }
 
   // Quarterly Research stats by submarket: they feed the {MarketStat}-style template placeholders.
+  // Research: quarterly market stats and report notes, by asset class (office, industrial, flex).
+  function viewResearch() {
+    return `<div class="page-head"><div><h1>Research</h1><div class="greeting-sub">Quarterly market stats from Research reports, by submarket</div></div>
+        <div class="actions"><button class="btn primary" data-action="pick-file" data-kind="marketStats">Import a report</button></div>
+      </div>
+      ${marketStatsTab()}`;
+  }
+
   function marketStatsTab() {
-    const f = state.marketing;
+    const f = state.research;
     const st = S.settings();
     const stats = st.marketStats || [];
     const reports = st.marketReports || [];
@@ -1469,7 +1475,7 @@
           : ''
       }
       ${trends ? `<section class="card"><h2>Trend</h2><div class="trends">${trends}</div></section>` : ''}
-      <section class="card"><h2>By submarket · ${esc(latest)} <span class="seg small more">${[['vacancy', 'Vacancy'], ['askingRent', 'Asking rent']].map(([v, l]) => `<button class="${metric === v ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="statsMetric" data-value="${v}">${l}</button>`).join('')}</span></h2>
+      <section class="card"><h2>By submarket · ${esc(latest)} <span class="seg small more">${[['vacancy', 'Vacancy'], ['askingRent', 'Asking rent']].map(([v, l]) => `<button class="${metric === v ? 'on' : ''}" data-action="set-filter" data-scope="research" data-key="statsMetric" data-value="${v}">${l}</button>`).join('')}</span></h2>
         ${chart}
         <div class="table-wrap"><table class="tbl compact stats-table"><thead><tr><th>Submarket</th><th class="right">Vacancy</th><th class="right">${total && total.rentType === 'direct' ? 'Direct asking rent' : 'Asking rent'}</th><th class="right">Net absorption</th><th class="right">YTD absorption</th><th class="right">Under construction</th><th class="right">Inventory</th></tr></thead><tbody>${rows
           .slice()
@@ -1486,9 +1492,9 @@
       : emptyState(`No ${asset.toLowerCase()} stats yet. Drop this quarter's Research report above.`);
 
     return `${importPreview && importPreview.kind === 'research' ? researchPreviewCard() : ''}
-      <div class="toolbar"><div class="seg">${['Office', 'Industrial'].map((a) => `<button class="${asset === a ? 'on' : ''}" data-action="set-filter" data-scope="marketing" data-key="statsAsset" data-value="${a}">${a}</button>`).join('')}</div>
-        ${rows.length ? `<select data-filter="marketing.statsSub" aria-label="Submarket">${options(rows.map((x) => ({ value: x.submarket === 'Market total' ? '' : x.submarket, label: x.submarket === 'Market total' ? (report && report.market ? report.market : 'Market') + ' overall' : x.submarket })).sort((a, b) => (a.value ? 1 : 0) - (b.value ? 1 : 0) || 0), subRow ? subRow.submarket : '')}</select>` : ''}
-        ${mine.length ? `<select data-filter="marketing.statsQuarter" aria-label="Quarter">${options(mine, latest)}</select>` : ''}</div>
+      <div class="toolbar"><div class="seg">${L.RESEARCH_ASSETS.map((a) => `<button class="${asset === a ? 'on' : ''}" data-action="set-filter" data-scope="research" data-key="statsAsset" data-value="${a}">${a}</button>`).join('')}</div>
+        ${rows.length ? `<select data-filter="research.statsSub" aria-label="Submarket">${options(rows.map((x) => ({ value: x.submarket === 'Market total' ? '' : x.submarket, label: x.submarket === 'Market total' ? (report && report.market ? report.market : 'Market') + ' overall' : x.submarket })).sort((a, b) => (a.value ? 1 : 0) - (b.value ? 1 : 0) || 0), subRow ? subRow.submarket : '')}</select>` : ''}
+        ${mine.length ? `<select data-filter="research.statsQuarter" aria-label="Quarter">${options(mine, latest)}</select>` : ''}</div>
       ${view}
       <div class="drop-zone" data-drop="marketStats"><strong>Drag this quarter's Research report here</strong> (the PDF, or an Excel/CSV stats table) <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="marketStats">Choose a file</button>
         <div class="sub">The submarket statistics, the market observations and each submarket's current conditions are read from the report. You confirm the quarter before anything is saved. Each new quarter is compared with the one before.</div></div>
@@ -1526,7 +1532,7 @@
         .join('')}</tbody></table></div>
       <form id="research-form" class="form-grid">
         <label>Quarter<input name="quarter" value="${esc(r.quarter)}" placeholder="2Q26" required pattern="[1-4][Qq][0-9]{2}" /></label>
-        <label>Asset class<select name="assetClass">${options(['Office', 'Industrial'], r.assetClass)}</select></label>
+        <label>Asset class<select name="assetClass">${options(L.RESEARCH_ASSETS, r.assetClass)}</select></label>
         <div class="wide actions"><button class="btn primary" type="submit">Save ${esc(r.quarter)} ${esc(r.assetClass.toLowerCase())} stats</button><button class="btn" type="button" data-action="cancel-import">Cancel</button></div>
         <p class="hint wide">Saving replaces any stats already on file for the same quarter and asset class.</p>
       </form>
@@ -2940,7 +2946,7 @@
         ${
           isStats
             ? `<label>Quarter<input name="quarter" value="${esc(p.quarter)}" placeholder="3Q26" required pattern="[1-4][Qq][0-9]{2}" /></label>
-        <label>Asset class<select name="assetClass">${options(['Office', 'Industrial'], p.assetClass)}</select></label>`
+        <label>Asset class<select name="assetClass">${options(L.RESEARCH_ASSETS, p.assetClass)}</select></label>`
             : `<label>Asset class when not in file<select name="assetClass">${options(L.ASSET_CLASSES, state.companies.asset !== 'All' ? state.companies.asset : 'Office')}</select></label>`
         }
         ${
@@ -3692,14 +3698,13 @@
       showImportPreview(kind, file.name, L.parseCSV(text));
     };
     if (/\.pdf$/i.test(file.name)) {
-      if (kind !== 'marketStats') return alert('PDFs can be read on Marketing → Market stats (Research reports). For this import, use an Excel or CSV file.');
+      if (kind !== 'marketStats') return alert('PDFs can be read on the Research page (Research reports). For this import, use an Excel or CSV file.');
       toast('Reading ' + file.name + '…');
       readPdfLines(file).then(
         (lines) => {
           importPreview = { kind: 'research', filename: file.name, report: L.parseResearchReport(lines, file.name) };
-          state.marketing.tab = 'stats';
-          state.marketing.statsAsset = importPreview.report.assetClass;
-          if (!location.hash.startsWith('#/marketing')) location.hash = '#/marketing';
+          Object.assign(state.research, { statsAsset: importPreview.report.assetClass, statsSub: '', statsQuarter: '' });
+          if (!location.hash.startsWith('#/research')) location.hash = '#/research';
           else render();
           window.scrollTo(0, 0);
         },
@@ -3722,7 +3727,7 @@
     // Research sheets name the quarter and product in the file name or a title row.
     const title = filename + ' ' + rows.slice(0, 6).map((r) => r.join(' ')).join(' ');
     importPreview.quarter = L.normalizeQuarter(title) || L.latestDataQuarter(L.todayISO());
-    importPreview.assetClass = /industrial|warehouse|logistics/i.test(title) ? 'Industrial' : 'Office';
+    importPreview.assetClass = kind === 'marketStats' && /flex|r&d/i.test(filename) ? 'Flex' : /industrial|warehouse|logistics/i.test(title) ? 'Industrial' : 'Office';
     const termHead = importPreview.result.mapping.termMonths !== undefined ? importPreview.result.headers[importPreview.result.mapping.termMonths] : '';
     importPreview.termUnit = /\bmo/i.test(termHead) ? 'months' : /\b(yr|year)/i.test(termHead) ? 'years' : '';
     if (location.hash !== '#/data') location.hash = '#/data';
@@ -3949,6 +3954,7 @@
     dashboard: viewDashboard,
     leads: viewLeads,
     marketing: viewMarketing,
+    research: viewResearch,
     comps: viewComps,
     companies: viewCompanies,
     company: viewCompany,
@@ -4093,6 +4099,7 @@
         case 'set-filter':
           if (actionEl.tagName === 'A') e.preventDefault();
           state[d.scope][d.key] = d.value;
+          if (d.scope === 'research' && d.key === 'statsAsset') Object.assign(state.research, { statsSub: '', statsQuarter: '' });
           if (d.scope === 'companies' || d.scope === 'leads') state[d.scope].limit = 100;
           saveUIState();
           if (d.scope === 'companies' && !location.hash.startsWith('#/companies')) location.hash = '#/companies';
@@ -4589,7 +4596,7 @@
         marketReports: (st.marketReports || []).filter((x) => !same(x)).concat([{ quarter, assetClass, market: r.market, highlights: r.highlights, submarkets: r.submarkets, filename: importPreview.filename, importedAt: L.todayISO() }]),
       });
       importPreview = null;
-      state.marketing.statsAsset = assetClass;
+      Object.assign(state.research, { statsAsset: assetClass, statsSub: '', statsQuarter: '' });
       toast(`Saved ${quarter} ${assetClass.toLowerCase()} market stats.`);
       render();
     } else if (e.target.id === 'quick-note-form') {
@@ -4634,8 +4641,8 @@
       const msg = importers[kind](importPreview.result.records, opts);
       importPreview = null;
       if (kind === 'comps') state.comps.tab = 'comps';
-      if (kind === 'marketStats') state.marketing.tab = 'stats';
-      location.hash = '#/' + (kind === 'marketStats' ? 'marketing' : kind);
+      if (kind === 'marketStats') Object.assign(state.research, { statsAsset: opts.assetClass, statsSub: '', statsQuarter: '' });
+      location.hash = '#/' + (kind === 'marketStats' ? 'research' : kind);
       render();
       toast(msg);
     }
@@ -4658,9 +4665,9 @@
     chartTip.style.top = e.clientY + 14 + 'px';
   });
 
-  // Drop a comp sheet anywhere on the Comps tab, or a Research stats sheet on Marketing → Market stats.
+  // Drop a comp sheet anywhere on the Comps tab, or a Research report or stats sheet on the Research page.
   const dropTarget = () =>
-    location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : location.hash.startsWith('#/marketing') && state.marketing.tab === 'stats' ? 'marketStats' : '';
+    location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : location.hash.startsWith('#/research') ? 'marketStats' : '';
   document.addEventListener('dragover', (e) => {
     if (!dropTarget() || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();

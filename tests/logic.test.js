@@ -1354,3 +1354,19 @@ test('the standard closing switches to first person when working alone', () => {
     "I'd love 15 minutes to see if I can help your team find the right long-term option. How does Tuesday, Nov 10 look for a brief call?"
   );
 });
+
+test('Flex research: detected from the report, kept apart from industrial, used for office & industrial companies', () => {
+  assert.equal(L.researchAsset('R&D/Flex'), 'Flex');
+  assert.equal(L.researchAsset('Warehouse'), 'Industrial');
+  assert.equal(L.researchAsset('Office'), 'Office');
+  const lines = ['Riverside Flex Submarket Overview', '  Submarket Statistics – All Classes', '            Total Inventory   Under Construction   Total Vacancy Rate   Qtr Absorption   YTD Absorption   Direct Asking Rent', ' Northside      4,500,000      0      9.1 %      12,000      30,000      $14.25', ' Market Total   20,000,000     0      8.0 %      50,000      90,000      $13.10'];
+  const r = L.parseResearchReport(lines, '2Q26-Riverside-Flex-Market-Report.pdf');
+  assert.equal(r.assetClass, 'Flex');
+  assert.deepEqual(r.rows.map((x) => [x.submarket, x.vacancy, x.askingRent]), [['Northside', 9.1, 14.25], ['Market total', 8, 13.1]]);
+  // An industrial report that merely has an R&D/Flex rent column stays industrial.
+  assert.equal(L.parseResearchReport(['Riverside Industrial Submarket Overview'], 'Industrial-Report.pdf').assetClass, 'Industrial');
+  const stats = r.rows.concat([{ quarter: '2Q26', assetClass: 'Office', submarket: 'Northside', vacancy: 25 }]);
+  assert.equal(L.marketStatFor(stats, { assetClass: 'Office & Industrial', submarket: 'Northside' }).current.vacancy, 9.1);
+  assert.equal(L.marketStatFor(stats, { assetClass: 'Office', submarket: 'Northside' }).current.vacancy, 25);
+  assert.equal(L.marketStatFor(r.rows.map((x) => Object.assign({}, x, { assetClass: 'Office' })), { assetClass: 'Office & Industrial', submarket: 'Northside' }).current.assetClass, 'Office', 'no flex on file: falls back to office');
+});

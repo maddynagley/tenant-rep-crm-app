@@ -2527,6 +2527,9 @@
     return d ? quarterOf(d) : '';
   }
 
+  // Research covers three product types; flex/R&D reports are their own niche series.
+  const RESEARCH_ASSETS = ['Office', 'Industrial', 'Flex'];
+  const researchAsset = (v) => (/flex|r&d/i.test(String(v || '')) ? 'Flex' : normalizeAssetClass(v) === 'Industrial' ? 'Industrial' : normalizeAssetClass(v) ? 'Office' : '');
   const isMarketTotal = (sub) => !sub || /^(total|market|market total|metro|overall|atlanta( total| metro)?|all submarkets|grand total)$/i.test(String(sub).trim());
 
   // ---------- Research PDF reports ----------
@@ -2547,6 +2550,7 @@
   const DEFAULT_STAT_ORDER = {
     Office: ['inventory', 'underConstruction', 'vacancy', 'netAbsorption', 'ytdAbsorption', 'classARent', 'classBRent', 'askingRent'],
     Industrial: ['inventory', 'underConstruction', 'vacancy', 'netAbsorption', 'ytdAbsorption', 'whRent', 'flexRent', 'askingRent'],
+    Flex: ['inventory', 'underConstruction', 'vacancy', 'netAbsorption', 'ytdAbsorption', 'askingRent'],
   };
   // A page footer: a letter-spaced firm name and a page number ("F I R M   16").
   const PAGE_FOOTER = /^\s*(?:[A-Z]{1,2}\s){3,}[A-Z]{0,2}\s+\d{1,3}\s*$/;
@@ -2635,8 +2639,13 @@
       });
       quarter = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || '';
     }
-    const assetClass = /industrial/i.test(String(filename)) || /Industrial\s+(Market|Submarket)/i.test(text) ? 'Industrial' : 'Office';
-    const market = (/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) (?:Office|Industrial) Submarket Overview/.exec(text) || [])[1] || '';
+    // Flex reports mention "R&D/Flex" columns like industrial ones do, so Flex is read from the file name or title.
+    const assetClass = /flex/i.test(String(filename)) || /\bFlex\s+(Market|Submarket)/i.test(text)
+      ? 'Flex'
+      : /industrial/i.test(String(filename)) || /Industrial\s+(Market|Submarket)/i.test(text)
+        ? 'Industrial'
+        : 'Office';
+    const market = (/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) (?:Office|Industrial|Flex|R&D\/Flex) Submarket Overview/.exec(text) || [])[1] || '';
 
     // Submarket Statistics table
     const rows = [];
@@ -2694,7 +2703,7 @@
     // Each submarket page: "<Name> Office Submarket Overview", then Current Conditions bullets in the left column.
     const submarkets = {};
     lines.forEach((l, i) => {
-      const m = /^\s*(.+?)\s+(?:Office|Industrial)\s+Submarket Overview\s*$/.exec(l);
+      const m = /^\s*(.+?)\s+(?:Office|Industrial|Flex|R&D\/Flex)\s+Submarket Overview\s*$/.exec(l);
       if (!m || m[1] === market) return;
       const cc = lines.findIndex((x, j) => j > i && j < i + 45 && /Current Conditions/i.test(x));
       if (cc < 0) return;
@@ -2709,7 +2718,7 @@
   // One row from a Research stats table → { quarter, assetClass, submarket, vacancy (%), askingRent ($/SF/yr), … }.
   function cleanMarketStat(rec, defaults) {
     defaults = defaults || {};
-    const out = { quarter: normalizeQuarter(rec.quarter) || defaults.quarter || '', assetClass: normalizeAssetClass(rec.assetClass) || defaults.assetClass || '', submarket: String(rec.submarket || '').trim() };
+    const out = { quarter: normalizeQuarter(rec.quarter) || defaults.quarter || '', assetClass: researchAsset(rec.assetClass) || defaults.assetClass || '', submarket: String(rec.submarket || '').trim() };
     if (isMarketTotal(out.submarket)) out.submarket = 'Market total';
     const pct = (v) => {
       const n = firstNumber(v);
@@ -2752,7 +2761,9 @@
 
   // reports: imported Research PDFs ({ quarter, assetClass, highlights, submarkets }), for talking points.
   function marketStatFor(stats, company, reports) {
-    const asset = company.assetClass === 'Industrial' ? 'Industrial' : 'Office';
+    // Office & Industrial (flex-type) companies use Flex numbers when they're on file.
+    const has = (a) => (stats || []).some((x) => x.assetClass === a);
+    const asset = company.assetClass === 'Industrial' ? 'Industrial' : company.assetClass === 'Office & Industrial' && has('Flex') ? 'Flex' : 'Office';
     const mine = (stats || []).filter((x) => x.assetClass === asset);
     if (!mine.length) return null;
     const qs = Array.from(new Set(mine.map((x) => x.quarter))).sort((a, b) => quarterKey(b) - quarterKey(a));
@@ -2853,7 +2864,7 @@
       points.push(t + '.');
     }
     if (row.askingRent) {
-      const label = (row.rentType === 'direct' ? 'Direct asking rent' : 'Asking rent') + (assetClass === 'Industrial' ? ' (NNN)' : '');
+      const label = (row.rentType === 'direct' ? 'Direct asking rent' : 'Asking rent') + (assetClass === 'Industrial' || assetClass === 'Flex' ? ' (NNN)' : '');
       let t = label + ' averages $' + row.askingRent.toFixed(2) + '/SF';
       if (prev && prev.askingRent) {
         const ch = ((row.askingRent - prev.askingRent) / prev.askingRent) * 100;
@@ -3550,6 +3561,8 @@
     collateralStale,
     RATE_BASES,
     BUDGET_UNITS,
+    RESEARCH_ASSETS,
+    researchAsset,
     isMonthlyTotal,
     ACTIVITY_TYPES,
     planFollowUpTasks,
