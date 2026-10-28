@@ -1507,7 +1507,7 @@
       ${view}
       <div class="drop-zone" data-drop="marketStats"><strong>Drag this quarter's Research report here</strong> (the PDF, or an Excel/CSV stats table) <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="marketStats">Choose a file</button>
         <div class="sub">The submarket statistics, the market observations and each submarket's current conditions are read from the report. You confirm the quarter before anything is saved. Each new quarter is compared with the one before.</div></div>
-      ${quarters.length ? `<section class="card"><h2>Quarters on file</h2><ul class="plain added-notes">${quarters.map((q) => `<li>${esc(q.quarter)} · ${esc(q.assetClass)} <span class="muted">· ${q.n} rows${reports.some((r) => r.quarter === q.quarter && r.assetClass === q.assetClass) ? ' · report notes' : ''}</span> <button class="link" data-action="remove-stats" data-quarter="${esc(q.quarter)}" data-asset="${esc(q.assetClass)}">Remove</button></li>`).join('')}</ul></section>` : ''}
+      ${quarters.length ? `<section class="card"><h2>Quarters on file</h2><ul class="plain added-notes">${quarters.map((q) => `<li>${esc(q.quarter)} · ${esc(q.assetClass)} <span class="muted">· ${q.n <= 3 ? esc(stats.filter((x) => x.quarter === q.quarter && x.assetClass === q.assetClass).map((x) => x.submarket).join(', ')) : q.n + ' submarkets'}${reports.some((r) => r.quarter === q.quarter && r.assetClass === q.assetClass) ? ' · report notes' : ''}</span> <button class="link" data-action="move-stats" data-quarter="${esc(q.quarter)}" data-asset="${esc(q.assetClass)}">Change quarter</button> <button class="link" data-action="remove-stats" data-quarter="${esc(q.quarter)}" data-asset="${esc(q.assetClass)}">Remove</button></li>`).join('')}</ul></section>` : ''}
       <section class="card"><h2>Placeholders for templates</h2>
         <p class="hint">Use these in Marketing → Email templates. They come from the company's submarket (or the market total when its submarket isn't in the report), for its asset class, and update each time you load a new quarter.</p>
         <dl class="info">${[
@@ -4136,6 +4136,28 @@
           if (c.sharedList) setTimeout(() => syncSharedList(c.sharedList, false), 300);
           runWorkflows();
           return toast(`Logged ${d.type.toLowerCase()} with ${c.name}. Add notes under Follow-ups if needed.`);
+        }
+        case 'move-stats': {
+          // Re-file a quarter's stats (e.g. a report saved under the wrong quarter); joins any already in the new one.
+          const to = String(prompt(`Move the ${d.quarter} ${d.asset} stats to which quarter? (e.g. 3Q26)`, d.quarter) || '').trim().toUpperCase();
+          if (!to || to === d.quarter) return;
+          if (!/^[1-4]Q\d{2}$/.test(to)) return alert('Use a quarter like 3Q26.');
+          const st = S.settings();
+          const from = (x) => x.quarter === d.quarter && x.assetClass === d.asset;
+          const moving = (st.marketStats || []).filter(from).map((x) => Object.assign({}, x, { quarter: to }));
+          const names = new Set(moving.map((x) => x.submarket));
+          const stats = (st.marketStats || []).filter((x) => !from(x) && !(x.quarter === to && x.assetClass === d.asset && names.has(x.submarket))).concat(moving);
+          const rep = (st.marketReports || []).find(from);
+          const there = (st.marketReports || []).find((x) => x.quarter === to && x.assetClass === d.asset);
+          let reports = (st.marketReports || []).filter((x) => !from(x) && x !== there);
+          if (rep || there) {
+            const a = there || {};
+            const b = rep || {};
+            reports = reports.concat([Object.assign({}, a, b, { quarter: to, assetClass: d.asset, highlights: Object.assign({}, a.highlights, b.highlights), submarkets: Object.assign({}, a.submarkets, b.submarkets), deals: Object.assign({}, a.deals, b.deals) })]);
+          }
+          S.saveSettings({ marketStats: stats, marketReports: reports });
+          Object.assign(state.research, { statsAsset: d.asset, statsQuarter: to, statsSub: '' });
+          return toast(`Moved to ${to}.`);
         }
         case 'remove-stats': {
           if (!confirm(`Remove the ${d.quarter} ${d.asset} market stats?`)) return;

@@ -2717,22 +2717,24 @@
   function parseResearchReport(lines, filename) {
     lines = (lines || []).map((l) => String(l).replace(/\t/g, '    '));
     const text = lines.join('\n');
-    // The report's quarter: from the file name, else the "2Q26" stamped on its pages (the most common one), else
-    // "the second quarter of 2026" as written in the text.
+    // The report's quarter: from the file name, else the "2Q26" stamped on its pages (also letter-spaced, as in
+    // "3 Q 2 6 SUBMARKET SNAPSHOT"), else the latest quarter the text talks about ("the third quarter of 2026");
+    // reports mention earlier quarters too, but never later ones.
     let quarter = normalizeQuarter(filename);
     if (!quarter) {
       const counts = {};
-      (text.match(/\b[1-4]Q\d{2}\b/g) || []).forEach((q) => (counts[q] = (counts[q] || 0) + 1));
-      quarter = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || '';
+      (text.match(/\b[1-4] ?Q ?\d ?\d\b/g) || []).forEach((q) => {
+        const k = q.replace(/ /g, '');
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      quarter = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || quarterKey(b) - quarterKey(a))[0] || '';
     }
     if (!quarter) {
-      const counts = {};
-      (text.match(/\b(first|second|third|fourth) quarter of \d{4}/gi) || []).forEach((w) => {
+      const said = (text.match(/\b(first|second|third|fourth) quarter of \d{4}/gi) || []).map((w) => {
         const m = /(\w+) quarter of (\d{4})/i.exec(w);
-        const q = QUARTER_WORDS[m[1].toLowerCase()] + 'Q' + m[2].slice(2);
-        counts[q] = (counts[q] || 0) + 1;
+        return QUARTER_WORDS[m[1].toLowerCase()] + 'Q' + m[2].slice(2);
       });
-      quarter = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || '';
+      quarter = said.sort((a, b) => quarterKey(b) - quarterKey(a))[0] || '';
     }
     // Flex reports mention "R&D/Flex" columns like industrial ones do, so Flex is read from the file name or title.
     const assetClass = /flex/i.test(String(filename)) || /\bFlex\s+(Market|Submarket)/i.test(text)

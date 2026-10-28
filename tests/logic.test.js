@@ -1419,3 +1419,10 @@ test('notable leases: tenant and type only one space apart', () => {
   const r = L.parseResearchReport(lines, 'flex.pdf');
   assert.deepEqual(r.deals.Riverside.map((d) => [d.tenant, d.type, d.sf]), [['Acme Labs Ltd.', 'Direct New', 27936], ['Birch Pros', 'Renewal & Expansion', 7775], ['', 'New Lease', 22328], ['', 'Direct New', 21790]]);
 });
+
+test('report quarter: letter-spaced page stamp, else the latest quarter the text mentions', () => {
+  const body = [' •   Following its last delivery in the first quarter of 2026, nothing has broken ground.', ' •   At the end of the third quarter of 2026, asking rent increased 1.0% quarter over quarter.', ' •   Vacancy is down from the first quarter of 2026.'];
+  assert.equal(L.parseResearchReport(['West Riverside Flex Submarket Overview'].concat(body), 'West Riverside Flex.pdf').quarter, '3Q26');
+  assert.equal(L.parseResearchReport(['                3 Q 2 6 S U B M A R K E T S N A P S H O T', 'West Riverside Flex Submarket Overview'].concat(body), 'report.pdf').quarter, '3Q26');
+  assert.equal(L.parseResearchReport(['FIRM.COM   2Q26', 'Riverside Office Submarket Overview'].concat(body), 'report.pdf').quarter, '2Q26', 'a stamp beats the text');
+});
