@@ -2619,6 +2619,101 @@
     });
   }
 
+  // "Custom I-85 NE Corridor" → "I-85 NE Corridor".
+  const cleanSubmarketName = (n) => String(n || '').replace(/^\s*custom\s+/i, '').trim();
+
+  // Headline tiles: a line of values over a line of labels ("4.2 MSF   23.3%" / "Total Inventory   Total Vacancy Rate").
+  function snapshotTiles(lines) {
+    const at = lines.findIndex((l) => /Total Inventory|Vacancy Rate/i.test(l) && /\s{3,}/.test(l));
+    if (at < 1) return {};
+    const cells = (l) => {
+      const out = [];
+      const re = /\S+(?: \S+)*/g;
+      let m;
+      while ((m = re.exec(l))) out.push({ text: m[0], at: m.index + m[0].length / 2 });
+      return out;
+    };
+    const labels = cells(lines[at]);
+    const values = cells(lines.slice(0, at).reverse().find((l) => /\d/.test(l)) || '');
+    const field = (t) =>
+      /inventory/i.test(t) ? 'inventory' : /vacancy/i.test(t) ? 'vacancy' : /asking/i.test(t) ? 'askingRent' : /ytd.*absorption/i.test(t) ? 'ytdAbsorption' : /absorption/i.test(t) ? 'netAbsorption' : /under construction/i.test(t) ? 'underConstruction' : /availability/i.test(t) ? 'availability' : '';
+    const out = {};
+    labels.forEach((lab) => {
+      const k = field(lab.text);
+      if (!k || !values.length) return;
+      const v = values.slice().sort((a, b) => Math.abs(a.at - lab.at) - Math.abs(b.at - lab.at))[0];
+      if (v && /\d/.test(v.text)) out[k] = v.text;
+    });
+    return out;
+  }
+
+  // What Research's bullets say in numbers: this quarter's net absorption and the change from last quarter.
+  function bulletFacts(bullets) {
+    const out = {};
+    (bullets || []).forEach((b) => {
+      let m;
+      if (out.netAbsorption === undefined && (m = /net absorption (?:totaled|was|of|reached|came in at|amounted to)\s+(negative |positive )?(-?[\d,.]+)\s*(MSF|SF)[^.]*?(?:quarter|quarterly)/i.exec(b))) {
+        const n = parseNumber(m[2]) * (/MSF/i.test(m[3]) ? 1e6 : 1);
+        out.netAbsorption = /negative/i.test(m[1] || '') ? -Math.abs(n) : n;
+      }
+      if (out.vacancyBps === undefined) {
+        if ((m = /vacancy(?: rate)?[^.]*?\b(rose|increased|ticked up|edged up|climbed|grew|jumped|up|declined|decreased|fell|dropped|edged down|ticked down|compressed|down)\b[^.]*?(\d+)[- ]basis[- ]points?[^.]*?quarter[- ]over[- ]quarter/i.exec(b)))
+          out.vacancyBps = (/rose|increased|up|climbed|grew|jumped/i.test(m[1]) ? 1 : -1) * Number(m[2]);
+        else if (/vacancy rate[^.]*?(essentially )?unchanged/i.test(b)) out.vacancyBps = 0;
+      }
+      if (out.rentPct === undefined && (m = /asking (?:rent|rate)s?[^.]*?\b(increased|rose|climbed|edged up|grew|declined|decreased|fell|dropped|edged down)\b\s+(?:by\s+)?([\d.]+)%\s+quarter[- ]over[- ]quarter/i.exec(b)))
+        out.rentPct = (/increased|rose|climbed|up|grew/i.test(m[1]) ? 1 : -1) * Number(m[2]);
+    });
+    return out;
+  }
+
+  // The "Notable Lease Transactions" table on a submarket page: building, tenant, type and size.
+  function notableLeases(lines) {
+    const at = lines.findIndex((l) => /Notable Lease Transactions/i.test(l));
+    if (at < 0) return [];
+    const from = Math.max(0, lines[at].search(/Notable Lease Transactions/i) - 4);
+    const sale = lines[at].search(/Notable Sale/i);
+    const to = sale > from ? sale - 2 : undefined;
+    const out = [];
+    lines.slice(at + 1, at + 30).forEach((l) => {
+      if (/Source:/i.test(l) || PAGE_FOOTER.test(l)) return;
+      const seg = l.slice(from, to).trim();
+      // Tenant and type can sit just one space apart, so the type is found by its wording.
+      // A tenant name that wraps onto another line leaves the tenant blank here.
+      const m = /^(.+?)\s{2,}(?:(.+?)\s+)?((?:Direct |Sublease )?(?:New|Renewal|Expansion|Extension|Relocation|Sublease|Direct|Pre-?lease)(?: ?[&/-]? ?(?:New|Renewal|Expansion|Extension|Relocation))*(?: Lease)?)\s{2,}([\d,]{3,})\s*$/i.exec(seg);
+      if (!m || /Building Name/i.test(m[1])) return;
+      let tenant = (m[2] || '').trim();
+      let type = m[3].trim();
+      // "Direct New" with no tenant on the line reads as tenant "Direct", type "New".
+      if (/^(direct|sublease)$/i.test(tenant)) {
+        type = tenant + ' ' + type;
+        tenant = '';
+      }
+      out.push({ building: m[1].trim(), tenant, type, sf: parseNumber(m[4]) });
+    });
+    return out;
+  }
+
+  // The quarter before ("3Q26" → "2Q26").
+  function previousQuarter(q) {
+    const k = quarterKey(q);
+    if (!k) return '';
+    const p = k - 1;
+    const n = ((p - 1) % 4) + 1;
+    return n + 'Q' + String((p - n) / 4).padStart(2, '0');
+  }
+  // Last quarter's numbers for a row: the real row when on file, else worked back from Research's stated changes.
+  function previousStat(row, stats) {
+    const pq = previousQuarter(row.quarter);
+    const real = (stats || []).find((x) => x.quarter === pq && x.assetClass === row.assetClass && x.submarket === row.submarket);
+    if (real) return real;
+    if (!row.qoq) return null;
+    const out = { quarter: pq, assetClass: row.assetClass, submarket: row.submarket, derived: true };
+    if (row.qoq.vacancyBps !== undefined && row.vacancy !== undefined) out.vacancy = Math.round((row.vacancy - row.qoq.vacancyBps / 100) * 100) / 100;
+    if (row.qoq.rentPct !== undefined && row.askingRent) out.askingRent = Math.round((row.askingRent / (1 + row.qoq.rentPct / 100)) * 100) / 100;
+    return out;
+  }
+
   function parseResearchReport(lines, filename) {
     lines = (lines || []).map((l) => String(l).replace(/\t/g, '    '));
     const text = lines.join('\n');
@@ -2645,7 +2740,10 @@
       : /industrial/i.test(String(filename)) || /Industrial\s+(Market|Submarket)/i.test(text)
         ? 'Industrial'
         : 'Office';
-    const market = (/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) (?:Office|Industrial|Flex|R&D\/Flex) Submarket Overview/.exec(text) || [])[1] || '';
+    // The market's name is the title over the all-submarkets statistics table ("Atlanta Office Submarket Overview").
+    const statsAt = lines.findIndex((l) => /Submarket Statistics/i.test(l));
+    const titleLine = statsAt > 0 ? lines.slice(Math.max(0, statsAt - 3), statsAt).reverse().find((l) => /Submarket Overview/i.test(l)) : '';
+    const market = (/^\s*(.+?)\s+(?:Office|Industrial|Flex|R&D\/Flex)\s+Submarket Overview/.exec(titleLine || '') || [])[1] || '';
 
     // Submarket Statistics table
     const rows = [];
@@ -2712,7 +2810,36 @@
       const b = bulletsIn(lines.slice(cc + 1, end), (x) => (x.search(/\S/) > 12 ? '' : x));
       if (b.length) submarkets[m[1].trim()] = b;
     });
-    return { quarter, assetClass, market, rows, highlights, submarkets };
+    // Single-submarket snapshot reports (e.g. a custom corridor) have no statistics table: read the headline tiles.
+    const deals = {};
+    lines.forEach((l, i) => {
+      const m = /^\s*(.+?)\s+(?:Office|Industrial|Flex|R&D\/Flex)\s+Submarket Overview\s*$/.exec(l);
+      if (!m || m[1] === market) return;
+      const name = cleanSubmarketName(m[1]);
+      if (!rows.some((x) => x.submarket === name)) {
+        const tiles = snapshotTiles(lines.slice(i + 1, i + 12));
+        if (Object.keys(tiles).length >= 2) rows.push(Object.assign(cleanMarketStat(Object.assign({ submarket: name }, tiles), { quarter, assetClass }), tiles.askingRent ? { rentType: 'total' } : {}));
+      }
+      let end = lines.findIndex((x, j) => j > i && /Submarket Overview/i.test(x));
+      if (end < 0) end = lines.length;
+      const leases = notableLeases(lines.slice(i, end));
+      if (leases.length) deals[name] = leases;
+    });
+    // Rename bullet keys the same way, and read this quarter's absorption and the changes from last quarter.
+    Object.keys(submarkets).forEach((k) => {
+      const name = cleanSubmarketName(k);
+      if (name !== k) {
+        submarkets[name] = submarkets[k];
+        delete submarkets[k];
+      }
+    });
+    rows.forEach((row) => {
+      const bullets = row.submarket === 'Market total' ? [].concat(highlights['Leasing Market Fundamentals'] || [], highlights['Market Fundamentals'] || []) : submarkets[row.submarket] || [];
+      const facts = bulletFacts(bullets);
+      if (row.netAbsorption === undefined && facts.netAbsorption !== undefined) row.netAbsorption = facts.netAbsorption;
+      if (facts.vacancyBps !== undefined || facts.rentPct !== undefined) row.qoq = Object.assign({}, facts.vacancyBps !== undefined ? { vacancyBps: facts.vacancyBps } : {}, facts.rentPct !== undefined ? { rentPct: facts.rentPct } : {});
+    });
+    return { quarter, assetClass, market, rows, highlights, submarkets, deals };
   }
 
   // One row from a Research stats table → { quarter, assetClass, submarket, vacancy (%), askingRent ($/SF/yr), … }.
@@ -2775,7 +2902,7 @@
     const noteName = report ? matchSubmarket(Object.keys(report.submarkets || {}), sub === 'Market total' ? '' : sub) : '';
     return {
       current: cur,
-      previous: qs[1] ? find(qs[1], sub) || null : null,
+      previous: (qs[1] ? find(qs[1], sub) : null) || previousStat(cur, mine),
       market: sub === 'Market total' ? null : find(qs[0], 'Market total') || null,
       notes: noteName ? report.submarkets[noteName] : [],
       highlights: report ? report.highlights || {} : {},
@@ -2838,7 +2965,8 @@
     const row = mine.find((x) => x.quarter === q && x.submarket === submarket);
     if (!row) return null;
     const market = mine.find((x) => x.quarter === q && x.submarket === 'Market total');
-    const prev = prevQ ? mine.find((x) => x.quarter === prevQ && x.submarket === submarket) : null;
+    const prevReal = prevQ ? mine.find((x) => x.quarter === prevQ && x.submarket === submarket) : null;
+    const prev = prevReal || previousStat(row, mine);
     const peers = mine.filter((x) => x.quarter === q && x.submarket !== 'Market total' && !/\btotal\b/i.test(x.submarket));
     const kind = assetClass.toLowerCase();
     const sf = (n) => fmtNumber(Math.abs(Math.round(n))) + ' SF';
@@ -2851,7 +2979,7 @@
       let t = name + "'s " + kind + ' vacancy is ' + row.vacancy.toFixed(1) + '%';
       if (prev && prev.vacancy !== undefined) {
         const bps = Math.round((row.vacancy - prev.vacancy) * 100);
-        t += bps === 0 ? ', unchanged from ' + prevQ : ', ' + (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps from ' + prevQ;
+        t += bps === 0 ? ', unchanged from ' + prev.quarter : ', ' + (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps from ' + prev.quarter;
       }
       if (!isTotal && market && market.vacancy !== undefined) {
         const gap = Math.round((row.vacancy - market.vacancy) * 10) / 10;
@@ -2868,7 +2996,7 @@
       let t = label + ' averages $' + row.askingRent.toFixed(2) + '/SF';
       if (prev && prev.askingRent) {
         const ch = ((row.askingRent - prev.askingRent) / prev.askingRent) * 100;
-        t += Math.abs(ch) < 0.05 ? ', flat from ' + prevQ : ', ' + (ch < 0 ? 'down ' : 'up ') + Math.abs(ch).toFixed(1) + '% from ' + prevQ;
+        t += Math.abs(ch) < 0.05 ? ', flat from ' + prev.quarter : ', ' + (ch < 0 ? 'down ' : 'up ') + Math.abs(ch).toFixed(1) + '% from ' + prev.quarter;
       }
       if (!isTotal && market && market.askingRent) {
         const d = ((row.askingRent - market.askingRent) / market.askingRent) * 100;
@@ -2890,7 +3018,7 @@
     if (row.vacancy !== undefined && market && market.vacancy !== undefined && !isTotal) lean.push(row.vacancy > market.vacancy + 1 ? 'more availability than the market overall, which gives tenants options and leverage' : row.vacancy < market.vacancy - 1 ? 'tighter than the market overall, so quality space and landlord concessions are harder to come by' : 'about as available as the market overall');
     if (row.netAbsorption !== undefined) lean.push(row.netAbsorption >= 0 ? 'demand was positive this quarter' : 'more tenants moved out than in this quarter');
     const paragraph = points.slice(0, 2).join(' ') + (lean.length ? ' In short, ' + (isTotal ? 'the market' : submarket) + ' is ' + lean.join(', and ') + '.' : '');
-    return { quarter: q, previousQuarter: prevQ || '', row, market: market || null, previous: prev || null, points, paragraph };
+    return { quarter: q, previousQuarter: prev ? prev.quarter : '', row, market: market || null, previous: prev || null, points, paragraph };
   }
 
   // Comp spreadsheets (CoStar exports, broker comp sheets, research tables).
@@ -3595,6 +3723,9 @@
     COMP_IMPORT_ALIASES,
     MARKET_STAT_ALIASES,
     parseResearchReport,
+    previousQuarter,
+    previousStat,
+    bulletFacts,
     layoutLines,
     compareQuarters,
     submarketBrief,

@@ -1361,15 +1361,17 @@
     const report = reports.find((r) => r.quarter === latest && r.assetClass === asset);
     const rows = stats.filter((x) => x.assetClass === asset && x.quarter === latest);
     const total = rows.find((x) => x.submarket === 'Market total');
-    const prevTotal = prevQ ? stats.find((x) => x.assetClass === asset && x.quarter === prevQ && x.submarket === 'Market total') : null;
+    const prevTotal = (prevQ ? stats.find((x) => x.assetClass === asset && x.quarter === prevQ && x.submarket === 'Market total') : null) || (total ? L.previousStat(total, stats) : null);
+    // Changes are against the quarter before: one on file, or worked back from what Research says changed.
+    const prevLabel = prevQ || L.previousQuarter(latest);
     const change = (cur, prev, kind) => {
       if (cur === undefined || cur === null || !prev || prev === undefined || prev === null) return '';
       if (kind === 'bps') {
         const bps = Math.round((cur - prev) * 100);
-        return (bps === 0 ? 'flat' : (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps') + ' vs ' + prevQ;
+        return (bps === 0 ? 'flat' : (bps < 0 ? 'down ' : 'up ') + Math.abs(bps) + ' bps') + ' vs ' + prevLabel;
       }
       const pct = ((cur - prev) / Math.abs(prev)) * 100;
-      return (Math.abs(pct) < 0.05 ? 'flat' : (pct < 0 ? 'down ' : 'up ') + Math.abs(pct).toFixed(1) + '%') + ' vs ' + prevQ;
+      return (Math.abs(pct) < 0.05 ? 'flat' : (pct < 0 ? 'down ' : 'up ') + Math.abs(pct).toFixed(1) + '%') + ' vs ' + prevLabel;
     };
     const tile = (label, value, sub) => `<div class="kpi"><span class="kpi-label">${esc(label)}</span><span class="kpi-value">${esc(value)}</span><span class="kpi-sub">${esc(sub || '')}</span></div>`;
     const copyList = (list) =>
@@ -1421,7 +1423,8 @@
     const hl = (report && report.highlights) || {};
     const notesFor = (sub) => (report ? (report.submarkets || {})[L.matchSubmarket(Object.keys(report.submarkets || {}), sub)] || [] : []);
     // One submarket on its own: its numbers, how it compares, Research's notes and a client-ready summary.
-    const subRow = f.statsSub && rows.find((x) => x.submarket === f.statsSub);
+    // A report with no market total (e.g. one custom corridor) opens straight on its submarket.
+    const subRow = (f.statsSub && rows.find((x) => x.submarket === f.statsSub)) || (!total && rows.length ? rows[0] : null);
     const subView = () => {
       const b = L.submarketBrief(stats, asset, subRow.submarket, latest);
       const x = b.row;
@@ -1450,6 +1453,12 @@
           <p class="hint">Built from the numbers above. Edit it to fit the conversation; the vacancy and rent lines are safe to quote.</p></section>
       </div>
       ${notes.length ? `<section class="card"><h2>What Research says about ${esc(x.submarket)}</h2>${copyList(notes)}</section>` : ''}
+      ${(() => {
+        const deals = report && report.deals ? report.deals[L.matchSubmarket(Object.keys(report.deals), x.submarket)] || [] : [];
+        return deals.length
+          ? `<section class="card"><h2>Notable leases · ${esc(x.submarket)} ${esc(latest)}</h2><div class="table-wrap"><table class="tbl compact"><thead><tr><th>Building</th><th>Tenant</th><th>Type</th><th class="right">SF</th></tr></thead><tbody>${deals.map((d) => `<tr><td>${esc(d.building)}</td><td>${d.tenant ? esc(d.tenant) : '<span class="muted">—</span>'}</td><td>${esc(d.type)}</td><td class="right">${esc(L.fmtNumber(d.sf))}</td></tr>`).join('')}</tbody></table></div><p class="hint">From the report. Add one to Comps with + Comp if you get its terms.</p></section>`
+          : '';
+      })()}
       <div class="grid2">
         <section class="card"><h2>Compared with the market</h2>${pair('Vacancy', x.vacancy, m && m.vacancy, (v) => v.toFixed(1) + '%')}${pair('Asking rent', x.askingRent, m && m.askingRent, (v) => '$' + v.toFixed(2))}</section>
         ${subTrends ? `<section class="card"><h2>Trend</h2><div class="trends">${subTrends}</div></section>` : `<section class="card"><h2>Trend</h2><p class="muted">Shows here once a second quarter is on file.</p></section>`}
@@ -1482,7 +1491,7 @@
           .sort((a, b) => (a.submarket === 'Market total') - (b.submarket === 'Market total'))
           .map((x) => {
             const notes = notesFor(x.submarket);
-            const prev = prevQ ? stats.find((y) => y.assetClass === asset && y.quarter === prevQ && y.submarket === x.submarket) : null;
+            const prev = (prevQ ? stats.find((y) => y.assetClass === asset && y.quarter === prevQ && y.submarket === x.submarket) : null) || L.previousStat(x, stats);
             return `<tr class="${/total/i.test(x.submarket) ? 'total-row' : ''}"><td><strong>${esc(x.submarket)}</strong>${notes.length ? `<details class="research-details"><summary>What Research says (${notes.length})</summary>${copyList(notes)}</details>` : ''}</td>
               <td class="right">${x.vacancy !== undefined ? x.vacancy.toFixed(1) + '%' : '—'}${prev && prev.vacancy !== undefined ? `<div class="sub">${esc(change(x.vacancy, prev.vacancy, 'bps'))}</div>` : ''}</td>
               <td class="right">${x.askingRent ? '$' + x.askingRent.toFixed(2) : '—'}</td><td class="right">${esc(fmtSF(x.netAbsorption))}</td><td class="right">${esc(fmtSF(x.ytdAbsorption))}</td><td class="right">${esc(fmtSF(x.underConstruction))}</td><td class="right">${esc(fmtSF(x.inventory))}</td></tr>`;
@@ -1524,7 +1533,7 @@
       <h2>Review report: ${esc(p.filename)}</h2>
       ${
         r.rows.length
-          ? `<p>Found ${r.rows.length} rows of submarket statistics${hl.length ? `, ${hl.reduce((n, [, v]) => n + v.length, 0)} market observations` : ''}${subs.length ? ` and notes for ${subs.length} submarkets (${esc(subs.join(', '))})` : ''}.</p>`
+          ? `<p>Found ${r.rows.length === 1 ? 'statistics for one submarket' : r.rows.length + ' rows of submarket statistics'}${hl.length ? `, ${hl.reduce((n, [, v]) => n + v.length, 0)} market observations` : ''}${subs.length ? ` and notes for ${subs.length === 1 ? '' : subs.length + ' submarkets: '}${esc(subs.join(', '))}` : ''}${Object.keys(r.deals || {}).length ? `, plus ${Object.values(r.deals).reduce((n, v) => n + v.length, 0)} notable leases` : ''}.</p>`
           : '<p class="red-text">No submarket statistics table was found in this PDF. Market observations and submarket notes are still saved if found.</p>'
       }
       <div class="table-wrap"><table class="tbl compact"><thead><tr><th>Submarket</th><th class="right">Vacancy</th><th class="right">Asking rent</th><th class="right">Net absorption</th><th class="right">Under construction</th></tr></thead><tbody>${r.rows
@@ -1534,7 +1543,7 @@
         <label>Quarter<input name="quarter" value="${esc(r.quarter)}" placeholder="2Q26" required pattern="[1-4][Qq][0-9]{2}" /></label>
         <label>Asset class<select name="assetClass">${options(L.RESEARCH_ASSETS, r.assetClass)}</select></label>
         <div class="wide actions"><button class="btn primary" type="submit">Save ${esc(r.quarter)} ${esc(r.assetClass.toLowerCase())} stats</button><button class="btn" type="button" data-action="cancel-import">Cancel</button></div>
-        <p class="hint wide">Saving replaces any stats already on file for the same quarter and asset class.</p>
+        <p class="hint wide">${r.rows.some((x) => x.submarket === 'Market total') ? 'Saving replaces any stats already on file for the same quarter and asset class.' : 'This report covers ' + (r.rows.length === 1 ? 'one submarket' : r.rows.length + ' submarkets') + ', so it is added to the quarter alongside any others on file.'}</p>
       </form>
     </section>`;
   }
@@ -4591,12 +4600,17 @@
       const r = importPreview.report;
       const st = S.settings();
       const same = (x) => x.quarter === quarter && x.assetClass === assetClass;
+      // A full market report replaces the quarter; a one-submarket snapshot adds to (or refreshes) its submarket only.
+      const full = r.rows.some((x) => x.submarket === 'Market total');
+      const names = new Set(r.rows.map((x) => x.submarket));
+      const old = (st.marketReports || []).find(same);
+      const merged = full || !old ? { highlights: r.highlights, submarkets: r.submarkets, deals: r.deals || {} } : { highlights: Object.assign({}, old.highlights, r.highlights), submarkets: Object.assign({}, old.submarkets, r.submarkets), deals: Object.assign({}, old.deals, r.deals) };
       S.saveSettings({
-        marketStats: (st.marketStats || []).filter((x) => !same(x)).concat(r.rows.map((x) => Object.assign({}, x, { quarter, assetClass }))),
-        marketReports: (st.marketReports || []).filter((x) => !same(x)).concat([{ quarter, assetClass, market: r.market, highlights: r.highlights, submarkets: r.submarkets, filename: importPreview.filename, importedAt: L.todayISO() }]),
+        marketStats: (st.marketStats || []).filter((x) => !same(x) || (!full && !names.has(x.submarket))).concat(r.rows.map((x) => Object.assign({}, x, { quarter, assetClass }))),
+        marketReports: (st.marketReports || []).filter((x) => !same(x)).concat([Object.assign({ quarter, assetClass, market: r.market || (old && old.market) || '', filename: importPreview.filename, importedAt: L.todayISO() }, merged)]),
       });
       importPreview = null;
-      Object.assign(state.research, { statsAsset: assetClass, statsSub: '', statsQuarter: '' });
+      Object.assign(state.research, { statsAsset: assetClass, statsSub: !full && r.rows.length === 1 ? r.rows[0].submarket : '', statsQuarter: quarter });
       toast(`Saved ${quarter} ${assetClass.toLowerCase()} market stats.`);
       render();
     } else if (e.target.id === 'quick-note-form') {

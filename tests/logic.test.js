@@ -1370,3 +1370,52 @@ test('Flex research: detected from the report, kept apart from industrial, used 
   assert.equal(L.marketStatFor(stats, { assetClass: 'Office', submarket: 'Northside' }).current.vacancy, 25);
   assert.equal(L.marketStatFor(r.rows.map((x) => Object.assign({}, x, { assetClass: 'Office' })), { assetClass: 'Office & Industrial', submarket: 'Northside' }).current.assetClass, 'Office', 'no flex on file: falls back to office');
 });
+
+test('single-submarket snapshot reports: tiles, absorption and last-quarter changes from the bullets, notable leases', () => {
+  const pad = (s, n) => s + ' '.repeat(Math.max(2, n - s.length));
+  const lines = [
+    pad('', 170) + '3 Q 2 6 S U B M A R K E T S N A P S H O T',
+    'Custom Riverside Corridor Flex Submarket Overview',
+    '             4.2 MSF                                        23.3%                                      $13.43/SF                                              -206,642 SF                                              0 SF',
+    '           Total Inventory                            Total Vacancy Rate                          Average Asking Rate                                      YTD 2026 Net Absorption                              Under Construction',
+    pad('Current Conditions', 69) + 'Average Asking Rents ($/SF NNN) & Vacancy',
+    pad(' •   At the end of the third quarter of 2026, average asking rent', 69) + '$2.00',
+    '     increased 3.8% quarter over quarter to $13.43/SF NNN.',
+    ' •   Net absorption totaled negative 87,705 SF for the quarter,',
+    '     marking the third consecutive quarter of occupancy losses.',
+    pad('', 69) + pad('Notable Lease Transactions', 90) + 'Notable Sale',
+    ' •   The vacancy rate rose 210 basis points quarter over quarter',
+    pad('     to 23.3%.', 73) + pad('Building Name', 34) + pad('Tenant', 24) + pad('Type', 9) + 'Size (SF)',
+    pad('', 75) + pad('100 Main St', 32) + pad('Acme Labs', 23) + pad('Direct New', 13) + pad('27,936', 20) + '200 Oak Rd   Uptown Partners   $16.9 MM',
+    pad('', 75) + pad('200 Side St', 32) + pad('Birch Co', 23) + pad('Renewal', 13) + '7,775',
+    pad('', 170) + 'F I R M',
+  ];
+  const r = L.parseResearchReport(lines, '3Q26_Custom_Riverside_Corridor_Flex_Market_Overview.pdf');
+  assert.deepEqual([r.quarter, r.assetClass], ['3Q26', 'Flex']);
+  assert.equal(r.rows.length, 1);
+  const row = r.rows[0];
+  assert.deepEqual(
+    [row.submarket, row.inventory, row.vacancy, row.askingRent, row.rentType, row.ytdAbsorption, row.underConstruction, row.netAbsorption],
+    ['Riverside Corridor', 4200000, 23.3, 13.43, 'total', -206642, 0, -87705]
+  );
+  assert.deepEqual(row.qoq, { vacancyBps: 210, rentPct: 3.8 });
+  assert.deepEqual(r.deals['Riverside Corridor'], [
+    { building: '100 Main St', tenant: 'Acme Labs', type: 'Direct New', sf: 27936 },
+    { building: '200 Side St', tenant: 'Birch Co', type: 'Renewal', sf: 7775 },
+  ]);
+  assert.equal(L.previousQuarter('1Q27'), '4Q26');
+  assert.equal(L.previousQuarter('3Q26'), '2Q26');
+  const prev = L.previousStat(row, [row]);
+  assert.deepEqual([prev.quarter, prev.vacancy, prev.askingRent, prev.derived], ['2Q26', 21.2, 12.94, true]);
+  const b = L.submarketBrief(r.rows, 'Flex', 'Riverside Corridor');
+  assert.equal(b.points[0], "Riverside Corridor's flex vacancy is 23.3%, up 210 bps from 2Q26.");
+  assert.equal(b.points[1], 'Asking rent (NNN) averages $13.43/SF, up 3.8% from 2Q26.');
+  assert.deepEqual(L.bulletFacts(['Move-ins pushed vacancy down 26 basis points quarter over quarter to 26.1%.']), { vacancyBps: -26 });
+});
+
+test('notable leases: tenant and type only one space apart', () => {
+  const pad = (s, n) => s + ' '.repeat(Math.max(2, n - s.length));
+  const lines = ['Riverside Flex Submarket Overview', pad('', 80) + pad('Notable Lease Transactions', 90) + 'Notable Sale', pad('', 84) + pad('3355 Main Blvd', 29) + 'Acme Labs Ltd. Direct New  27,936', pad('', 84) + pad('64 Side Blvd', 29) + pad('Birch Pros', 16) + 'Renewal & Expansion    7,775', pad('', 84) + pad('2300 Lake Pkwy', 29) + pad('', 16) + 'New Lease    22,328', pad('', 84) + pad('4400 Green Pkwy', 29) + 'Direct New    21,790'];
+  const r = L.parseResearchReport(lines, 'flex.pdf');
+  assert.deepEqual(r.deals.Riverside.map((d) => [d.tenant, d.type, d.sf]), [['Acme Labs Ltd.', 'Direct New', 27936], ['Birch Pros', 'Renewal & Expansion', 7775], ['', 'New Lease', 22328], ['', 'Direct New', 21790]]);
+});
