@@ -862,6 +862,22 @@
     return (assetClass === 'Industrial' && map['industrial|' + k]) || map[k] || name || '';
   }
 
+  // ---------- LinkedIn ----------
+  // A pasted profile link, tidied: https added, tracking query dropped ('' when it isn't a LinkedIn link).
+  function normalizeLinkedIn(raw) {
+    let v = String(raw || '').trim();
+    if (!v) return '';
+    if (!/^https?:\/\//i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
+    const m = v.match(/^https?:\/\/([a-z0-9-]+\.)?linkedin\.com(\/[^?#\s]*)?/i);
+    if (!m) return '';
+    return 'https://www.linkedin.com' + (m[2] || '/').replace(/\/+$/, '');
+  }
+  // A LinkedIn people search for a contact without a saved profile: name plus company.
+  function linkedInSearchUrl(contact, companyName) {
+    const words = [contact && contact.firstName, contact && contact.lastName, companyName].map((x) => String(x || '').trim()).filter(Boolean).join(' ');
+    return 'https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(words);
+  }
+
   // Personal mailboxes: their domain says nothing about the company.
   const FREE_MAIL = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|aol|icloud|me|mac|comcast|att|bellsouth|protonmail|proton|mail|gmx|zoho)\.(com|net|me)$/i;
   const isFreeMail = (dom) => FREE_MAIL.test(String(dom || ''));
@@ -3984,6 +4000,8 @@
     compareQuarters,
     submarketBrief,
     matchSubmarket,
+    normalizeLinkedIn,
+    linkedInSearchUrl,
     MARKET_PLACEHOLDERS,
     normalizeQuarter,
     cleanMarketStat,

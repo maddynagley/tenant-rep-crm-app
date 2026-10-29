@@ -681,11 +681,22 @@
   function editCell(col, id, field, type, value, display) {
     return `<span class="cell-edit" tabindex="0" role="button" title="Click to edit" data-edit-col="${col}" data-edit-id="${esc(id)}" data-edit-field="${field}" data-edit-type="${type}" data-edit-value="${esc(value === undefined || value === null ? '' : value)}">${display || '<span class="muted">—</span>'}</span>`;
   }
+  // A contact's LinkedIn: open the saved profile, or search LinkedIn for them and paste the link in.
+  function linkedinCell(p) {
+    const edit = (label) => `<span class="cell-edit" tabindex="0" role="button" title="Paste their LinkedIn profile link" data-edit-col="contacts" data-edit-id="${esc(p.id)}" data-edit-field="linkedin" data-edit-type="text" data-edit-value="${esc(p.linkedin || '')}">${label}</span>`;
+    return p.linkedin
+      ? `<a href="${esc(p.linkedin)}" target="_blank" rel="noopener" title="Open their LinkedIn profile">LinkedIn ↗</a> ${edit('<span class="muted" aria-label="Change link">✎</span>')}`
+      : `<a href="${esc(L.linkedInSearchUrl(p, companyName(p.companyId)))}" target="_blank" rel="noopener" title="Search LinkedIn for ${esc(contactName(p))}">Find</a> · ${edit('<span class="muted">Paste link</span>')}`;
+  }
   function saveInline(col, id, field, raw) {
     const rec = S.get(col, id);
     if (!rec) return;
     let value = raw;
     if (['sfOccupied', 'sf', 'headcount', 'budgetRate'].includes(field)) value = L.parseNumber(raw) === null ? '' : L.parseNumber(raw);
+    if (field === 'linkedin') {
+      value = L.normalizeLinkedIn(raw);
+      if (raw && !value) return toast("That isn't a LinkedIn link. Copy the address from their LinkedIn profile.");
+    }
     if (String(rec[field] === undefined || rec[field] === null ? '' : rec[field]) === String(value)) return render();
     if (col === 'deals' && field === 'stage') {
       const patch = { id, stage: value };
@@ -2150,7 +2161,7 @@
               ? `<table class="tbl compact"><tbody>${contacts
                   .map(
                     (p) => `<tr><td><button class="star ${p.keyContact ? 'on' : ''}" data-action="toggle-key" data-id="${esc(p.id)}" title="${p.keyContact ? 'Main point of contact' : 'Make main point of contact'}">${p.keyContact ? '★' : '☆'}</button><strong>${esc(contactName(p))}</strong> ${p.role ? badge(p.role, p.role === 'Decision Maker' ? 'green' : 'gray') : ''} ${verificationBadge(p.verification)}<div class="sub">${esc(p.title)}</div>${p.notes ? `<div class="sub clamp" title="${esc(p.notes)}">${esc(p.notes)}</div>` : ''}</td>
-                    <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}${p.mobile ? ' · ' + phoneLink(p.mobile, p.mobileDNC, '(m)') : ''}</div>${p.linkedin ? `<div class="sub"><a href="${esc(p.linkedin)}" target="_blank" rel="noopener">LinkedIn ↗</a></div>` : ''}</td>
+                    <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}${p.mobile ? ' · ' + phoneLink(p.mobile, p.mobileDNC, '(m)') : ''}</div><div class="sub">${linkedinCell(p)}</div></td>
                     <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Draft an email from a template">Email</button>` : ''}<button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
                   )
                   .join('')}</tbody></table>`
@@ -2312,7 +2323,7 @@
       <p class="count">${list.length} contacts</p>
       ${
         list.length
-          ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Company</th><th>Role</th><th>Email</th><th>Phone</th><th>Last touch</th><th></th></tr></thead><tbody>
+          ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Company</th><th>Role</th><th>Email</th><th>Phone</th><th>LinkedIn</th><th>Last touch</th><th></th></tr></thead><tbody>
           ${list
             .map(
               (c) => `<tr>
@@ -2321,8 +2332,9 @@
               <td>${inlineSelect('contacts', c.id, 'role', FIELDS.contacts.find((x) => x.key === 'role').options, c.role, '—')}</td>
               <td>${editCell('contacts', c.id, 'email', 'email', c.email, esc(c.email))}${c.email ? ` <a class="icon-btn" href="mailto:${esc(c.email)}" title="Email">↗</a>` : ''}</td>
               <td class="nowrap">${editCell('contacts', c.id, 'phone', 'tel', c.phone, c.phone ? esc(c.phone) + (c.phoneDNC ? ' ' + badge('DNC', 'red') : '') : '')}${c.mobile ? `<div class="sub">${phoneLink(c.mobile, c.mobileDNC, '(m)')}</div>` : ''}</td>
+              <td class="nowrap">${linkedinCell(c)}</td>
               <td>${touches[c.id] ? esc(L.fmtDate(touches[c.id])) : '<span class="muted">Never</span>'}</td>
-              <td class="right nowrap">${c.linkedin ? `<a class="icon-btn" href="${esc(c.linkedin)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}
+              <td class="right nowrap">
                 <button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(c.companyId)}" data-contact="${esc(c.id)}" title="Log activity">Log</button>
                 <button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(c.id)}" title="Edit">✎</button>
                 <button class="icon-btn" data-action="delete" data-col="contacts" data-id="${esc(c.id)}" title="Delete">✕</button></td></tr>`

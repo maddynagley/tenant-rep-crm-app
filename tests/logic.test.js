@@ -1583,3 +1583,12 @@ test('submarket clean-up: local names suggested into Research submarkets, by ass
   assert.equal(L.mapSubmarket('Northeast', map, 'Industrial'), 'Northeast/I-85 Corridor');
   assert.equal(L.mapSubmarket('Northeast', map, 'Office'), 'Northeast');
 });
+
+test('LinkedIn: pasted profile links tidied, search link for contacts without one', () => {
+  assert.equal(L.normalizeLinkedIn('linkedin.com/in/pat-lee-123/'), 'https://www.linkedin.com/in/pat-lee-123');
+  assert.equal(L.normalizeLinkedIn('https://www.linkedin.com/in/pat-lee?utm_source=share&utm_medium=member'), 'https://www.linkedin.com/in/pat-lee');
+  assert.equal(L.normalizeLinkedIn('https://uk.linkedin.com/in/pat-lee'), 'https://www.linkedin.com/in/pat-lee');
+  assert.equal(L.normalizeLinkedIn('https://example.com/pat'), '');
+  assert.equal(L.normalizeLinkedIn(''), '');
+  assert.equal(L.linkedInSearchUrl({ firstName: 'Pat', lastName: 'Lee' }, 'Acme & Co'), 'https://www.linkedin.com/search/results/people/?keywords=Pat%20Lee%20Acme%20%26%20Co');
+});
