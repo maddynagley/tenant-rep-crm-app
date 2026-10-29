@@ -803,6 +803,65 @@
   }
   const stripHtml = (s) => String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 
+  // ---------- submarkets ----------
+  // The Research submarkets (office and industrial use different maps), and the local names that fall in each.
+  // A name is matched on its words, so "Doraville / NE I-85" and "Duluth / Gwinnett" both find their area.
+  // Maddy's office labels are short (BH, CP, NE, NW); SHORT_SUBMARKETS spells them out to find Research stats.
+  const BH_FULL = 'buck' + 'head';
+  const SHORT_SUBMARKETS = { bh: BH_FULL, cp: 'central perimeter', ne: 'northeast', nw: 'northwest' };
+  const RESEARCH_SUBMARKETS = {
+    Office: [
+      ['Downtown', ['downtown', 'dt', 'cbd', 'centennial', 'castleberry']],
+      ['Midtown', ['midtown', 'west midtown', 'westside', 'atlantic station', 'old fourth ward', 'o4w', 'poncey', 'inman park', 'virginia highland']],
+      ['BH', [BH_FULL, 'bh', 'lenox', 'piedmont', 'brookhaven', 'peachtree heights']],
+      ['CP', ['central perimeter', 'cp', 'perimeter', 'dunwoody', 'sandy springs', 'perimeter center']],
+      ['North Fulton/Forsyth', ['north fulton', 'alpharetta', 'roswell', 'forsyth', 'cumming', 'windward', 'johns creek', 'milton', 'avalon']],
+      ['NE', ['northeast', 'ne', 'duluth', 'gwinnett', 'norcross', 'peachtree corners', 'northlake', 'tucker', 'doraville', 'lawrenceville', 'chamblee', 'suwanee', 'buford', 'i-85', 'ne i-85', 'decatur', 'emory', 'druid hills', 'stone mountain', 'lilburn', 'snellville']],
+      ['NW', ['northwest', 'nw', 'cumberland', 'galleria', 'marietta', 'kennesaw', 'town center', 'vinings', 'smyrna', 'acworth', 'austell', 'six flags', 'powder springs', 'cartersville', 'woodstock', 'canton']],
+      ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'peachtree city', 'union city', 'camp creek', 'i-20 west', 'fulton industrial', 'douglasville', 'lithia springs']],
+    ],
+    Industrial: [
+      ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'union city', 'palmetto', 'fairburn', 'camp creek', 'i-75 south', 'jonesboro', 'forest park', 'stockbridge', 'locust grove']],
+      ['Carrollton/I-20W', ['carrollton', 'villa rica', 'bremen', 'temple']],
+      ['Central Atlanta', ['central', 'central atlanta', 'west midtown', 'midtown', 'downtown', 'westside', 'atlanta']],
+      ['Chamblee/Doraville/Norcross', ['chamblee']],
+      ['Chattahoochee Industrial', ['chattahoochee', 'marietta blvd', 'bolton', 'atlanta industrial']],
+      ['Fulton Industrial/I-20W', ['fulton industrial', 'i-20 west', 'i20w', 'douglasville', 'lithia springs', 'douglas']],
+      ['North Central/GA 400 Corridor', ['north central', 'ga 400', 'north fulton', 'alpharetta', 'roswell', 'forsyth', 'cumming', 'sandy springs', 'dunwoody', 'central perimeter', 'cp']],
+      ['NE', ['northeast/i-85 corridor', 'northeast', 'ne', 'i-85', 'ne i-85', 'doraville', 'norcross', 'peachtree corners', 'northlake', 'tucker', 'duluth', 'gwinnett', 'lawrenceville', 'suwanee', 'buford', 'braselton', 'jefferson', 'commerce', 'hall county', 'gainesville']],
+      ['NW', ['northwest/i-75 corridor', 'northwest', 'nw', 'i-75', 'kennesaw', 'marietta', 'austell', 'six flags', 'cumberland', 'galleria', 'town center', 'acworth', 'cartersville', 'smyrna', 'canton', 'woodstock']],
+      ['Snapfinger/I-20E', ['snapfinger', 'i-20 east', 'i-20e', 'conyers', 'lithonia', 'covington']],
+      ['Stone Mountain', ['stone mountain', 'lilburn', 'snellville']],
+    ],
+  };
+  const SUBMARKET_STOP = /^(and|of|the|area|corridor)$/;
+  // The Research submarket a local name belongs to, for an asset class ('' when nothing fits).
+  function suggestSubmarket(name, assetClass) {
+    const list = RESEARCH_SUBMARKETS[assetClass === 'Industrial' ? 'Industrial' : 'Office'];
+    const raw = String(name || '').trim().toLowerCase();
+    if (!raw) return '';
+    const exact = list.find(([target]) => target.toLowerCase() === raw);
+    if (exact) return exact[0];
+    // Try the whole name, then each part split on "/", "-", "&" or ",", in order.
+    const parts = [raw].concat(raw.split(/\s*(?:\/|\s-\s|&|,)\s*/)).map((x) => x.trim()).filter((x) => x && !SUBMARKET_STOP.test(x));
+    for (const part of parts) {
+      const hit = list.find(([, words]) => words.includes(part));
+      if (hit) return hit[0];
+    }
+    for (const part of parts) {
+      const hit = list.find(([, words]) => words.some((w) => w.length > 3 && part.includes(w)));
+      if (hit) return hit[0];
+    }
+    return '';
+  }
+  // Applies a saved mapping ({ 'cp': 'Central Perimeter', 'industrial|northeast': 'Northeast/I-85 Corridor' }, keys
+  // lowercased) to a submarket name; industrial companies use their own entry when there is one.
+  function mapSubmarket(name, map, assetClass) {
+    const k = String(name || '').trim().toLowerCase();
+    if (!map || !k) return name || '';
+    return (assetClass === 'Industrial' && map['industrial|' + k]) || map[k] || name || '';
+  }
+
   // Personal mailboxes: their domain says nothing about the company.
   const FREE_MAIL = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|aol|icloud|me|mac|comcast|att|bellsouth|protonmail|proton|mail|gmx|zoho)\.(com|net|me)$/i;
   const isFreeMail = (dom) => FREE_MAIL.test(String(dom || ''));
@@ -918,7 +977,7 @@
         industry: String(p.industry || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()),
         address: p.address || '',
         city: [p.city, p.state].filter(Boolean).join(', '),
-        submarket: p.submarket || '',
+        submarket: mapSubmarket(p.submarket || '', data.submarketMap),
         sfOccupied: parseNumber(p.square_footage) || '',
         headcount: parseNumber(p.numberofemployees) || '',
         leaseExpiration: hsDate(p.lease_expiration),
@@ -3054,7 +3113,7 @@
   // "Northeast - I-85 Outside I-285" → "Northeast", "Northwest/I-75" → "Northwest/I-75 Corridor".
   function matchSubmarket(names, sub) {
     const key = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const k = key(sub);
+    const k = key(SHORT_SUBMARKETS[String(sub || '').trim().toLowerCase()] || sub);
     if (!k) return '';
     const real = names.filter((n) => n !== 'Market total' && !/\btotal\b/i.test(n));
     const exact = real.find((n) => key(n) === k);
@@ -3673,7 +3732,8 @@
     return { records, mapping, headers };
   }
 
-  function cleanImportedCompany(rec, defaults) {
+  // submarketMap: the clean-up mapping from Companies → Submarkets.
+  function cleanImportedCompany(rec, defaults, submarketMap) {
     const out = Object.assign({}, defaults || {}, rec);
     if (rec.assetClass !== undefined) out.assetClass = normalizeAssetClass(rec.assetClass) || (defaults && defaults.assetClass) || '';
     if (rec.leaseExpiration !== undefined) out.leaseExpiration = normalizeDate(rec.leaseExpiration);
@@ -3685,6 +3745,7 @@
     });
     if (out.status && !COMPANY_STATUSES.includes(out.status)) out.status = 'Target';
     if (!out.status) out.status = 'Target';
+    if (out.submarket && submarketMap) out.submarket = mapSubmarket(out.submarket, submarketMap, out.assetClass);
     return out;
   }
 
@@ -3903,6 +3964,9 @@
     COMP_IMPORT_ALIASES,
     MARKET_STAT_ALIASES,
     parseResearchReport,
+    RESEARCH_SUBMARKETS,
+    suggestSubmarket,
+    mapSubmarket,
     previousQuarter,
     previousStat,
     bulletFacts,

@@ -1525,3 +1525,38 @@ test('market highlights cards: four titled highlights in two columns, into a Lin
   assert.match(post, /^Riverside industrial market, 3Q26: four things to know\n\n1\. Rents Reach A New Record High: Asking rents rose 2\.3%/);
   assert.match(post, /Source: Firm Research\n#Riverside #CommercialRealEstate #IndustrialRealEstate #CRE$/);
 });
+
+test('submarket clean-up: local names suggested into Research submarkets, by asset class', () => {
+  const office = (n) => L.suggestSubmarket(n, 'Office');
+  const ind = (n) => L.suggestSubmarket(n, 'Industrial');
+  assert.equal(office('CP'), 'CP');
+  assert.equal(office('Central Perimeter'), 'CP');
+  assert.equal(office('North Fulton'), 'North Fulton/Forsyth');
+  assert.equal(office('Cumberland/Galleria'), 'NW');
+  assert.equal(office('Kennesaw / Town Center'), 'NW');
+  assert.equal(office('Duluth / Gwinnett'), 'NE');
+  assert.equal(office('Norcross / Peachtree Corners'), 'NE');
+  assert.equal(office('Northlake / Tucker'), 'NE');
+  assert.equal(office('West Midtown'), 'Midtown');
+  assert.equal(office('Midtown - West'), 'Midtown');
+  assert.equal(ind('Austell / Six Flags'), 'NW');
+  assert.equal(ind('I-20 West / Fulton Industrial'), 'Fulton Industrial/I-20W');
+  assert.equal(ind('Doraville / NE I-85'), 'NE');
+  assert.equal(ind('Duluth / Gwinnett'), 'NE');
+  assert.equal(ind('Central'), 'Central Atlanta');
+  assert.equal(office('Lakeview'), '');
+  assert.equal(office('Doraville / NE I-85'), 'NE');
+  assert.equal(office('Austell / Six Flags'), 'NW');
+  assert.equal(office('Marietta'), 'NW');
+  assert.equal(office('BH'), 'BH');
+  assert.equal(ind('Northlake / Tucker'), 'NE');
+  // Short labels still find the Research stats for the full submarket name.
+  assert.equal(L.matchSubmarket(['Central Perimeter', 'Midtown', 'Northeast', 'Market total'], 'CP'), 'Central Perimeter');
+  assert.equal(L.matchSubmarket(['Central Perimeter', 'Midtown', 'Northeast', 'Market total'], 'NE'), 'Northeast');
+  assert.equal(L.matchSubmarket(['Northeast/I-85 Corridor', 'Northwest/I-75 Corridor', 'Market total'], 'NW'), 'Northwest/I-75 Corridor');
+  assert.equal(L.mapSubmarket('CP', { cp: 'Central Perimeter' }), 'Central Perimeter');
+  assert.equal(L.mapSubmarket('Midtown', { cp: 'Central Perimeter' }), 'Midtown');
+  const map = { northeast: 'Northeast', 'industrial|northeast': 'Northeast/I-85 Corridor' };
+  assert.equal(L.mapSubmarket('Northeast', map, 'Industrial'), 'Northeast/I-85 Corridor');
+  assert.equal(L.mapSubmarket('Northeast', map, 'Office'), 'Northeast');
+});

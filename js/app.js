@@ -1993,6 +1993,7 @@
     return `
       <div class="page-head"><h1>Companies & Prospects</h1>
         <div class="actions">
+          <button class="btn" data-action="submarket-cleanup" title="Combine and rename submarkets">Submarkets</button>
           <button class="btn" data-action="export-companies">Export CSV</button>
           <a class="btn" href="#/data">Import CSV</a>
           <button class="btn primary" data-action="new" data-col="companies">+ Company</button>
@@ -3590,7 +3591,7 @@
     const toCreate = [];
     records.forEach((rec) => {
       if (!rec.name) return skipped++;
-      const clean = L.cleanImportedCompany(rec, {});
+      const clean = L.cleanImportedCompany(rec, {}, S.settings().submarketMap);
       const key = L.normalizeCompanyName(clean.name);
       const addr = L.normalizeAddress(clean.address);
       const match = existing
@@ -3839,6 +3840,56 @@
       await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
       return { lines, image: canvas.toDataURL('image/jpeg', 0.88) };
     });
+  }
+
+  // Submarket clean-up: every name in use, with the Research submarket it suggests for office and for industrial
+  // companies. Applying renames the companies and remembers the mapping for imports and HubSpot syncs.
+  function openSubmarketCleanup() {
+    const groups = {};
+    S.all('companies').forEach((c) => {
+      const name = String(c.submarket || '').trim();
+      if (!name) return;
+      const g = (groups[name.toLowerCase()] = groups[name.toLowerCase()] || { name, office: 0, industrial: 0 });
+      if (c.assetClass === 'Industrial') g.industrial++;
+      else g.office++;
+    });
+    const rows = Object.values(groups).sort((a, b) => a.name.localeCompare(b.name));
+    const targets = Array.from(
+      new Set(
+        L.RESEARCH_SUBMARKETS.Office.map((x) => x[0])
+          .concat(L.RESEARCH_SUBMARKETS.Industrial.map((x) => x[0]))
+          .concat((S.settings().marketStats || []).map((x) => x.submarket).filter((x) => x !== 'Market total'))
+          .concat(rows.map((r) => r.name))
+      )
+    ).sort();
+    const isTarget = (n, asset) => L.RESEARCH_SUBMARKETS[asset].some((x) => x[0] === n);
+    const cell = (r, asset, n) => {
+      if (!n) return '<td class="muted">—</td>';
+      const sug = isTarget(r.name, asset) ? r.name : L.suggestSubmarket(r.name, asset);
+      return `<td><input name="${asset === 'Industrial' ? 'ind' : 'off'}|${esc(r.name)}" list="submarket-targets" value="${esc(sug || r.name)}" class="${sug && sug !== r.name ? 'changed' : ''}" /> <span class="muted">${n}</span></td>`;
+    };
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" id="submarket-form" class="wide-dialog">
+      <header><h2>Combine and rename submarkets</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="dialog-body">
+        <p class="hint">Each name your companies use, with the Research submarket suggested for it (office and industrial follow different maps). Change any box, or type your own name to keep an area separate. Applying renames those companies and remembers the change, so imports and HubSpot syncs use the clean names from now on.</p>
+        <datalist id="submarket-targets">${targets.map((t) => `<option value="${esc(t)}"></option>`).join('')}</datalist>
+        <div class="table-wrap"><table class="tbl compact"><thead><tr><th>Name in the CRM</th><th>Office companies → becomes</th><th>Industrial companies → becomes</th></tr></thead><tbody>${rows
+          .map((r) => `<tr><td><strong>${esc(r.name)}</strong></td>${cell(r, 'Office', r.office)}${cell(r, 'Industrial', r.industrial)}</tr>`)
+          .join('')}</tbody></table></div>
+      </div>
+      <footer><span class="hint" id="submarket-summary"></span><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Apply</button></footer>
+    </form>`;
+    dlg.showModal();
+    updateSubmarketSummary();
+  }
+  function updateSubmarketSummary() {
+    const f = $('#submarket-form');
+    if (!f) return;
+    const changes = Array.from(f.querySelectorAll('input[name]')).filter((i) => i.value.trim() && i.value.trim() !== i.name.split('|').slice(1).join('|'));
+    changes.forEach((i) => i.classList.add('changed'));
+    $('#submarket-summary').textContent = changes.length ? changes.length + ' name' + (changes.length > 1 ? 's' : '') + ' will change' : 'No changes';
   }
 
   // A social post's caption and image, ready to copy, download and post.
@@ -4239,6 +4290,8 @@
           Object.assign(state.research, { statsAsset: d.asset, statsQuarter: to, statsSub: '' });
           return toast(`Moved to ${to}.`);
         }
+        case 'submarket-cleanup':
+          return openSubmarketCleanup();
         case 'social-preview':
           e.preventDefault();
           e.stopPropagation();
@@ -4663,6 +4716,7 @@
   document.addEventListener('change', (e) => {
     if (e.target.dataset.filter && e.target.type !== 'search') onFilterChange(e);
     if (e.target.closest('#draft-form') && ['template', 'contact'].includes(e.target.name)) fillDraft();
+    if (e.target.closest && e.target.closest('#submarket-form')) updateSubmarketSummary();
     if (e.target.name === 'caption' && e.target.closest('.social-preview')) S.upsert('marketing', { id: e.target.closest('form').dataset.id, caption: e.target.value }, { silent: true });
     if (e.target.id === 'align-asset' && importPreview) {
       importPreview.alignAsset = e.target.value;
@@ -4693,6 +4747,34 @@
       const to = e.target.querySelector('select[name=targetId]').value;
       if (!to) return toast('Pick the company to keep.');
       if (confirm(`Merge ${companyName(e.target.dataset.from)} into ${companyName(to)}? This can't be undone.`)) mergeCompanies(e.target.dataset.from, to);
+    } else if (e.target.id === 'submarket-form') {
+      e.preventDefault();
+      const map = Object.assign({}, S.settings().submarketMap || {});
+      const plan = {};
+      Array.from(e.target.querySelectorAll('input[name]')).forEach((i) => {
+        const [kind, ...rest] = i.name.split('|');
+        const from = rest.join('|');
+        const to = i.value.trim();
+        if (!to || to === from) return;
+        plan[(kind === 'ind' ? 'industrial|' : '') + from.toLowerCase()] = to;
+        map[(kind === 'ind' ? 'industrial|' : '') + from.toLowerCase()] = to;
+      });
+      let n = 0;
+      S.all('companies').forEach((c) => {
+        const k = String(c.submarket || '').trim().toLowerCase();
+        if (!k) return;
+        const to = c.assetClass === 'Industrial' ? plan['industrial|' + k] : plan[k];
+        if (to && to !== c.submarket) {
+          S.upsert('companies', { id: c.id, submarket: to }, { silent: true });
+          n++;
+        }
+      });
+      S.saveSettings({ submarketMap: map });
+      $('#modal').close();
+      if (state.today.sub && plan[state.today.sub.toLowerCase()]) state.today.sub = plan[state.today.sub.toLowerCase()];
+      if (state.companies.submarket && plan[state.companies.submarket.toLowerCase()]) state.companies.submarket = plan[state.companies.submarket.toLowerCase()];
+      saveUIState();
+      toast(`Updated ${n} compan${n === 1 ? 'y' : 'ies'}. New imports and HubSpot syncs will use these names.`);
     } else if (e.target.id === 'align-form') {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -5013,7 +5095,7 @@
     }
   }
   function hubspotData() {
-    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain() };
+    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain(), submarketMap: S.settings().submarketMap };
   }
   function applyHubSpotRecords(plan) {
     plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));

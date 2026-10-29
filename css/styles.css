@@ -507,3 +507,9 @@ h2 select.more { width: auto; min-width: 200px; max-width: 280px; height: 32px; 
 .social-body img { width: 100%; border-radius: 6px; border: 1px solid var(--border); }
 .social-body textarea { width: 100%; font-size: 13px; line-height: 1.45; }
 @media (max-width: 720px) { .social-body { grid-template-columns: 1fr; } }
+
+/* Submarket clean-up */
+dialog:has(.wide-dialog) { width: min(920px, calc(100vw - 24px)); }
+#submarket-form .dialog-body { padding: 8px 18px; max-height: 65vh; overflow: auto; }
+#submarket-form input { height: 30px; font-size: 13px; padding: 0 8px; width: calc(100% - 28px); min-width: 120px; }
+#submarket-form input.changed { border-color: var(--accent); background: var(--gray-soft); }
