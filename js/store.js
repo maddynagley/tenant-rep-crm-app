@@ -263,6 +263,11 @@
       Object.keys(incoming.settingsPatch || {}).forEach((k) => {
         if (!DEVICE_ONLY_SETTINGS.includes(k) && k !== 'sharedLists') db.settings[k] = incoming.settingsPatch[k];
       });
+      // Fixes written by name (contacts moved to their company, emptied placeholder companies deleted).
+      const named = L.planNamedFixes(db, incoming);
+      named.contacts.forEach((r) => Object.assign(get('contacts', r.id), r));
+      named.activities.forEach((r) => Object.assign(get('activities', r.id), r));
+      named.removeIds.forEach((id) => remove('companies', id, true));
       // Duplicate companies an update file folds into the real one.
       (incoming.merge || []).forEach((m) => mergeCompanies(m.from, m.to, true));
       // An update file can also retire records (e.g. a duplicate deal merged into another). HubSpot records

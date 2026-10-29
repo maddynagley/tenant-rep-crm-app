@@ -3765,7 +3765,8 @@
             const n = S.COLLECTIONS.map((c) => (data[c] || []).length).reduce((a, b) => a + b, 0);
             const merges = (data.merge || []).filter((m) => S.get('companies', m.from) && S.get('companies', m.to)).length;
             const removes = S.COLLECTIONS.map((c) => ((data.remove && data.remove[c]) || []).filter((id) => S.get(c, id)).length).reduce((a, b) => a + b, 0);
-            const what = [n ? `update ${n} records` : '', merges ? `merge ${merges} duplicate compan${merges > 1 ? 'ies' : 'y'}` : '', removes ? `delete ${removes} record${removes > 1 ? "s" : ""}` : ""].filter(Boolean).join(', ');
+            const named = L.planNamedFixes({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') }, data).notes;
+            const what = [n ? `update ${n} records` : '', merges ? `merge ${merges} duplicate compan${merges > 1 ? 'ies' : 'y'}` : '', removes ? `delete ${removes} record${removes > 1 ? "s" : ""}` : ""].concat(named).filter(Boolean).join(', ');
             if (!confirm(`From "${file.name}": ${what || 'nothing to change'}. Existing records with the same ID are updated; nothing else changes. Continue?`)) return;
             S.importJSON(text, 'merge');
             return toast(`Done: ${what}.`);

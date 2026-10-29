@@ -1601,3 +1601,29 @@ test('notes: My notes split into dated entries, one edited or removed', () => {
   assert.equal(L.replaceNote(text, 9, 'x'), text);
   assert.deepEqual(L.splitNotes(''), []);
 });
+
+test('update files: contacts moved to a named company, emptied placeholder company deleted', () => {
+  const data = {
+    companies: [{ id: 'x', name: 'Unfiled contacts' }, { id: 'hs-co-1', name: 'Acme Imports & Wholesale' }, { id: 'u', name: 'The Uptown Group' }, { id: 'y', name: 'Other holding' }],
+    contacts: [
+      { id: 'hs-ct-1', companyId: 'x', firstName: 'Pat', lastName: 'Lee', email: 'acme@yahoo.com' },
+      { id: 'hs-ct-2', companyId: 'x', firstName: 'Sam', lastName: 'Ray', email: '' },
+      { id: 'hs-ct-3', companyId: 'y', firstName: 'Kim', lastName: 'Fox' },
+    ],
+    deals: [],
+    activities: [{ id: 'e1', companyId: 'x', contactId: 'hs-ct-1', date: '2026-10-01' }, { id: 'e2', companyId: 'y', contactId: 'hs-ct-3', date: '2026-10-01' }],
+  };
+  const file = {
+    moveContacts: [
+      { email: 'ACME@yahoo.com', name: 'Pat Lee', toCompanyId: 'hs-co-9', toCompany: 'Acme Imports' },
+      { name: 'Sam Ray', toCompany: 'Uptown Group' },
+      { name: 'Nobody Here', toCompany: 'Acme' },
+    ],
+    removeCompanies: ['contacts unfiled', 'Other holding'],
+  };
+  const r = L.planNamedFixes(data, file);
+  assert.deepEqual(r.contacts, [{ id: 'hs-ct-1', companyId: 'hs-co-1' }, { id: 'hs-ct-2', companyId: 'u' }]);
+  assert.deepEqual(r.activities, [{ id: 'e1', companyId: 'hs-co-1', dealId: '' }]);
+  assert.deepEqual(r.removeIds, ['x']);
+  assert.deepEqual(r.notes, ['move Pat Lee to Acme Imports & Wholesale', 'move Sam Ray to The Uptown Group', 'Nobody Here: not found', 'delete the company "Unfiled contacts"', 'keep "Other holding": 2 other records are still in it']);
+});

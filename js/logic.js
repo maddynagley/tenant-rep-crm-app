@@ -2301,6 +2301,57 @@
 
   // Merging a duplicate company into another: everything tied to it moves over, the kept company gains any
   // details it was missing plus the duplicate's name as an alias, and the duplicate's HubSpot ID points here.
+  // Update-file fixes written by name, since the IDs in Maddy's browser aren't known when the file is made:
+  //   moveContacts: [{ email, name, toCompanyId, toCompany }]  a contact (by email, else full name) moves to a company
+  //     (by ID, else a unique name match), with the activity it carries;
+  //   removeCompanies: ['name']  deleted only once nothing is left in it (deleting a company deletes its contents).
+  // Returns { contacts, activities, removeIds, notes } for the store to apply.
+  function planNamedFixes(data, file) {
+    const key = (n) => String(n || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\b(the|inc|llc|lp|llp|ltd|corp|co)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    const findCompany = (id, name) => {
+      if (id && data.companies.some((c) => c.id === id)) return data.companies.find((c) => c.id === id);
+      const k = key(name);
+      if (!k) return null;
+      const exact = data.companies.filter((c) => key(c.name) === k);
+      if (exact.length) return exact.length === 1 ? exact[0] : null;
+      const near = data.companies.filter((c) => key(c.name).includes(k) || (key(c.name) && k.includes(key(c.name))));
+      if (near.length) return near.length === 1 ? near[0] : null;
+      // Same words in another order ("contacts unassigned hubspot").
+      const words = k.split(' ');
+      const any = data.companies.filter((c) => words.every((w) => key(c.name).split(' ').includes(w)));
+      return any.length === 1 ? any[0] : null;
+    };
+    const full = (p) => key([p.firstName, p.lastName].join(' '));
+    const out = { contacts: [], activities: [], removeIds: [], notes: [] };
+    const movedTo = {};
+    (file.moveContacts || []).forEach((m) => {
+      const email = String(m.email || '').trim().toLowerCase();
+      const byEmail = email ? data.contacts.filter((p) => String(p.email || '').toLowerCase() === email) : [];
+      const people = byEmail.length ? byEmail : data.contacts.filter((p) => m.name && full(p) === key(m.name));
+      const label = m.name || m.email;
+      const to = findCompany(m.toCompanyId, m.toCompany);
+      if (!people.length) return out.notes.push(`${label}: not found`);
+      if (!to) return out.notes.push(`${label}: company "${m.toCompany || m.toCompanyId}" not found`);
+      people.forEach((p) => {
+        if (p.companyId === to.id) return;
+        out.contacts.push({ id: p.id, companyId: to.id });
+        movedTo[p.id] = to.id;
+        data.activities.filter((a) => a.contactId === p.id && a.companyId === p.companyId).forEach((a) => out.activities.push({ id: a.id, companyId: to.id, dealId: '' }));
+      });
+      out.notes.push(`move ${label} to ${to.name}`);
+    });
+    const movedActs = new Set(out.activities.map((a) => a.id));
+    (file.removeCompanies || []).forEach((name) => {
+      const c = findCompany('', name);
+      if (!c) return out.notes.push(`"${name}": not found`);
+      const left = data.contacts.filter((p) => p.companyId === c.id && !movedTo[p.id]).length + data.deals.filter((d) => d.companyId === c.id).length + data.activities.filter((a) => a.companyId === c.id && !movedActs.has(a.id)).length;
+      if (left) return out.notes.push(`keep "${c.name}": ${left} other record${left > 1 ? 's are' : ' is'} still in it`);
+      out.removeIds.push(c.id);
+      out.notes.push(`delete the company "${c.name}"`);
+    });
+    return out;
+  }
+
   function planCompanyMerge(data, fromId, toId) {
     const from = data.companies.find((c) => c.id === fromId);
     const to = data.companies.find((c) => c.id === toId);
@@ -4028,6 +4079,7 @@
     submarketBrief,
     matchSubmarket,
     normalizeLinkedIn,
+    planNamedFixes,
     splitNotes,
     replaceNote,
     linkedInSearchUrl,
