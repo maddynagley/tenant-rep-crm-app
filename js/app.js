@@ -467,16 +467,48 @@
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     return `${heading === false ? '' : '<h2>Notes' + notesActions(col, rec.id) + '</h2>'}
       <h3 class="notes-sub">My notes</h3>
-      ${rec.notes ? `<p class="pre">${esc(rec.notes)}</p>` : '<p class="muted">None yet. Use the page icon to add one.</p>'}
+      ${
+        rec.notes
+          ? `<ul class="plain added-notes my-notes">${L.splitNotes(rec.notes)
+              .map((n, i) => `<li><p class="pre">${esc(n)}</p>${editNoteBtn(`data-action="edit-my-note" data-col="${col}" data-id="${esc(rec.id)}" data-i="${i}"`)}</li>`)
+              .join('')}</ul>`
+          : '<p class="muted">None yet. Use the page icon to add one.</p>'
+      }
       <h3 class="notes-sub">Added notes <span class="muted">${added.length || ''}</span></h3>
       ${
         added.length
           ? `<ul class="plain added-notes">${added
-              .slice(0, 4)
-              .map((a) => `<li><span class="muted">${esc(L.fmtDate(a.date))}${a.source ? ' · ' + esc(a.source) : ''}</span> <a href="#" data-action="edit" data-col="activities" data-id="${esc(a.id)}">${esc(a.subject)}</a>${a.notes && a.notes !== a.subject ? `<div class="sub">${esc(L.emailSnippet({ notes: a.notes }, 220))}</div>` : ''}</li>`)
-              .join('')}${added.length > 4 ? `<li class="muted">+ ${added.length - 4} more in Activity</li>` : ''}</ul>`
+              .map((a, i) => `<li${i >= 4 ? ' class="more-note" hidden' : ''}>${editNoteBtn(`data-action="edit" data-col="activities" data-id="${esc(a.id)}"`)}<span class="muted">${esc(L.fmtDate(a.date))}${a.source ? ' · ' + esc(a.source) : ''}</span> <a href="#" data-action="edit" data-col="activities" data-id="${esc(a.id)}">${esc(a.subject)}</a>${a.notes && a.notes !== a.subject ? `<div class="sub">${esc(L.emailSnippet({ notes: a.notes }, 220))}</div>` : ''}</li>`)
+              .join('')}</ul>${added.length > 4 ? `<button class="link" data-action="show-more-notes">Show ${added.length - 4} older</button>` : ''}`
           : '<p class="muted">None. Notes you log as an activity, or from HubSpot, show here.</p>'
       }`;
+  }
+  function editNoteBtn(attrs) {
+    return `<button class="icon-btn note-edit" ${attrs} title="Edit this note" aria-label="Edit this note">✎</button>`;
+  }
+  // Edit one entry of My notes (saving it empty removes it).
+  function openMyNoteEdit(col, id, i) {
+    const rec = S.get(col, id);
+    const entry = rec && L.splitNotes(rec.notes)[i];
+    if (entry === undefined) return;
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" id="edit-note-form" data-col="${col}" data-id="${esc(id)}" data-i="${i}">
+      <header><h2>Edit note · ${esc(rec.name)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="form-grid">
+        <label class="wide">Note<textarea name="note" rows="7">${esc(entry)}</textarea></label>
+      </div>
+      <footer><button type="button" class="btn danger-text" data-action="delete-my-note">Delete note</button><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Save</button></footer>
+    </form>`;
+    dlg.showModal();
+    dlg.querySelector('textarea').focus();
+  }
+  function saveMyNote(f, value) {
+    const rec = S.get(f.dataset.col, f.dataset.id);
+    if (!rec) return;
+    $('#modal').close();
+    S.upsert(f.dataset.col, { id: rec.id, notes: L.replaceNote(rec.notes, Number(f.dataset.i), value) });
+    toast(value.trim() ? 'Note saved.' : 'Note deleted.');
   }
   function notesActions(col, id) {
     return `<span class="more icon-row">${summarizeIcon(col, id)}${noteIcon(col, id)}</span>`;
@@ -4400,6 +4432,14 @@
           if (!location.hash.startsWith('#/dashboard')) location.hash = '#/dashboard';
           else render();
           return setTimeout(() => $('#prospecting') && $('#prospecting').scrollIntoView({ behavior: 'smooth' }), 150);
+        case 'edit-my-note':
+          return openMyNoteEdit(d.col, d.id, Number(d.i));
+        case 'delete-my-note':
+          if (confirm('Delete this note?')) saveMyNote($('#edit-note-form'), '');
+          return;
+        case 'show-more-notes':
+          actionEl.parentElement.querySelectorAll('.more-note').forEach((li) => (li.hidden = false));
+          return actionEl.remove();
         case 'insert-market-line': {
           const f = $('#quick-note-form');
           const line = marketLineFor(f.dataset.col, S.get(f.dataset.col, f.dataset.id));
@@ -4850,6 +4890,9 @@
       Object.assign(state.research, { statsAsset: assetClass, statsSub: !full && r.rows.length === 1 ? r.rows[0].submarket : '', statsQuarter: quarter });
       toast(`Saved ${quarter} ${assetClass.toLowerCase()} market stats.`);
       render();
+    } else if (e.target.id === 'edit-note-form') {
+      e.preventDefault();
+      saveMyNote(e.target, e.target.elements.note.value);
     } else if (e.target.id === 'quick-note-form') {
       e.preventDefault();
       const f = e.target;

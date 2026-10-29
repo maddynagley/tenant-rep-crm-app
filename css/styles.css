@@ -157,6 +157,10 @@ h2.notes-after { margin-top: 18px; }
 ul.plain.added-notes { list-style: none; padding: 0; margin: 0; }
 .added-notes li { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .added-notes li:last-child { border-bottom: 0; }
+.added-notes li { position: relative; padding-right: 30px; }
+.added-notes .note-edit { position: absolute; top: 4px; right: 0; opacity: 0.75; }
+.added-notes li:hover .note-edit, .added-notes .note-edit:focus-visible { opacity: 1; }
+.my-notes .pre { margin: 0; }
 .brief-body { padding: 4px 18px 8px; max-height: 65vh; overflow: auto; }
 .brief-body ul { margin: 0 0 6px; padding-left: 18px; }
 .brief-body li { margin: 3px 0; line-height: 1.45; }

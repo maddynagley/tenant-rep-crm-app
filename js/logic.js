@@ -862,6 +862,33 @@
     return (assetClass === 'Industrial' && map['industrial|' + k]) || map[k] || name || '';
   }
 
+  // ---------- notes ----------
+  // "My notes" is one text: dated entries ("Oct 29, 2026: …") newest first, split by blank lines. Undated
+  // paragraphs next to each other (older imported text) stay one entry. replaceNote swaps (or with '' removes) one.
+  const NOTE_DATED = /^[A-Z][a-z]{2} \d{1,2}, \d{4}: /;
+  function splitNotes(text) {
+    const out = [];
+    let undated = false;
+    String(text || '')
+      .split(/\n\s*\n/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .forEach((para) => {
+        if (!NOTE_DATED.test(para) && undated) out[out.length - 1] += '\n\n' + para;
+        else out.push(para);
+        undated = !NOTE_DATED.test(para);
+      });
+    return out;
+  }
+  function replaceNote(text, index, value) {
+    const list = splitNotes(text);
+    if (index < 0 || index >= list.length) return String(text || '');
+    const v = String(value || '').trim();
+    if (v) list[index] = v;
+    else list.splice(index, 1);
+    return list.join('\n\n');
+  }
+
   // ---------- LinkedIn ----------
   // A pasted profile link, tidied: https added, tracking query dropped ('' when it isn't a LinkedIn link).
   function normalizeLinkedIn(raw) {
@@ -4001,6 +4028,8 @@
     submarketBrief,
     matchSubmarket,
     normalizeLinkedIn,
+    splitNotes,
+    replaceNote,
     linkedInSearchUrl,
     MARKET_PLACEHOLDERS,
     normalizeQuarter,

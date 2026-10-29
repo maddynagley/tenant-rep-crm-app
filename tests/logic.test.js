@@ -1592,3 +1592,12 @@ test('LinkedIn: pasted profile links tidied, search link for contacts without on
   assert.equal(L.normalizeLinkedIn(''), '');
   assert.equal(L.linkedInSearchUrl({ firstName: 'Pat', lastName: 'Lee' }, 'Acme & Co'), 'https://www.linkedin.com/search/results/people/?keywords=Pat%20Lee%20Acme%20%26%20Co');
 });
+
+test('notes: My notes split into dated entries, one edited or removed', () => {
+  const text = 'Oct 29, 2026: Toured two spaces.\nLiked the second.\n\nOct 20, 2026: Sent the survey.\n\nOld notes from the import\n\nwith a blank line';
+  assert.deepEqual(L.splitNotes(text), ['Oct 29, 2026: Toured two spaces.\nLiked the second.', 'Oct 20, 2026: Sent the survey.', 'Old notes from the import\n\nwith a blank line']);
+  assert.equal(L.replaceNote(text, 1, 'Oct 20, 2026: Sent the survey and floor plans.'), 'Oct 29, 2026: Toured two spaces.\nLiked the second.\n\nOct 20, 2026: Sent the survey and floor plans.\n\nOld notes from the import\n\nwith a blank line');
+  assert.equal(L.replaceNote(text, 0, ''), 'Oct 20, 2026: Sent the survey.\n\nOld notes from the import\n\nwith a blank line');
+  assert.equal(L.replaceNote(text, 9, 'x'), text);
+  assert.deepEqual(L.splitNotes(''), []);
+});
