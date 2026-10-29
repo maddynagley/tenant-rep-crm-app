@@ -1311,12 +1311,14 @@
       const upcoming = posts.filter((p) => !['Sent / Posted', 'Retired'].includes(p.status)).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
       const posted = posts.filter((p) => p.status === 'Sent / Posted').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
       const postRow = (p) => `<tr data-action="edit" data-col="marketing" data-id="${esc(p.id)}" class="clickable">
-          <td class="nowrap">${esc(L.fmtDate(p.date)) || '<span class="muted">Unscheduled</span>'}</td><td><strong>${esc(p.title)}</strong>${p.notes ? `<div class="sub clamp">${esc(p.notes)}</div>` : ''}</td>
+          <td class="nowrap">${esc(L.fmtDate(p.date)) || '<span class="muted">Unscheduled</span>'}</td><td>${p.image ? `<img class="post-thumb" src="${p.image}" alt="" />` : ''}<strong>${esc(p.title)}</strong>${p.image || p.caption ? ` <button class="btn small" data-action="social-preview" data-id="${esc(p.id)}">Caption & image</button>` : ''}${p.notes ? `<div class="sub clamp">${esc(p.notes)}</div>` : ''}</td>
           <td>${esc(p.channel)}</td><td>${badge(p.status, 'gray')}</td>
           <td class="right">${esc(L.fmtNumber(p.impressions))}</td><td class="right">${esc(L.fmtNumber(p.reactions))}</td><td class="right">${esc(L.fmtNumber(p.comments))}</td></tr>`;
       const head = '<thead><tr><th>Date</th><th>Post</th><th>Channel</th><th>Status</th><th class="right">Impressions</th><th class="right">Reactions</th><th class="right">Comments</th></tr></thead>';
       body = `<section class="card"><h2>Up next</h2>${upcoming.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${upcoming.map(postRow).join('')}</tbody></table></div>` : emptyState('No post ideas queued.', '<button class="btn" data-action="new" data-col="marketing">+ Post idea</button>')}</section>
-        <section class="card"><h2>Posted</h2>${posted.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${posted.map(postRow).join('')}</tbody></table></div>` : emptyState('Nothing posted yet.')}</section>`;
+        <section class="card"><h2>Posted</h2>${posted.length ? `<div class="table-wrap"><table class="tbl compact">${head}<tbody>${posted.map(postRow).join('')}</tbody></table></div>` : emptyState('Nothing posted yet.')}</section>
+        <div class="drop-zone" data-drop="highlights"><strong>Drag a Market Highlights PDF from Research here</strong> <span class="muted">or</span> <button class="btn small" data-action="pick-file" data-kind="highlights">Choose a file</button>
+          <div class="sub">It becomes a LinkedIn post: a caption written from the highlights, and the page saved as an image to attach.</div></div>`;
     } else if (f.tab === 'templates') {
       const stats = {};
       const prospecting = L.prospectTouches({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities') }, { internalDomain: myEmailDomain() }).touches;
@@ -3727,6 +3729,34 @@
       }
       showImportPreview(kind, file.name, L.parseCSV(text));
     };
+    if (kind === 'highlights') {
+      if (!/\.pdf$/i.test(file.name)) return alert('Drop the Market Highlights PDF here.');
+      toast('Reading ' + file.name + '…');
+      readPdfLines(file, { image: true }).then(
+        ({ lines, image }) => {
+          const h = L.parseMarketHighlights(lines, file.name);
+          const caption = L.highlightsPost(h, { firm: S.settings().myFirm });
+          const rec = S.upsert('marketing', {
+            title: [h.market, h.assetClass && h.assetClass.toLowerCase(), 'market highlights', h.quarter].filter(Boolean).join(' ').replace(/^(\w)/, (m) => m.toUpperCase()),
+            kind: 'Social post',
+            status: 'Ready',
+            channel: 'LinkedIn',
+            assetClass: ['Office', 'Industrial'].includes(h.assetClass) ? h.assetClass : h.assetClass === 'Flex' ? 'Office & Industrial' : '',
+            dataQuarter: h.quarter,
+            caption,
+            image,
+            sourceFile: file.name,
+            notes: h.items.length ? h.items.map((it) => it.title).join(' · ') : 'No highlights found in the text; write the caption by hand.',
+          });
+          state.marketing.tab = 'social';
+          if (!location.hash.startsWith('#/marketing')) location.hash = '#/marketing';
+          else render();
+          openSocialPreview(rec.id);
+        },
+        (e) => alert(e.message)
+      );
+      return;
+    }
     if (/\.pdf$/i.test(file.name)) {
       if (kind !== 'marketStats') return alert('PDFs can be read on the Research page (Research reports). For this import, use an Excel or CSV file.');
       toast('Reading ' + file.name + '…');
@@ -3791,7 +3821,8 @@
       document.head.appendChild(el);
     });
   }
-  function readPdfLines(file) {
+  // opts.image: also return the first page as a JPEG (for social posts).
+  function readPdfLines(file, opts) {
     return Promise.all([loadPDFJS(), file.arrayBuffer()]).then(async ([pdfjs, buf]) => {
       const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
       const lines = [];
@@ -3799,8 +3830,36 @@
         const content = await (await doc.getPage(n)).getTextContent();
         lines.push(...L.layoutLines(content.items.map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width }))));
       }
-      return lines;
+      if (!(opts && opts.image)) return lines;
+      const page = await doc.getPage(1);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      return { lines, image: canvas.toDataURL('image/jpeg', 0.88) };
     });
+  }
+
+  // A social post's caption and image, ready to copy, download and post.
+  function openSocialPreview(id) {
+    const p = S.get('marketing', id);
+    if (!p) return;
+    const dlg = $('#modal');
+    if (dlg.open) dlg.close();
+    dlg.innerHTML = `<form method="dialog" class="social-preview" data-id="${esc(id)}">
+      <header><h2>${esc(p.title)}</h2><button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">✕</button></header>
+      <div class="social-body">
+        ${p.image ? `<img src="${p.image}" alt="${esc(p.title)}" />` : ''}
+        <label>Caption<textarea name="caption" rows="14">${esc(p.caption || '')}</textarea></label>
+      </div>
+      <footer><span class="hint">Edit the caption here; changes are saved.</span><span class="spacer"></span>
+        ${p.image ? '<button type="button" class="btn" data-action="download-post-image">Download image</button>' : ''}
+        <button type="button" class="btn" data-action="copy-caption">Copy caption</button>
+        <button type="button" class="btn primary" data-action="mark-posted">Mark posted</button>
+      </footer>
+    </form>`;
+    dlg.showModal();
   }
 
   // Rows of the sheet whose columns best match what's being imported (a workbook may hold several tabs).
@@ -4180,6 +4239,32 @@
           Object.assign(state.research, { statsAsset: d.asset, statsQuarter: to, statsSub: '' });
           return toast(`Moved to ${to}.`);
         }
+        case 'social-preview':
+          e.preventDefault();
+          e.stopPropagation();
+          return openSocialPreview(d.id);
+        case 'copy-caption': {
+          const f = actionEl.closest('form');
+          S.upsert('marketing', { id: f.dataset.id, caption: f.elements.caption.value }, { silent: true });
+          navigator.clipboard.writeText(f.elements.caption.value).then(() => toast('Caption copied. Paste it into LinkedIn.'));
+          return;
+        }
+        case 'download-post-image': {
+          const p = S.get('marketing', actionEl.closest('form').dataset.id);
+          const a = document.createElement('a');
+          a.href = p.image;
+          a.download = (p.title || 'post').replace(/[^\w -]+/g, '').replace(/\s+/g, '-') + '.jpg';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          return;
+        }
+        case 'mark-posted': {
+          const f = actionEl.closest('form');
+          S.upsert('marketing', { id: f.dataset.id, caption: f.elements.caption.value, status: 'Sent / Posted', date: L.todayISO() });
+          $('#modal').close();
+          return toast('Marked posted. Add impressions and reactions later from the post.');
+        }
         case 'remove-stats': {
           if (!confirm(`Remove the ${d.quarter} ${d.asset} market stats?`)) return;
           const keep = (x) => !(x.quarter === d.quarter && x.assetClass === d.asset);
@@ -4457,7 +4542,7 @@
         case 'pick-file': {
           const input = $('#file-input');
           input.dataset.kind = d.kind;
-          input.accept = d.kind === 'backup' ? '.json,application/json' : '.csv,text/csv,.xlsx,.xls,.xlsm' + (d.kind === 'marketStats' ? ',.pdf,application/pdf' : '');
+          input.accept = d.kind === 'backup' ? '.json,application/json' : d.kind === 'highlights' ? '.pdf,application/pdf' : '.csv,text/csv,.xlsx,.xls,.xlsm' + (d.kind === 'marketStats' ? ',.pdf,application/pdf' : '');
           input.value = '';
           return input.click();
         }
@@ -4578,6 +4663,7 @@
   document.addEventListener('change', (e) => {
     if (e.target.dataset.filter && e.target.type !== 'search') onFilterChange(e);
     if (e.target.closest('#draft-form') && ['template', 'contact'].includes(e.target.name)) fillDraft();
+    if (e.target.name === 'caption' && e.target.closest('.social-preview')) S.upsert('marketing', { id: e.target.closest('form').dataset.id, caption: e.target.value }, { silent: true });
     if (e.target.id === 'align-asset' && importPreview) {
       importPreview.alignAsset = e.target.value;
       render();
@@ -4727,7 +4813,7 @@
 
   // Drop a comp sheet anywhere on the Comps tab, or a Research report or stats sheet on the Research page.
   const dropTarget = () =>
-    location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : location.hash.startsWith('#/research') ? 'marketStats' : '';
+    location.hash.startsWith('#/comps') && state.comps.tab === 'comps' ? 'comps' : location.hash.startsWith('#/research') ? 'marketStats' : location.hash.startsWith('#/marketing') && state.marketing.tab === 'social' ? 'highlights' : '';
   document.addEventListener('dragover', (e) => {
     if (!dropTarget() || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();

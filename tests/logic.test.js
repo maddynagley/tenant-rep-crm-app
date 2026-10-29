@@ -1494,3 +1494,34 @@ test('Today: submarket filter, expiring leases first, and prospects to send the 
   assert.match(d.body, /With your lease at One North up in June 2027/);
   assert.match(d.body, /Best,\nJordan$/);
 });
+
+test('market highlights cards: four titled highlights in two columns, into a LinkedIn caption', () => {
+  const pad = (s, n) => s + ' '.repeat(Math.max(2, n - s.length));
+  const lines = [
+    pad('', 48) + 'INDUSTRIAL MARKET | 3Q26', '', 'MARKET', pad('HIGHLIGHTS', 44) + 'Riverside', '',
+    pad('1', 44) + '2',
+    pad('       Rents Reach A New', 49) + 'Year-to-Date',
+    pad('       Record High', 49) + 'Demand Remains',
+    pad('', 49) + 'Strong',
+    pad('       Asking rents rose 2.3%', 49) + 'Net absorption was 685,563 SF',
+    pad('       to a new high of $8.12/SF, an', 49) + 'this quarter.',
+    pad('       8.2% year-over-', 49) + '',
+    pad('       year increase.', 49) + '',
+    '', '',
+    pad('3', 44) + '4',
+    pad('       Class A Leads', 49) + 'Supply Outpaces',
+    pad('       Leasing', 49) + 'Demand',
+    pad('        Class A leasing totaled 9.5 MSF.', 49) + 'Deliveries totaled 4.0 MSF.',
+  ];
+  const h = L.parseMarketHighlights(lines, 'Riverside_Market_Highlights.pdf');
+  assert.deepEqual([h.quarter, h.assetClass, h.market], ['3Q26', 'Industrial', 'Riverside']);
+  assert.deepEqual(h.items, [
+    { title: 'Rents Reach A New Record High', text: 'Asking rents rose 2.3% to a new high of $8.12/SF, an 8.2% year-over-year increase.' },
+    { title: 'Year-to-Date Demand Remains Strong', text: 'Net absorption was 685,563 SF this quarter.' },
+    { title: 'Class A Leads Leasing', text: 'Class A leasing totaled 9.5 MSF.' },
+    { title: 'Supply Outpaces Demand', text: 'Deliveries totaled 4.0 MSF.' },
+  ]);
+  const post = L.highlightsPost(h, { firm: 'Firm' });
+  assert.match(post, /^Riverside industrial market, 3Q26: four things to know\n\n1\. Rents Reach A New Record High: Asking rents rose 2\.3%/);
+  assert.match(post, /Source: Firm Research\n#Riverside #CommercialRealEstate #IndustrialRealEstate #CRE$/);
+});

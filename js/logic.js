@@ -1950,6 +1950,70 @@
     return { subject: (d.name || ctx.company.name) + ' – weekly update (week of ' + week + ')', body: fillTemplate(body, ctx), done, next };
   }
 
+  // Research's social-media "Market Highlights" card: numbered highlights laid out two to a row.
+  // Returns { quarter, assetClass, market, items: [{ title, text }] }.
+  function parseMarketHighlights(lines, filename) {
+    lines = (lines || []).map((l) => String(l).replace(/\t/g, '    '));
+    const text = lines.join('\n');
+    const head = /\b(OFFICE|INDUSTRIAL|FLEX|R&D\/FLEX|RETAIL|MULTIFAMILY|LIFE SCIENCE)\s+MARKET\s*\|\s*([1-4]\s?Q\s?\d\s?\d)/i.exec(text);
+    const quarter = normalizeQuarter(filename) || (head ? head[2].replace(/\s/g, '') : '') || normalizeQuarter(text.slice(0, 4000));
+    const kind = head ? head[1] : /industrial/i.test(filename) ? 'Industrial' : /flex/i.test(filename) ? 'Flex' : 'Office';
+    const assetClass = /flex/i.test(kind) ? 'Flex' : kind.charAt(0).toUpperCase() + kind.slice(1).toLowerCase();
+    // The market's name sits beside or near "MARKET HIGHLIGHTS"; the highlights follow it.
+    const hi = lines.findIndex((l) => /HIGHLIGHTS/.test(l));
+    const top = lines.slice(0, hi + 2).flatMap((l) => l.trim().split(/\s{3,}/)).map((t) => t.trim()).filter((t) => t && !/^(MARKET|HIGHLIGHTS)$/i.test(t) && !/\|/.test(t) && !/^\d+$/.test(t));
+    const market = top.find((t) => /^[A-Z][A-Za-z .'-]{2,30}$/.test(t)) || '';
+    const body = lines.slice(hi + 1).filter((l) => l.trim() && l.trim() !== market && !/^\s*\d{1,2}(\s+\d{1,2})?\s*$/.test(l) && !/^\s*(Source|N E W M|©)/i.test(l));
+    // Two columns: the right one starts where a second run of text begins on most two-part lines.
+    const starts = body.map((l) => (/^(\s*\S.*?\S?)\s{3,}\S/.exec(l) ? l.search(/\S\s{3,}\S/) + l.slice(l.search(/\S\s{3,}\S/)).search(/\s\S/) + 1 : -1)).filter((x) => x > 0);
+    const col = starts.length ? starts.sort((x, y) => x - y)[Math.floor(starts.length / 2)] : 0;
+    // A heading is in Title Case ("Rents Reach A New Record High"); the text under it is ordinary sentences.
+    const titleCase = (t) => {
+      const words = t.split(/\s+/).filter((w) => /^[A-Za-z]/.test(w) && !/^(a|an|and|of|to|in|the|for|on|at|by|vs\.?)$/i.test(w));
+      return words.length > 0 && words.filter((w) => /^[A-Z]/.test(w)).length / words.length >= 0.75;
+    };
+    const columns = col ? [body.map((l) => l.slice(0, col - 1)), body.map((l) => l.slice(col - 1))] : [body];
+    const found = [];
+    columns.forEach((colLines, ci) => {
+      let cur = null;
+      colLines
+        .map((l) => l.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .forEach((t) => {
+          const heading = titleCase(t);
+          if (heading && (!cur || cur.text.length)) {
+            if (cur) found.push(cur);
+            cur = { col: ci, title: t, text: '' };
+          } else if (heading && cur && !cur.text) cur.title += ' ' + t;
+          else if (cur) cur.text += (cur.text ? ' ' : '') + t;
+        });
+      if (cur) found.push(cur);
+    });
+    // Read across each row: left, right, then the next row.
+    const left = found.filter((x) => x.col === 0);
+    const right = found.filter((x) => x.col === 1);
+    const items = [];
+    for (let i = 0; i < Math.max(left.length, right.length); i++) [left[i], right[i]].forEach((x) => x && x.text && items.push({ title: x.title.replace(/\s+/g, ' ').trim(), text: x.text.replace(/([a-z])- ([a-z])/g, '$1-$2').trim() }));
+    return { quarter, assetClass, market, items };
+  }
+
+  // A LinkedIn caption from the highlights.
+  function highlightsPost(h, opts) {
+    opts = opts || {};
+    const asset = String(h.assetClass || '').toLowerCase();
+    const tags = ['#' + String(h.market || 'Atlanta').replace(/[^A-Za-z]/g, ''), '#CommercialRealEstate', asset === 'industrial' ? '#IndustrialRealEstate' : asset === 'flex' ? '#FlexSpace' : '#OfficeSpace', '#CRE'];
+    return [
+      (h.market ? h.market + ' ' : '') + asset + ' market, ' + h.quarter + ': ' + (h.items.length === 4 ? 'four' : h.items.length) + ' things to know',
+      '',
+      ...h.items.map((it, i) => i + 1 + '. ' + it.title + ': ' + it.text),
+      '',
+      'Thinking about what this means for your space? Happy to talk it through.',
+      '',
+      (opts.firm ? 'Source: ' + opts.firm + ' Research' : 'Source: [Research team]'),
+      tags.join(' '),
+    ].join('\n');
+  }
+
   // A short market update for a prospect you've reached before, built from the latest stats for their submarket.
   // ctx as for fillTemplate, with ctx.market from marketStatFor. Returns { subject, body, why }.
   function marketUpdateDraft(ctx) {
@@ -3775,6 +3839,8 @@
     meetingDays,
     suggestTemplate,
     followUpDraft,
+    parseMarketHighlights,
+    highlightsPost,
     marketUpdateDraft,
     RECAP_TEMPLATE,
     recapSent,
