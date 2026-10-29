@@ -1426,3 +1426,30 @@ test('report quarter: letter-spaced page stamp, else the latest quarter the text
   assert.equal(L.parseResearchReport(['                3 Q 2 6 S U B M A R K E T S N A P S H O T', 'West Riverside Flex Submarket Overview'].concat(body), 'report.pdf').quarter, '3Q26');
   assert.equal(L.parseResearchReport(['FIRM.COM   2Q26', 'Riverside Office Submarket Overview'].concat(body), 'report.pdf').quarter, '2Q26', 'a stamp beats the text');
 });
+
+test('planHubSpotSync: personal (Gmail-type) addresses with no HubSpot company still land at the right company', () => {
+  const data = {
+    companies: [{ id: 'hs-co-1', name: 'Riverside Law Firm, P.C.' }, { id: 'hs-co-2', name: 'Acme' }],
+    contacts: [
+      { id: 'hs-ct-10', companyId: 'hs-co-1', firstName: 'Pat', lastName: 'Lee', email: '' },
+      { id: 'hs-ct-11', companyId: 'hs-co-2', firstName: 'Sam', lastName: 'Fox', email: 'sam.fox@yahoo.com' },
+    ],
+    deals: [],
+    activities: [],
+  };
+  const payload = {
+    contacts: [{ id: '20', properties: { firstname: 'Pat', lastname: 'Lee', email: 'riversidelawfirm@yahoo.com' }, companies: [] }],
+    emails: [
+      { id: '30', properties: { hs_email_direction: 'EMAIL', hs_email_subject: 'Riverside Law | Connect', hs_email_to_email: 'riversidelawfirm@yahoo.com', hs_timestamp: '2026-10-06T14:40:00Z' }, companies: [], contacts: ['20'] },
+      // Someone else's Yahoo address must not be filed under Acme just because Sam also uses Yahoo.
+      { id: '31', properties: { hs_email_direction: 'EMAIL', hs_email_subject: 'Hello', hs_email_to_email: 'stranger@yahoo.com', hs_timestamp: '2026-10-06T15:00:00Z' }, companies: [], contacts: [] },
+    ],
+  };
+  const plan = L.planHubSpotSync(payload, data);
+  // The duplicate HubSpot contact fills in the CRM's Pat Lee rather than adding a second one.
+  assert.deepEqual(plan.contacts.map((c) => [c.id, c.email]), [['hs-ct-10', 'riversidelawfirm@yahoo.com']]);
+  const byId = Object.fromEntries(plan.activities.map((a) => [a.id, a]));
+  assert.equal(byId['hs-em-30'].companyId, 'hs-co-1');
+  assert.equal(byId['hs-em-30'].contactId, 'hs-ct-10');
+  assert.equal(byId['hs-em-31'], undefined);
+});

@@ -803,6 +803,10 @@
   }
   const stripHtml = (s) => String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 
+  // Personal mailboxes: their domain says nothing about the company.
+  const FREE_MAIL = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|aol|icloud|me|mac|comcast|att|bellsouth|protonmail|proton|mail|gmx|zoho)\.(com|net|me)$/i;
+  const isFreeMail = (dom) => FREE_MAIL.test(String(dom || ''));
+
   // Turns a bridge payload into CRM changes: activities to add or update, and last-contacted dates.
   function planHubSpotSync(payload, data) {
     const companies = {};
@@ -821,9 +825,26 @@
       if (email) {
         byEmail[email] = p;
         const dom = email.split('@')[1];
-        if (dom && !byDomain[dom]) byDomain[dom] = p.companyId;
+        if (dom && !isFreeMail(dom) && !byDomain[dom]) byDomain[dom] = p.companyId;
       }
     });
+    // A personal address named for the firm ("acmelawgroup@<personal mail>") points to the company of that name.
+    const firmKeys = data.companies.map((c) => [tenantKey(c.name), c.id]).filter(([k]) => k.length >= 6);
+    const companyFromMailbox = (addr) => {
+      const [local, dom] = String(addr || '').toLowerCase().split('@');
+      if (!isFreeMail(dom)) return '';
+      const k = String(local || '').replace(/[^a-z0-9]/g, '');
+      if (k.length < 6) return '';
+      const hits = firmKeys.filter(([key]) => key === k || k.startsWith(key) || key.startsWith(k));
+      return hits.length === 1 ? hits[0][1] : '';
+    };
+    // The same person already in the CRM (same first and last name) at one company.
+    const companyFromName = (first, last) => {
+      const n = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
+      if (!n(first) || !n(last)) return '';
+      const ids = Array.from(new Set(data.contacts.filter((c) => n(c.firstName) === n(first) && n(c.lastName) === n(last) && c.companyId).map((c) => c.companyId)));
+      return ids.length === 1 ? ids[0] : '';
+    };
     const existing = {};
     data.activities.forEach((a) => (existing[a.id] = a));
     const inPlay = new Set(data.deals.filter((d) => d.stage !== 'Closed Lost').map((d) => d.companyId));
@@ -845,8 +866,9 @@
         if (cid) return cid;
       }
       for (const id of rec.contacts || []) if (contactsById['hs-ct-' + id]) return contactsById['hs-ct-' + id].companyId;
-      for (const a of addrs) if (byEmail[a]) return byEmail[a].companyId;
-      for (const a of addrs) if (byDomain[a.split('@')[1]]) return byDomain[a.split('@')[1]];
+      for (const a of addrs) if (byEmail[a] && byEmail[a].companyId) return byEmail[a].companyId;
+      for (const a of addrs) if (!isFreeMail(a.split('@')[1]) && byDomain[a.split('@')[1]]) return byDomain[a.split('@')[1]];
+      for (const a of addrs) if (companyFromMailbox(a)) return companyFromMailbox(a);
       return '';
     };
     // Only a contact at the email's company counts: colleagues you cc are associated in HubSpot too.
@@ -857,7 +879,7 @@
     });
     const contactFor = (rec, addrs, companyId) => {
       const at = (p) => p && (!companyId || p.companyId === companyId) && !ownDomains.has(String(p.email || '').toLowerCase().split('@')[1]);
-      for (const id of rec.contacts || []) if (at(contactsById['hs-ct-' + id])) return 'hs-ct-' + id;
+      for (const id of rec.contacts || []) if (at(contactsById['hs-ct-' + id])) return contactsById['hs-ct-' + id].id;
       for (const a of addrs) if (at(byEmail[a])) return byEmail[a].id;
       return '';
     };
@@ -938,13 +960,24 @@
       let companyId = '';
       for (const id of rec.companies || []) if (!companyId) companyId = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[String(id)] || '';
       const dom = email.split('@')[1];
-      if (!companyId && dom) companyId = byWebsite[dom] || byDomain[dom] || '';
+      if (!companyId && dom && !isFreeMail(dom)) companyId = byWebsite[dom] || byDomain[dom] || '';
+      // No company in HubSpot (common for Gmail-type addresses): the same person in the CRM, or a mailbox named for the firm.
+      if (!companyId) companyId = companyFromName(p.firstname, p.lastname) || companyFromMailbox(email);
       if (!companyId || !companies[companyId]) return skipped++;
+      // HubSpot often holds the same person twice (one record with the email, one without): fill in the CRM's copy.
+      const n = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
+      const twin = data.contacts.find((c) => c.companyId === companyId && n(c.firstName) === n(p.firstname) && n(c.lastName) === n(p.lastname) && (!c.email || String(c.email).toLowerCase() === email));
+      if (twin) {
+        fillBlanks('contacts', twin, fields);
+        contactsById['hs-ct-' + rec.id] = Object.assign({}, twin, { email: twin.email || email });
+        if (email) byEmail[email] = contactsById['hs-ct-' + rec.id];
+        return;
+      }
       const contact = Object.assign({ id: 'hs-ct-' + rec.id, companyId }, fields, { source: 'HubSpot' });
       contactsById[contact.id] = contact;
       if (email) {
         byEmail[email] = contact;
-        if (dom && !byDomain[dom]) byDomain[dom] = companyId;
+        if (dom && !isFreeMail(dom) && !byDomain[dom]) byDomain[dom] = companyId;
       }
       recordPatches.contacts.push(contact);
       created.contacts++;
