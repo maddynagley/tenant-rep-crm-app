@@ -1545,8 +1545,8 @@ test('submarket clean-up: local names suggested into Research submarkets, by ass
   assert.equal(office('Duluth / Gwinnett'), 'NE');
   assert.equal(office('Norcross / Peachtree Corners'), 'NE');
   assert.equal(office('Northlake / Tucker'), 'NE');
-  assert.equal(office('West Midtown'), 'Midtown');
-  assert.equal(office('Midtown - West'), 'Midtown');
+  assert.equal(office('West Midtown'), 'MT');
+  assert.equal(office('Midtown - West'), 'MT');
   assert.equal(ind('Austell / Six Flags'), 'Fulton Industrial/I-20W');
   assert.equal(ind('I-20 West / Fulton Industrial'), 'Fulton Industrial/I-20W');
   assert.equal(ind('Doraville / NE I-85'), 'Chamblee/Doraville/Norcross');
@@ -1564,6 +1564,11 @@ test('submarket clean-up: local names suggested into Research submarkets, by ass
   assert.equal(L.matchSubmarket(['Central Perimeter', 'Midtown', 'Northeast', 'Market total'], 'CP'), 'Central Perimeter');
   assert.equal(L.matchSubmarket(['Central Perimeter', 'Midtown', 'Northeast', 'Market total'], 'NE'), 'Northeast');
   assert.equal(L.matchSubmarket(['North Fulton', 'Midtown', 'Market total'], 'NF'), 'North Fulton');
+  assert.equal(office('Downtown'), 'DT');
+  assert.equal(office('Airport / South Atlanta'), 'AP');
+  assert.equal(L.matchSubmarket(['Airport/South Atlanta', 'Midtown', 'Downtown', 'Market total'], 'AP'), 'Airport/South Atlanta');
+  assert.equal(L.matchSubmarket(['Airport/South Atlanta', 'Midtown', 'Downtown', 'Market total'], 'MT'), 'Midtown');
+  assert.equal(L.matchSubmarket(['Airport/South Atlanta', 'Midtown', 'Downtown', 'Market total'], 'DT'), 'Downtown');
   assert.equal(L.matchSubmarket(['Northeast/I-85 Corridor', 'Northwest/I-75 Corridor', 'Market total'], 'NW'), 'Northwest/I-75 Corridor');
   assert.equal(L.mapSubmarket('CP', { cp: 'Central Perimeter' }), 'Central Perimeter');
   assert.equal(L.mapSubmarket('Midtown', { cp: 'Central Perimeter' }), 'Midtown');

@@ -806,19 +806,19 @@
   // ---------- submarkets ----------
   // The Research submarkets (office and industrial use different maps), and the local names that fall in each.
   // A name is matched on its words, so "Doraville / NE I-85" and "Duluth / Gwinnett" both find their area.
-  // Office labels are short (BH, CP, NE, NF, NW); industrial uses the Research industrial map's names.; SHORT_SUBMARKETS spells them out to find Research stats.
+  // Office labels are short (DT, MT, BH, CP, NF, NE, NW, AP); industrial uses the Research industrial map's names.; SHORT_SUBMARKETS spells them out to find Research stats.
   const BH_FULL = 'buck' + 'head';
-  const SHORT_SUBMARKETS = { bh: BH_FULL, cp: 'central perimeter', ne: 'northeast', nf: 'north fulton', nw: 'northwest' };
+  const SHORT_SUBMARKETS = { dt: 'downtown', mt: 'midtown', ap: 'airport', bh: BH_FULL, cp: 'central perimeter', ne: 'northeast', nf: 'north fulton', nw: 'northwest' };
   const RESEARCH_SUBMARKETS = {
     Office: [
-      ['Downtown', ['downtown', 'dt', 'cbd', 'centennial', 'castleberry']],
-      ['Midtown', ['midtown', 'west midtown', 'westside', 'atlantic station', 'old fourth ward', 'o4w', 'poncey', 'inman park', 'virginia highland']],
+      ['DT', ['downtown', 'dt', 'cbd', 'centennial', 'castleberry']],
+      ['MT', ['midtown', 'mt', 'west midtown', 'westside', 'atlantic station', 'old fourth ward', 'o4w', 'poncey', 'inman park', 'virginia highland']],
       ['BH', [BH_FULL, 'bh', 'lenox', 'piedmont', 'brookhaven', 'peachtree heights']],
       ['CP', ['central perimeter', 'cp', 'perimeter', 'dunwoody', 'sandy springs', 'perimeter center']],
       ['NF', ['north fulton/forsyth', 'north fulton', 'nf', 'alpharetta', 'roswell', 'forsyth', 'cumming', 'windward', 'johns creek', 'milton', 'avalon']],
       ['NE', ['northeast', 'ne', 'duluth', 'gwinnett', 'norcross', 'peachtree corners', 'northlake', 'tucker', 'doraville', 'lawrenceville', 'chamblee', 'suwanee', 'buford', 'i-85', 'ne i-85', 'decatur', 'emory', 'druid hills', 'stone mountain', 'lilburn', 'snellville']],
       ['NW', ['northwest', 'nw', 'cumberland', 'galleria', 'marietta', 'kennesaw', 'town center', 'vinings', 'smyrna', 'acworth', 'austell', 'six flags', 'powder springs', 'cartersville', 'woodstock', 'canton']],
-      ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'peachtree city', 'union city', 'camp creek', 'i-20 west', 'fulton industrial', 'douglasville', 'lithia springs']],
+      ['AP', ['airport/south atlanta', 'airport', 'ap', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'peachtree city', 'union city', 'camp creek', 'i-20 west', 'fulton industrial', 'douglasville', 'lithia springs']],
     ],
     Industrial: [
       ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'union city', 'palmetto', 'fairburn', 'camp creek', 'i-75 south', 'jonesboro', 'forest park', 'stockbridge', 'locust grove']],
