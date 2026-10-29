@@ -725,6 +725,19 @@
     if (!rec) return;
     let value = raw;
     if (['sfOccupied', 'sf', 'headcount', 'budgetRate'].includes(field)) value = L.parseNumber(raw) === null ? '' : L.parseNumber(raw);
+    if (field === 'companyId') {
+      if (!raw) return render();
+      const want = raw.toLowerCase();
+      const to = S.all('companies').find((c) => String(c.name || '').trim().toLowerCase() === want);
+      if (!to) return toast(`No company named "${raw}". Pick one from the list, or add the company first.`);
+      if (to.id === rec.companyId) return render();
+      // The contact's emails and calls go with them.
+      S.all('activities')
+        .filter((a) => a.contactId === id && a.companyId === rec.companyId)
+        .forEach((a) => S.upsert('activities', { id: a.id, companyId: to.id, dealId: '' }, { silent: true }));
+      S.upsert('contacts', { id, companyId: to.id });
+      return toast(`Moved ${contactName(rec)} to ${to.name}.`);
+    }
     if (field === 'linkedin') {
       value = L.normalizeLinkedIn(raw);
       if (raw && !value) return toast("That isn't a LinkedIn link. Copy the address from their LinkedIn profile.");
@@ -2360,7 +2373,7 @@
             .map(
               (c) => `<tr>
               <td><strong>${esc(contactName(c))}</strong> ${verificationBadge(c.verification)}<div class="sub">${esc(c.title)}</div></td>
-              <td>${linkCompany(c.companyId)}</td>
+              <td>${linkCompany(c.companyId)} ${editCell('contacts', c.id, 'companyId', 'company', c.companyId, '<span class="muted" title="Change company">✎</span>')}</td>
               <td>${inlineSelect('contacts', c.id, 'role', FIELDS.contacts.find((x) => x.key === 'role').options, c.role, '—')}</td>
               <td>${editCell('contacts', c.id, 'email', 'email', c.email, esc(c.email))}${c.email ? ` <a class="icon-btn" href="mailto:${esc(c.email)}" title="Email">↗</a>` : ''}</td>
               <td class="nowrap">${editCell('contacts', c.id, 'phone', 'tel', c.phone, c.phone ? esc(c.phone) + (c.phoneDNC ? ' ' + badge('DNC', 'red') : '') : '')}${c.mobile ? `<div class="sub">${phoneLink(c.mobile, c.mobileDNC, '(m)')}</div>` : ''}</td>
@@ -4749,6 +4762,15 @@
     if (d.editType === 'number') input.inputMode = 'decimal';
     input.className = 'inline cell-input';
     input.value = d.editValue;
+    // Company: type to pick from the companies in the CRM.
+    if (d.editType === 'company') {
+      input.type = 'text';
+      input.value = companyName(d.editValue);
+      input.placeholder = 'Type a company name';
+      input.setAttribute('list', 'company-pick');
+      if (!$('#company-pick')) document.body.insertAdjacentHTML('beforeend', '<datalist id="company-pick"></datalist>');
+      $('#company-pick').innerHTML = S.all('companies').map((c) => `<option value="${esc(c.name)}"></option>`).join('');
+    }
     let done = false;
     const finish = (save) => {
       if (done) return;
