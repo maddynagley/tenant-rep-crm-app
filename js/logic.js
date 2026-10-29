@@ -1950,6 +1950,31 @@
     return { subject: (d.name || ctx.company.name) + ' – weekly update (week of ' + week + ')', body: fillTemplate(body, ctx), done, next };
   }
 
+  // A short market update for a prospect you've reached before, built from the latest stats for their submarket.
+  // ctx as for fillTemplate, with ctx.market from marketStatFor. Returns { subject, body, why }.
+  function marketUpdateDraft(ctx) {
+    const m = ctx.market;
+    const c = ctx.company || {};
+    if (!m) return { subject: fillTemplate('{Company} – market update', ctx), body: fillTemplate('Hi {FirstName},\n\n[Market stats aren\'t loaded for this submarket yet.]\n\nBest,\n{MyFirstName}', ctx), why: 'No market stats on file for this company yet.' };
+    const v = marketValues(m, c);
+    const months = c.leaseExpiration ? monthsUntil(c.leaseExpiration, ctx.today) : null;
+    const lease =
+      months !== null && months >= 0 && months <= 24
+        ? ' With your lease at {Building} up in {LeaseExpiration}, this is a good time to see how the market lines up with your plans.'
+        : '';
+    // One line from Research that adds something the stat sentence doesn't (absorption, construction, sublease…).
+    const extra = (m.notes || []).find((b) => !/vacancy rate|asking (rent|rate)|average asking/i.test(b) && b.length < 260);
+    const note = extra ? ' ' + extra : '';
+    const body =
+      'Hi {FirstName},\n\nThe ' + v.Quarter + ' numbers are out, and I thought you\'d want the latest on ' + v.StatsArea + '. ' + v.MarketStat + note + lease +
+      '\n\nHappy to walk you through what this means for your space. Would 15 minutes next week work?\n\nBest,\n{MyFirstName}';
+    return {
+      subject: fillTemplate(v.StatsArea + ' ' + v.Quarter + ' market update', ctx),
+      body: fillTemplate(body, ctx),
+      why: 'Built from the ' + v.Quarter + ' ' + v.StatsArea + ' stats on the Research page' + (m.current.submarket === 'Market total' ? " (market-wide: this company's submarket isn't in the report)" : '') + '.',
+    };
+  }
+
   function mailtoLink(to, subject, body, cc) {
     const addr = (v) => encodeURIComponent(v || '').replace(/%40/g, '@').replace(/%2C/g, ',');
     return 'mailto:' + addr(to) + '?' + (cc ? 'cc=' + addr(cc) + '&' : '') + 'subject=' + encodeURIComponent(subject || '') + '&body=' + encodeURIComponent(body || '');
@@ -2288,6 +2313,22 @@
     // Shared-list companies are yours to work only when you lead them (or share the lead).
     const mine = (c) => !c.sharedList || (!c.listRemoved && (c.listLead === 'Both' || (Boolean(opts.initials) && c.listLead === opts.initials)));
     const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c) && isProspect(c) && mine(c));
+    // Prospecting one submarket at a time: outreach and stats lists can be narrowed to it (with a longer list).
+    const subKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const inSub = (c) => !opts.submarket || subKey(c.submarket) === subKey(opts.submarket);
+    const subCounts = {};
+    leads.forEach((c) => c.submarket && (subCounts[c.submarket] = (subCounts[c.submarket] || 0) + 1));
+    const submarkets = Object.keys(subCounts).sort((a, b) => a.localeCompare(b)).map((name) => ({ name, n: subCounts[name] }));
+    const dayGoal = opts.submarket ? Math.max(goal, 25) : goal;
+    // Leases expiring within two years come first: those tenants need to start planning.
+    const soon = (c) => {
+      const m = c.leaseExpiration ? monthsUntil(c.leaseExpiration, today) : null;
+      return m !== null && m >= 0 && m <= 24 ? 0 : 1;
+    };
+    const leaseNote = (c) => {
+      const m = c.leaseExpiration ? monthsUntil(c.leaseExpiration, today) : null;
+      return m === null ? '' : m < 0 ? ` · lease expired ${fmtDate(c.leaseExpiration)}` : ` · lease expires in ${fmtMonths(m)}`;
+    };
 
     // Opened but unanswered emails from the last 3 weeks, where nothing has happened since: follow up while it's warm.
     const opened = data.activities
@@ -2317,34 +2358,69 @@
 
     const followUps = leads
       .filter((c) => {
-        if (openedIds.has(c.id)) return false;
+        if (openedIds.has(c.id) || !inSub(c)) return false;
         const wait = FOLLOW_UP_DAYS[leadStage(c)];
         const since = sinceTouch(c.id);
         return wait && (since === null || since >= wait);
       })
       .sort(
         (a, b) =>
+          soon(a) - soon(b) ||
           TEMP_RANK[a.leadTemp || ''] - TEMP_RANK[b.leadTemp || ''] ||
           expiry(a).localeCompare(expiry(b)) ||
           (sinceTouch(b.id) === null ? 1e9 : sinceTouch(b.id)) - (sinceTouch(a.id) === null ? 1e9 : sinceTouch(a.id))
       )
       .map((c) => {
         const since = sinceTouch(c.id);
-        return outreachItem(c, `${leadStage(c)} · ${since === null ? 'no touch logged' : 'last touch ' + since + ' days ago'}`);
+        return outreachItem(c, `${leadStage(c)} · ${since === null ? 'no touch logged' : 'last touch ' + since + ' days ago'}${leaseNote(c)}`);
       });
 
     const fresh = leads
-      .filter((c) => leadStage(c) === 'New' && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 30))
+      .filter((c) => leadStage(c) === 'New' && inSub(c) && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 30))
       .map((c) => ({ c, score: prospectScore(c, { today, lastActivityDate: touches[c.id] }).score }))
-      .sort((a, b) => b.score - a.score || expiry(a.c).localeCompare(expiry(b.c)))
+      .sort((a, b) => soon(a.c) - soon(b.c) || b.score - a.score || expiry(a.c).localeCompare(expiry(b.c)))
       .map(({ c }) => {
         const m = monthsUntil(c.leaseExpiration, today);
         return outreachItem(c, 'First touch' + (m === null ? '' : m < 0 ? ` · lease expired ${fmtDate(c.leaseExpiration)}` : ` · lease expires in ${fmtMonths(m)}`));
       });
 
     // Keep about a third of the day for brand-new leads so the top of the funnel keeps filling.
-    const newSlots = Math.min(fresh.length, Math.max(Math.ceil(goal / 3), goal - followUps.length));
-    const outreach = followUps.slice(0, goal - newSlots).concat(fresh.slice(0, newSlots));
+    const newSlots = Math.min(fresh.length, Math.max(Math.ceil(dayGoal / 3), dayGoal - followUps.length));
+    const outreach = followUps.slice(0, dayGoal - newSlots).concat(fresh.slice(0, newSlots));
+
+    // Prospects you've reached before who haven't had the latest quarter's stats: a ready reason to get back in touch.
+    const statsShare = [];
+    if ((opts.marketStats || []).length) {
+      const inToday = new Set(outreach.map((o) => o.companyId));
+      const qEnd = (q) => {
+        const m = /^([1-4])Q(\d{2})$/.exec(q || '');
+        return m ? toISODate(new Date(2000 + Number(m[2]), Number(m[1]) * 3, 0)) : '';
+      };
+      leads
+        .filter((c) => inSub(c) && touches[c.id] && sinceTouch(c.id) >= 14 && !openedIds.has(c.id) && !inToday.has(c.id) && leadStage(c) !== 'Dead Lead')
+        .forEach((c) => {
+          const m = marketStatFor(opts.marketStats, c, opts.marketReports);
+          if (!m) return;
+          const end = qEnd(m.current.quarter);
+          const sent = data.activities.some((a) => a.companyId === c.id && a.date > end && (a.template === 'Market update' || /market update|\b[1-4]Q\d{2}\b/i.test(a.subject || '')));
+          if (sent) return;
+          const v = marketValues(m, c);
+          const contact = bestContact(c.id);
+          statsShare.push({
+            kind: 'stats',
+            companyId: c.id,
+            contactId: contact ? contact.id : '',
+            title: c.name,
+            quarter: m.current.quarter,
+            area: v.StatsArea,
+            exact: m.current.submarket !== 'Market total',
+            why: `${m.current.quarter} ${v.StatsArea} ${String(m.current.assetClass || '').toLowerCase()}: vacancy ${v.Vacancy}${v.VacancyChange ? ' (' + v.VacancyChange + ')' : ''}${v.AskingRent ? ', ' + v.AskingRent : ''} · last touch ${sinceTouch(c.id)} days ago${leaseNote(c)}`,
+            sortSoon: soon(c),
+            sortExp: expiry(c),
+          });
+        });
+      statsShare.sort((a, b) => a.sortSoon - b.sortSoon || b.exact - a.exact || a.sortExp.localeCompare(b.sortExp));
+    }
 
     const care = clientTouchpoints(data.deals, { today, touches, criticalDates: data.criticalDates }).due.filter((p) => !snoozed(companies[p.companyId]));
 
@@ -2387,9 +2463,11 @@
       care,
       deals,
       outreach,
+      statsShare: statsShare.slice(0, opts.submarket ? 25 : 10),
+      submarkets,
       updates: updates.slice(0, 8),
       doorKnock,
-      remaining: { followUps: followUps.length, fresh: fresh.length, updates: updates.length },
+      remaining: { followUps: followUps.length, fresh: fresh.length, updates: updates.length, statsShare: statsShare.length },
     };
   }
 
@@ -3697,6 +3775,7 @@
     meetingDays,
     suggestTemplate,
     followUpDraft,
+    marketUpdateDraft,
     RECAP_TEMPLATE,
     recapSent,
     weeklyRecap,

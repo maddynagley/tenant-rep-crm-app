@@ -1453,3 +1453,44 @@ test('planHubSpotSync: personal (Gmail-type) addresses with no HubSpot company s
   assert.equal(byId['hs-em-30'].contactId, 'hs-ct-10');
   assert.equal(byId['hs-em-31'], undefined);
 });
+
+test('Today: submarket filter, expiring leases first, and prospects to send the latest stats to', () => {
+  const companies = [
+    { id: 'a', name: 'Acme', status: 'Contacted', leadStage: 'Follow Up', submarket: 'Northside', assetClass: 'Office', leaseExpiration: '2027-06-30', building: 'One North' },
+    { id: 'b', name: 'Birch', status: 'Contacted', leadStage: 'Follow Up', submarket: 'Northside', assetClass: 'Office', leaseExpiration: '2031-01-31' },
+    { id: 'c', name: 'Cedar', status: 'Contacted', leadStage: 'Follow Up', submarket: 'Uptown', assetClass: 'Office' },
+    { id: 'd', name: 'Dune', status: 'Contacted', leadStage: 'Engaged', submarket: 'Northside', assetClass: 'Office', leaseExpiration: '2027-03-31' },
+  ];
+  const contacts = companies.map((c) => ({ id: 'p' + c.id, companyId: c.id, firstName: 'Pat', email: c.id + '@x.test' }));
+  const activities = [
+    { type: 'Email', date: '2026-08-01', companyId: 'a', subject: 'Intro' },
+    { type: 'Email', date: '2026-08-01', companyId: 'b', subject: 'Intro' },
+    { type: 'Email', date: '2026-08-01', companyId: 'c', subject: 'Intro' },
+    { type: 'Email', date: '2026-10-25', companyId: 'd', subject: 'Checking in' },
+  ];
+  const marketStats = [
+    { quarter: '3Q26', assetClass: 'Office', submarket: 'Northside', vacancy: 24.1, askingRent: 43.1, qoq: { vacancyBps: -40 } },
+    { quarter: '3Q26', assetClass: 'Office', submarket: 'Market total', vacancy: 26.1 },
+  ];
+  const data = { companies, contacts, deals: [], activities, criticalDates: [] };
+  const all = L.dailyPlan(data, { today: '2026-10-29', marketStats });
+  assert.deepEqual(all.submarkets, [{ name: 'Northside', n: 3 }, { name: 'Uptown', n: 1 }]);
+  assert.equal(all.outreach[0].companyId, 'a', 'lease expiring within 24 months first');
+  assert.match(all.outreach[0].why, /lease expires in 8 mo/);
+  const north = L.dailyPlan(data, { today: '2026-10-29', marketStats, submarket: 'northside' });
+  assert.ok(north.outreach.every((o) => ['a', 'b', 'd'].includes(o.companyId)));
+  // Stats list: touched before (14+ days ago), not already on today's outreach list, not sent the quarter's update.
+  const stats = L.dailyPlan(data, { today: '2026-10-29', marketStats, outreachGoal: 1 });
+  assert.ok(stats.statsShare.length >= 1);
+  assert.ok(!stats.statsShare.some((x) => x.companyId === 'd'), 'touched 4 days ago');
+  assert.match(stats.statsShare.find((x) => x.companyId === 'b').why, /^3Q26 Northside office: vacancy 24\.1% \(down 40 bps from 2Q26\)/);
+  assert.equal(stats.statsShare.find((x) => x.companyId === 'c').exact, false);
+  const sent = L.dailyPlan(Object.assign({}, data, { activities: activities.concat([{ type: 'Email', date: '2026-10-20', companyId: 'b', subject: 'Northside 3Q26 market update', template: 'Market update' }]) }), { today: '2026-11-20', marketStats, outreachGoal: 1 });
+  assert.ok(!sent.statsShare.some((x) => x.companyId === 'b'), 'already sent this quarter');
+  const m = L.marketStatFor(marketStats, companies[0]);
+  const d = L.marketUpdateDraft({ company: companies[0], contact: contacts[0], me: { name: 'Jordan Lee' }, market: m, today: '2026-10-29' });
+  assert.equal(d.subject, 'Northside 3Q26 market update');
+  assert.match(d.body, /^Hi Pat,\n\nThe 3Q26 numbers are out, and I thought you'd want the latest on Northside\. Northside office vacancy was 24\.1% in 3Q26, down 40 bps from 2Q26/);
+  assert.match(d.body, /With your lease at One North up in June 2027/);
+  assert.match(d.body, /Best,\nJordan$/);
+});

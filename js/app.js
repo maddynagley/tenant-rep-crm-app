@@ -26,6 +26,7 @@
       sharedList: { sort: 'score', dir: '' },
       prospecting: { period: 'thisWeek', drill: '' },
       research: { statsAsset: 'Office', statsSub: '', statsQuarter: '', statsMetric: 'vacancy' },
+      today: { sub: '' },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
       comps: { tab: 'dates', q: '', asset: 'All' },
@@ -985,7 +986,7 @@
     const today = L.todayISO();
     const plan = L.dailyPlan(
       { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), criticalDates: S.all('criticalDates') },
-      { today, outreachGoal: s.outreachGoal, initials: myInitials(), internalDomain: myEmailDomain() }
+      { today, outreachGoal: s.outreachGoal, initials: myInitials(), internalDomain: myEmailDomain(), submarket: state.today.sub, marketStats: s.marketStats || [], marketReports: s.marketReports || [] }
     );
     const touchedToday = S.all('activities').filter((a) => a.date === today && TOUCH_TYPES.includes(a.type)).length;
     const goal = Number(s.outreachGoal) || 10;
@@ -1003,6 +1004,21 @@
         <div class="todo-actions">${reachLink(item)} ${touchButtons(c.id, item.contactId)}</div>
       </li>`;
     });
+
+    const statsItems = plan.statsShare.map((item) => {
+      const c = S.get('companies', item.companyId);
+      const p = S.get('contacts', item.contactId);
+      return `<li>
+        <div class="fu-body">
+          <div><a href="#/company/${esc(c.id)}"><strong>${esc(c.name)}</strong></a> ${leadBadge(c)}</div>
+          <div class="sub">${esc(item.why)}${p ? ' · ' + esc(contactName(p)) : ''}</div>
+        </div>
+        <div class="todo-actions">${p && p.email ? `<button class="btn small" data-action="draft-email" data-stats="1" data-company="${esc(c.id)}" data-contact="${esc(p.id)}">Draft ${esc(item.quarter)} update to ${esc(p.firstName)}</button>` : `<a class="btn small" href="#/company/${esc(c.id)}">Find a contact</a>`} ${touchButtons(c.id, item.contactId)}</div>
+      </li>`;
+    });
+    const subPicker = plan.submarkets.length
+      ? `<select class="more" data-filter="today.sub" aria-label="Submarket">${options(plan.submarkets.map((x) => ({ value: x.name, label: x.name + ' (' + x.n + ')' })), state.today.sub, 'All submarkets')}</select>`
+      : '';
 
     const openedItems = plan.opened.slice(0, 8).map((item) => {
       const c = S.get('companies', item.companyId);
@@ -1103,13 +1119,14 @@
       ${L.parseISODate(today).getDay() === 1 ? mondayProspectingCard(today) : ''}
       ${recapItems.length ? section('Friday recaps: send each client a weekly update', recapItems, '', '<p class="hint">A short status email on every active deal: what got done this week (even if it was quiet) and what\'s next. It drafts from the deal\'s tours, proposals, meetings and open tasks.</p>') : ''}
       ${tasks.length ? `<section class="card"><h2>Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
-      ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
       ${section(
-        'Reach out today',
+        'Reach out today' + (state.today.sub ? ' · ' + esc(state.today.sub) : '') + subPicker,
         outreach,
-        'No one to reach out to today. Add leads or check back tomorrow.',
-        `<p class="hint">Follow-ups come first (hot, then soonest expiration), then the best brand-new leads. Tap ✓ when done; it logs the touch and drops off the list. New leads move to Initial Outreach automatically.</p>`
+        state.today.sub ? 'No one in ' + esc(state.today.sub) + ' to reach out to today.' : 'No one to reach out to today. Add leads or check back tomorrow.',
+        `<p class="hint">Tenants whose leases expire within two years come first, then follow-ups (hot first) and the best brand-new leads.${state.today.sub ? ' Showing ' + esc(state.today.sub) + ' only; pick All submarkets to go back.' : ' Pick a submarket to prospect one area at a time.'} Tap ✓ when done; it logs the touch and drops off the list.</p>`
       )}
+      ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
+      ${statsItems.length ? section('Share the latest market stats', statsItems, '', `<p class="hint">Prospects you've reached before who haven't had this quarter's numbers for their submarket. Each draft quotes the latest stats from the Research page${state.today.sub ? ' (' + esc(state.today.sub) + ' only)' : ''}. Leases expiring soonest come first.</p>`) : ''}
       ${careItems.length ? section('Client care & critical dates', careItems, '', '<p class="hint">Clients you closed: see how the space is working, and stay ahead of their lease deadlines.</p>') : ''}
       ${dealItems.length ? section('Deals to move forward', dealItems, '', plan.deals.length > dealItems.length ? `<p class="hint">Top ${dealItems.length} of ${plan.deals.length} by probability. Log an update on each and the next ones appear.</p>` : '') : ''}
       ${marketingItems.length ? section('Marketing', marketingItems, '') : ''}
@@ -3109,6 +3126,7 @@
 
   const REC_DRAFT = '__recommended';
   const RECAP_DRAFT = '__recap';
+  const MARKET_DRAFT = '__market';
   function openDraft(companyId, contactId, step, replyId, opts) {
     opts = opts || {};
     const c = S.get('companies', companyId);
@@ -3131,8 +3149,9 @@
           <label>Template<select name="template">${options(
             [{ value: REC_DRAFT, label: 'Recommended follow-up' }]
               .concat(openDeal ? [{ value: RECAP_DRAFT, label: 'Weekly recap' }] : [])
+              .concat(draftContext(companyId, '', opts.dealId).market ? [{ value: MARKET_DRAFT, label: 'Market update (latest stats)' }] : [])
               .concat(templates.map((t) => ({ value: t.id, label: t.name + ' (' + t.step + ')' }))),
-            opts.recap && openDeal ? RECAP_DRAFT : opts.recommended || !suggested ? REC_DRAFT : suggested.id
+            opts.recap && openDeal ? RECAP_DRAFT : opts.stats ? MARKET_DRAFT : opts.recommended || !suggested ? REC_DRAFT : suggested.id
           )}</select></label>
           <label class="wide">Cc<span class="draft-to"><input name="cc" placeholder="Optional" /><button type="button" class="btn small" data-action="copy-draft-cc" title="Copy the cc addresses">Copy</button></span></label>
           <p class="hint wide" id="draft-why"></p>
@@ -3154,7 +3173,9 @@
     const f = $('#draft-form');
     const ctx = draftContext(f.dataset.company, f.elements.contact.value, f.dataset.deal);
     let draft;
-    if (f.elements.template.value === RECAP_DRAFT) {
+    if (f.elements.template.value === MARKET_DRAFT) {
+      draft = L.marketUpdateDraft(ctx);
+    } else if (f.elements.template.value === RECAP_DRAFT) {
       draft = L.weeklyRecap(
         Object.assign({ activities: S.all('activities').filter((a) => a.companyId === f.dataset.company), properties: S.all('properties').filter((p) => p.dealId === ctx.deal.id) }, ctx)
       );
@@ -4053,7 +4074,7 @@
       // Remember which template this email came from, so it's tagged when HubSpot logs it (or when you tap ✓ Emailed).
       const f = $('#draft-form');
       const t = S.get('templates', f.elements.template.value);
-      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : f.elements.template.value === REC_DRAFT ? 'Recommended follow-up' : f.elements.template.value === RECAP_DRAFT ? L.RECAP_TEMPLATE : '', pendingTemplateAt: L.todayISO() });
+      S.upsert('companies', { id: f.dataset.company, pendingTemplate: t ? t.name : f.elements.template.value === REC_DRAFT ? 'Recommended follow-up' : f.elements.template.value === RECAP_DRAFT ? L.RECAP_TEMPLATE : f.elements.template.value === MARKET_DRAFT ? 'Market update' : '', pendingTemplateAt: L.todayISO() });
       setTimeout(() => $('#modal').close(), 300);
       return;
     }
@@ -4234,7 +4255,7 @@
           return openQuickNote(d.col, d.id);
         case 'draft-email':
           e.preventDefault();
-          return openDraft(d.company, d.contact, d.step, d.reply, { recommended: Boolean(d.recommended), recap: Boolean(d.recap), dealId: d.deal });
+          return openDraft(d.company, d.contact, d.step, d.reply, { recommended: Boolean(d.recommended), recap: Boolean(d.recap), stats: Boolean(d.stats), dealId: d.deal });
         case 'copy-draft-to': {
           const p = S.get('contacts', $('#draft-form').elements.contact.value);
           if (p) navigator.clipboard.writeText(p.email).then(() => toast('Copied ' + p.email + '.'));
@@ -4285,6 +4306,9 @@
           return toggleMeetingDay(d.day);
         case 'copy-draft': {
           const f = $('#draft-form');
+          // Copying counts like opening in Outlook: the next email logged for this company is tagged with the template.
+          if (f.elements.template && [MARKET_DRAFT, RECAP_DRAFT, REC_DRAFT].includes(f.elements.template.value) || S.get('templates', f.elements.template && f.elements.template.value))
+            S.upsert('companies', { id: f.dataset.company, pendingTemplate: { [MARKET_DRAFT]: 'Market update', [RECAP_DRAFT]: L.RECAP_TEMPLATE, [REC_DRAFT]: 'Recommended follow-up' }[f.elements.template.value] || (S.get('templates', f.elements.template.value) || {}).name || '', pendingTemplateAt: L.todayISO() }, { silent: true });
           navigator.clipboard.writeText('Subject: ' + f.elements.subject.value + '\n\n' + f.elements.body.value).then(() => toast('Copied. Paste it into Outlook.'));
           return;
         }
