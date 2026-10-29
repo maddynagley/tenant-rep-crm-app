@@ -1557,6 +1557,8 @@ test('submarket clean-up: local names suggested into Research submarkets, by ass
   assert.equal(ind('Doraville / NE I-85'), 'Chamblee/Doraville/Norcross');
   assert.equal(ind('Duluth / Gwinnett'), 'Northeast/I-85 Corridor');
   assert.equal(ind('Central'), 'Central Atlanta');
+  assert.equal(ind('Airport / South Atlanta'), 'AP');
+  assert.equal(ind('College Park'), 'AP');
   assert.equal(office('Lakeview'), '');
   assert.equal(office('Doraville / NE I-85'), 'NE');
   assert.equal(office('Austell / Six Flags'), 'NW');

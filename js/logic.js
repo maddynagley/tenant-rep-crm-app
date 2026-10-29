@@ -821,7 +821,7 @@
       ['AP', ['airport/south atlanta', 'airport', 'ap', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'peachtree city', 'union city', 'camp creek', 'i-20 west', 'fulton industrial', 'douglasville', 'lithia springs']],
     ],
     Industrial: [
-      ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'union city', 'palmetto', 'fairburn', 'camp creek', 'i-75 south', 'jonesboro', 'forest park', 'stockbridge', 'locust grove']],
+      ['AP', ['airport/south atlanta', 'airport', 'ap', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'union city', 'palmetto', 'fairburn', 'camp creek', 'i-75 south', 'jonesboro', 'forest park', 'stockbridge', 'locust grove']],
       ['Carrollton/I-20W', ['carrollton', 'villa rica', 'bremen', 'temple']],
       ['Central Atlanta', ['central', 'central atlanta', 'west midtown', 'midtown', 'downtown', 'westside', 'atlanta']],
       ['Chamblee/Doraville/Norcross', ['chamblee', 'doraville', 'norcross', 'peachtree corners', 'ne i-85', 'doraville / ne i-85', 'doraville / i-85']],
