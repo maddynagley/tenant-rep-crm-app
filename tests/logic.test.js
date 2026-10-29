@@ -1485,6 +1485,11 @@ test('Today: submarket filter, expiring leases first, and prospects to send the 
   // Office and industrial are separate filters even when the names match.
   const mixed = Object.assign({}, data, { companies: companies.concat([{ id: 'e', name: 'Elm', status: 'Contacted', leadStage: 'Follow Up', submarket: 'Northside', assetClass: 'Industrial' }]) });
   assert.deepEqual(L.dailyPlan(mixed, { today: '2026-10-29' }).submarkets.map((x) => x.value + ' ' + x.n), ['Industrial|Northside 1', 'Office|Northside 3', 'Office|Uptown 1']);
+  // Messy local names are grouped under the clean label before anything is renamed.
+  const messy = Object.assign({}, data, { companies: companies.map((c) => Object.assign({}, c, { submarket: c.id === 'a' ? 'Central Perimeter' : c.id === 'b' ? 'CP' : c.submarket })) });
+  assert.deepEqual(L.dailyPlan(messy, { today: '2026-10-29' }).submarkets.map((x) => x.value + ' ' + x.n), ['Office|CP 2', 'Office|Northside 1', 'Office|Uptown 1']);
+  assert.ok(L.dailyPlan(messy, { today: '2026-10-29', submarket: 'Office|CP' }).outreach.some((o) => o.companyId === 'a'));
+  assert.equal(L.dailyPlan(messy, { today: '2026-10-29', submarketMap: { cp: 'Perimeter Hub' } }).submarkets.map((x) => x.name).join(), 'CP,Northside,Perimeter Hub,Uptown');
   const ind = L.dailyPlan(mixed, { today: '2026-10-29', submarket: 'Industrial|Northside' });
   assert.deepEqual(ind.outreach.map((o) => o.companyId), ['e']);
   // Stats list: touched before (14+ days ago), not already on today's outreach list, not sent the quarter's update.

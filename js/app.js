@@ -986,7 +986,7 @@
     const today = L.todayISO();
     const plan = L.dailyPlan(
       { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), criticalDates: S.all('criticalDates') },
-      { today, outreachGoal: s.outreachGoal, initials: myInitials(), internalDomain: myEmailDomain(), submarket: state.today.sub, marketStats: s.marketStats || [], marketReports: s.marketReports || [] }
+      { today, outreachGoal: s.outreachGoal, initials: myInitials(), internalDomain: myEmailDomain(), submarket: state.today.sub, submarketMap: s.submarketMap, marketStats: s.marketStats || [], marketReports: s.marketReports || [] }
     );
     const touchedToday = S.all('activities').filter((a) => a.date === today && TOUCH_TYPES.includes(a.type)).length;
     const goal = Number(s.outreachGoal) || 10;
@@ -1023,7 +1023,7 @@
     };
     const subLabel = state.today.sub ? state.today.sub.split('|').reverse().join(' ').replace(/ (Office|Industrial)$/, (m, x) => ' (' + x.toLowerCase() + ')') : '';
     const subPicker = plan.submarkets.length
-      ? `<select class="more" data-filter="today.sub" aria-label="Submarket"><option value="">All submarkets</option>${subGroup('Office')}${subGroup('Industrial')}</select>`
+      ? `<select class="more" data-filter="today.sub" aria-label="Submarket"><option value="">All submarkets</option>${subGroup('Office')}${subGroup('Industrial')}</select>` + ` <button class="btn small" data-action="submarket-cleanup" title="Rename your companies' submarkets to these clean names">Fix names</button>`
       : '';
 
     const openedItems = plan.opened.slice(0, 8).map((item) => {

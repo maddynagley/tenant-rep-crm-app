@@ -2441,9 +2441,14 @@
     // Office and industrial use different maps, so the filter is "Office|CP" or "Industrial|Stone Mountain".
     const subAsset = (c) => (c.assetClass === 'Industrial' ? 'Industrial' : 'Office');
     const [wantAsset, wantName] = String(opts.submarket || '').includes('|') ? opts.submarket.split('|') : ['', opts.submarket];
-    const inSub = (c) => !opts.submarket || (subKey(c.submarket) === subKey(wantName) && (!wantAsset || subAsset(c) === wantAsset));
+    // Grouped under the clean names (saved clean-up first, then the suggestion) even before the companies are renamed.
+    const subName = (c) => {
+      const mapped = mapSubmarket(c.submarket, opts.submarketMap, subAsset(c));
+      return mapped !== c.submarket ? mapped : suggestSubmarket(mapped, subAsset(c)) || mapped;
+    };
+    const inSub = (c) => !opts.submarket || (subKey(subName(c)) === subKey(wantName) && (!wantAsset || subAsset(c) === wantAsset));
     const subCounts = {};
-    leads.forEach((c) => c.submarket && (subCounts[subAsset(c) + '|' + c.submarket] = (subCounts[subAsset(c) + '|' + c.submarket] || 0) + 1));
+    leads.forEach((c) => c.submarket && (subCounts[subAsset(c) + '|' + subName(c)] = (subCounts[subAsset(c) + '|' + subName(c)] || 0) + 1));
     const submarkets = Object.keys(subCounts)
       .sort((a, b) => a.localeCompare(b))
       .map((value) => ({ value, asset: value.split('|')[0], name: value.split('|').slice(1).join('|'), n: subCounts[value] }));
