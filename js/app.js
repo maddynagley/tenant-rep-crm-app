@@ -1016,8 +1016,14 @@
         <div class="todo-actions">${p && p.email ? `<button class="btn small" data-action="draft-email" data-stats="1" data-company="${esc(c.id)}" data-contact="${esc(p.id)}">Draft ${esc(item.quarter)} update to ${esc(p.firstName)}</button>` : `<a class="btn small" href="#/company/${esc(c.id)}">Find a contact</a>`} ${touchButtons(c.id, item.contactId)}</div>
       </li>`;
     });
+    // Office and industrial submarkets follow different maps, so the picker has a section for each.
+    const subGroup = (asset) => {
+      const list = plan.submarkets.filter((x) => x.asset === asset);
+      return list.length ? `<optgroup label="${asset}">${options(list.map((x) => ({ value: x.value, label: x.name + ' (' + x.n + ')' })), state.today.sub)}</optgroup>` : '';
+    };
+    const subLabel = state.today.sub ? state.today.sub.split('|').reverse().join(' ').replace(/ (Office|Industrial)$/, (m, x) => ' (' + x.toLowerCase() + ')') : '';
     const subPicker = plan.submarkets.length
-      ? `<select class="more" data-filter="today.sub" aria-label="Submarket">${options(plan.submarkets.map((x) => ({ value: x.name, label: x.name + ' (' + x.n + ')' })), state.today.sub, 'All submarkets')}</select>`
+      ? `<select class="more" data-filter="today.sub" aria-label="Submarket"><option value="">All submarkets</option>${subGroup('Office')}${subGroup('Industrial')}</select>`
       : '';
 
     const openedItems = plan.opened.slice(0, 8).map((item) => {
@@ -1120,13 +1126,13 @@
       ${recapItems.length ? section('Friday recaps: send each client a weekly update', recapItems, '', '<p class="hint">A short status email on every active deal: what got done this week (even if it was quiet) and what\'s next. It drafts from the deal\'s tours, proposals, meetings and open tasks.</p>') : ''}
       ${tasks.length ? `<section class="card"><h2>Follow-ups you promised</h2>${followUpList(tasks)}</section>` : ''}
       ${section(
-        'Reach out today' + (state.today.sub ? ' · ' + esc(state.today.sub) : '') + subPicker,
+        'Reach out today' + (state.today.sub ? ' · ' + esc(subLabel) : '') + subPicker,
         outreach,
-        state.today.sub ? 'No one in ' + esc(state.today.sub) + ' to reach out to today.' : 'No one to reach out to today. Add leads or check back tomorrow.',
-        `<p class="hint">Tenants whose leases expire within two years come first, then follow-ups (hot first) and the best brand-new leads.${state.today.sub ? ' Showing ' + esc(state.today.sub) + ' only; pick All submarkets to go back.' : ' Pick a submarket to prospect one area at a time.'} Tap ✓ when done; it logs the touch and drops off the list.</p>`
+        state.today.sub ? 'No one in ' + esc(subLabel) + ' to reach out to today.' : 'No one to reach out to today. Add leads or check back tomorrow.',
+        `<p class="hint">Tenants whose leases expire within two years come first, then follow-ups (hot first) and the best brand-new leads.${state.today.sub ? ' Showing ' + esc(subLabel) + ' only; pick All submarkets to go back.' : ' Pick a submarket to prospect one area at a time.'} Tap ✓ when done; it logs the touch and drops off the list.</p>`
       )}
       ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
-      ${statsItems.length ? section('Share the latest market stats', statsItems, '', `<p class="hint">Prospects you've reached before who haven't had this quarter's numbers for their submarket. Each draft quotes the latest stats from the Research page${state.today.sub ? ' (' + esc(state.today.sub) + ' only)' : ''}. Leases expiring soonest come first.</p>`) : ''}
+      ${statsItems.length ? section('Share the latest market stats', statsItems, '', `<p class="hint">Prospects you've reached before who haven't had this quarter's numbers for their submarket. Each draft quotes the latest stats from the Research page${state.today.sub ? ' (' + esc(subLabel) + ' only)' : ''}. Leases expiring soonest come first.</p>`) : ''}
       ${careItems.length ? section('Client care & critical dates', careItems, '', '<p class="hint">Clients you closed: see how the space is working, and stay ahead of their lease deadlines.</p>') : ''}
       ${dealItems.length ? section('Deals to move forward', dealItems, '', plan.deals.length > dealItems.length ? `<p class="hint">Top ${dealItems.length} of ${plan.deals.length} by probability. Log an update on each and the next ones appear.</p>` : '') : ''}
       ${marketingItems.length ? section('Marketing', marketingItems, '') : ''}
@@ -4771,7 +4777,12 @@
       });
       S.saveSettings({ submarketMap: map });
       $('#modal').close();
-      if (state.today.sub && plan[state.today.sub.toLowerCase()]) state.today.sub = plan[state.today.sub.toLowerCase()];
+      if (state.today.sub) {
+        const [asset, ...rest] = state.today.sub.split('|');
+        const name = rest.join('|').toLowerCase();
+        const to = asset === 'Industrial' ? plan['industrial|' + name] : plan[name];
+        if (to) state.today.sub = asset + '|' + to;
+      }
       if (state.companies.submarket && plan[state.companies.submarket.toLowerCase()]) state.companies.submarket = plan[state.companies.submarket.toLowerCase()];
       saveUIState();
       toast(`Updated ${n} compan${n === 1 ? 'y' : 'ies'}. New imports and HubSpot syncs will use these names.`);

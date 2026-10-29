@@ -1474,11 +1474,19 @@ test('Today: submarket filter, expiring leases first, and prospects to send the 
   ];
   const data = { companies, contacts, deals: [], activities, criticalDates: [] };
   const all = L.dailyPlan(data, { today: '2026-10-29', marketStats });
-  assert.deepEqual(all.submarkets, [{ name: 'Northside', n: 3 }, { name: 'Uptown', n: 1 }]);
+  assert.deepEqual(all.submarkets, [
+    { value: 'Office|Northside', asset: 'Office', name: 'Northside', n: 3 },
+    { value: 'Office|Uptown', asset: 'Office', name: 'Uptown', n: 1 },
+  ]);
   assert.equal(all.outreach[0].companyId, 'a', 'lease expiring within 24 months first');
   assert.match(all.outreach[0].why, /lease expires in 8 mo/);
   const north = L.dailyPlan(data, { today: '2026-10-29', marketStats, submarket: 'northside' });
   assert.ok(north.outreach.every((o) => ['a', 'b', 'd'].includes(o.companyId)));
+  // Office and industrial are separate filters even when the names match.
+  const mixed = Object.assign({}, data, { companies: companies.concat([{ id: 'e', name: 'Elm', status: 'Contacted', leadStage: 'Follow Up', submarket: 'Northside', assetClass: 'Industrial' }]) });
+  assert.deepEqual(L.dailyPlan(mixed, { today: '2026-10-29' }).submarkets.map((x) => x.value + ' ' + x.n), ['Industrial|Northside 1', 'Office|Northside 3', 'Office|Uptown 1']);
+  const ind = L.dailyPlan(mixed, { today: '2026-10-29', submarket: 'Industrial|Northside' });
+  assert.deepEqual(ind.outreach.map((o) => o.companyId), ['e']);
   // Stats list: touched before (14+ days ago), not already on today's outreach list, not sent the quarter's update.
   const stats = L.dailyPlan(data, { today: '2026-10-29', marketStats, outreachGoal: 1 });
   assert.ok(stats.statsShare.length >= 1);
@@ -1531,7 +1539,7 @@ test('submarket clean-up: local names suggested into Research submarkets, by ass
   const ind = (n) => L.suggestSubmarket(n, 'Industrial');
   assert.equal(office('CP'), 'CP');
   assert.equal(office('Central Perimeter'), 'CP');
-  assert.equal(office('North Fulton'), 'North Fulton/Forsyth');
+  assert.equal(office('North Fulton'), 'NF');
   assert.equal(office('Cumberland/Galleria'), 'NW');
   assert.equal(office('Kennesaw / Town Center'), 'NW');
   assert.equal(office('Duluth / Gwinnett'), 'NE');
@@ -1539,20 +1547,23 @@ test('submarket clean-up: local names suggested into Research submarkets, by ass
   assert.equal(office('Northlake / Tucker'), 'NE');
   assert.equal(office('West Midtown'), 'Midtown');
   assert.equal(office('Midtown - West'), 'Midtown');
-  assert.equal(ind('Austell / Six Flags'), 'NW');
+  assert.equal(ind('Austell / Six Flags'), 'Fulton Industrial/I-20W');
   assert.equal(ind('I-20 West / Fulton Industrial'), 'Fulton Industrial/I-20W');
-  assert.equal(ind('Doraville / NE I-85'), 'NE');
-  assert.equal(ind('Duluth / Gwinnett'), 'NE');
+  assert.equal(ind('Doraville / NE I-85'), 'Chamblee/Doraville/Norcross');
+  assert.equal(ind('Duluth / Gwinnett'), 'Northeast/I-85 Corridor');
   assert.equal(ind('Central'), 'Central Atlanta');
   assert.equal(office('Lakeview'), '');
   assert.equal(office('Doraville / NE I-85'), 'NE');
   assert.equal(office('Austell / Six Flags'), 'NW');
   assert.equal(office('Marietta'), 'NW');
   assert.equal(office('BH'), 'BH');
-  assert.equal(ind('Northlake / Tucker'), 'NE');
+  assert.equal(ind('Northlake / Tucker'), 'Stone Mountain');
+  assert.equal(ind('Norcross / Peachtree Corners'), 'Chamblee/Doraville/Norcross');
+  assert.equal(ind('Marietta'), 'Northwest/I-75 Corridor');
   // Short labels still find the Research stats for the full submarket name.
   assert.equal(L.matchSubmarket(['Central Perimeter', 'Midtown', 'Northeast', 'Market total'], 'CP'), 'Central Perimeter');
   assert.equal(L.matchSubmarket(['Central Perimeter', 'Midtown', 'Northeast', 'Market total'], 'NE'), 'Northeast');
+  assert.equal(L.matchSubmarket(['North Fulton', 'Midtown', 'Market total'], 'NF'), 'North Fulton');
   assert.equal(L.matchSubmarket(['Northeast/I-85 Corridor', 'Northwest/I-75 Corridor', 'Market total'], 'NW'), 'Northwest/I-75 Corridor');
   assert.equal(L.mapSubmarket('CP', { cp: 'Central Perimeter' }), 'Central Perimeter');
   assert.equal(L.mapSubmarket('Midtown', { cp: 'Central Perimeter' }), 'Midtown');

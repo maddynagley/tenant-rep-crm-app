@@ -806,16 +806,16 @@
   // ---------- submarkets ----------
   // The Research submarkets (office and industrial use different maps), and the local names that fall in each.
   // A name is matched on its words, so "Doraville / NE I-85" and "Duluth / Gwinnett" both find their area.
-  // Maddy's office labels are short (BH, CP, NE, NW); SHORT_SUBMARKETS spells them out to find Research stats.
+  // Office labels are short (BH, CP, NE, NF, NW); industrial uses the Research industrial map's names.; SHORT_SUBMARKETS spells them out to find Research stats.
   const BH_FULL = 'buck' + 'head';
-  const SHORT_SUBMARKETS = { bh: BH_FULL, cp: 'central perimeter', ne: 'northeast', nw: 'northwest' };
+  const SHORT_SUBMARKETS = { bh: BH_FULL, cp: 'central perimeter', ne: 'northeast', nf: 'north fulton', nw: 'northwest' };
   const RESEARCH_SUBMARKETS = {
     Office: [
       ['Downtown', ['downtown', 'dt', 'cbd', 'centennial', 'castleberry']],
       ['Midtown', ['midtown', 'west midtown', 'westside', 'atlantic station', 'old fourth ward', 'o4w', 'poncey', 'inman park', 'virginia highland']],
       ['BH', [BH_FULL, 'bh', 'lenox', 'piedmont', 'brookhaven', 'peachtree heights']],
       ['CP', ['central perimeter', 'cp', 'perimeter', 'dunwoody', 'sandy springs', 'perimeter center']],
-      ['North Fulton/Forsyth', ['north fulton', 'alpharetta', 'roswell', 'forsyth', 'cumming', 'windward', 'johns creek', 'milton', 'avalon']],
+      ['NF', ['north fulton/forsyth', 'north fulton', 'nf', 'alpharetta', 'roswell', 'forsyth', 'cumming', 'windward', 'johns creek', 'milton', 'avalon']],
       ['NE', ['northeast', 'ne', 'duluth', 'gwinnett', 'norcross', 'peachtree corners', 'northlake', 'tucker', 'doraville', 'lawrenceville', 'chamblee', 'suwanee', 'buford', 'i-85', 'ne i-85', 'decatur', 'emory', 'druid hills', 'stone mountain', 'lilburn', 'snellville']],
       ['NW', ['northwest', 'nw', 'cumberland', 'galleria', 'marietta', 'kennesaw', 'town center', 'vinings', 'smyrna', 'acworth', 'austell', 'six flags', 'powder springs', 'cartersville', 'woodstock', 'canton']],
       ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'peachtree city', 'union city', 'camp creek', 'i-20 west', 'fulton industrial', 'douglasville', 'lithia springs']],
@@ -824,14 +824,14 @@
       ['Airport/South Atlanta', ['airport', 'south atlanta', 'college park', 'hapeville', 'east point', 'mcdonough', 'henry', 'fayetteville', 'union city', 'palmetto', 'fairburn', 'camp creek', 'i-75 south', 'jonesboro', 'forest park', 'stockbridge', 'locust grove']],
       ['Carrollton/I-20W', ['carrollton', 'villa rica', 'bremen', 'temple']],
       ['Central Atlanta', ['central', 'central atlanta', 'west midtown', 'midtown', 'downtown', 'westside', 'atlanta']],
-      ['Chamblee/Doraville/Norcross', ['chamblee']],
+      ['Chamblee/Doraville/Norcross', ['chamblee', 'doraville', 'norcross', 'peachtree corners', 'ne i-85', 'doraville / ne i-85', 'doraville / i-85']],
       ['Chattahoochee Industrial', ['chattahoochee', 'marietta blvd', 'bolton', 'atlanta industrial']],
-      ['Fulton Industrial/I-20W', ['fulton industrial', 'i-20 west', 'i20w', 'douglasville', 'lithia springs', 'douglas']],
+      ['Fulton Industrial/I-20W', ['fulton industrial', 'i-20 west', 'i20w', 'austell', 'six flags', 'douglasville', 'lithia springs', 'douglas']],
       ['North Central/GA 400 Corridor', ['north central', 'ga 400', 'north fulton', 'alpharetta', 'roswell', 'forsyth', 'cumming', 'sandy springs', 'dunwoody', 'central perimeter', 'cp']],
-      ['NE', ['northeast/i-85 corridor', 'northeast', 'ne', 'i-85', 'ne i-85', 'doraville', 'norcross', 'peachtree corners', 'northlake', 'tucker', 'duluth', 'gwinnett', 'lawrenceville', 'suwanee', 'buford', 'braselton', 'jefferson', 'commerce', 'hall county', 'gainesville']],
-      ['NW', ['northwest/i-75 corridor', 'northwest', 'nw', 'i-75', 'kennesaw', 'marietta', 'austell', 'six flags', 'cumberland', 'galleria', 'town center', 'acworth', 'cartersville', 'smyrna', 'canton', 'woodstock']],
+      ['Northeast/I-85 Corridor', ['northeast', 'ne', 'i-85', 'duluth', 'gwinnett', 'lawrenceville', 'suwanee', 'buford', 'braselton', 'jefferson', 'commerce', 'hall county', 'gainesville']],
+      ['Northwest/I-75 Corridor', ['northwest', 'nw', 'i-75', 'kennesaw', 'marietta', 'cumberland', 'galleria', 'town center', 'acworth', 'cartersville', 'smyrna', 'canton', 'woodstock']],
       ['Snapfinger/I-20E', ['snapfinger', 'i-20 east', 'i-20e', 'conyers', 'lithonia', 'covington']],
-      ['Stone Mountain', ['stone mountain', 'lilburn', 'snellville']],
+      ['Stone Mountain', ['stone mountain', 'tucker', 'northlake', 'lilburn', 'snellville']],
     ],
   };
   const SUBMARKET_STOP = /^(and|of|the|area|corridor)$/;
@@ -2438,10 +2438,15 @@
     const leads = data.companies.filter((c) => !dealCompanies.has(c.id) && !snoozed(c) && !doNotContact(c) && isProspect(c) && mine(c));
     // Prospecting one submarket at a time: outreach and stats lists can be narrowed to it (with a longer list).
     const subKey = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const inSub = (c) => !opts.submarket || subKey(c.submarket) === subKey(opts.submarket);
+    // Office and industrial use different maps, so the filter is "Office|CP" or "Industrial|Stone Mountain".
+    const subAsset = (c) => (c.assetClass === 'Industrial' ? 'Industrial' : 'Office');
+    const [wantAsset, wantName] = String(opts.submarket || '').includes('|') ? opts.submarket.split('|') : ['', opts.submarket];
+    const inSub = (c) => !opts.submarket || (subKey(c.submarket) === subKey(wantName) && (!wantAsset || subAsset(c) === wantAsset));
     const subCounts = {};
-    leads.forEach((c) => c.submarket && (subCounts[c.submarket] = (subCounts[c.submarket] || 0) + 1));
-    const submarkets = Object.keys(subCounts).sort((a, b) => a.localeCompare(b)).map((name) => ({ name, n: subCounts[name] }));
+    leads.forEach((c) => c.submarket && (subCounts[subAsset(c) + '|' + c.submarket] = (subCounts[subAsset(c) + '|' + c.submarket] || 0) + 1));
+    const submarkets = Object.keys(subCounts)
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({ value, asset: value.split('|')[0], name: value.split('|').slice(1).join('|'), n: subCounts[value] }));
     const dayGoal = opts.submarket ? Math.max(goal, 25) : goal;
     // Leases expiring within two years come first: those tenants need to start planning.
     const soon = (c) => {
