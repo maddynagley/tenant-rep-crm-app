@@ -1627,3 +1627,45 @@ test('update files: contacts moved to a named company, emptied placeholder compa
   assert.deepEqual(r.removeIds, ['x']);
   assert.deepEqual(r.notes, ['move Pat Lee to Acme Imports & Wholesale', 'move Sam Ray to The Uptown Group', 'Nobody Here: not found', 'delete the company "Unfiled contacts"', 'keep "Other holding": 2 other records are still in it']);
 });
+
+test('comp import: Submarket beats Market, Lease SF / Rental Type / N/R/E/C / OpEx Est. read, extras to notes', () => {
+  const rows = [
+    ['Comp #', 'Tenant', 'Building Name', 'Address', 'Market', 'Submarket', 'Business', 'Class', 'Signed Date', 'Direct/Sublease', 'Leased Floors', 'Lease SF', 'Rent PSF', 'Rental Type', 'OpEx Est.', 'Escalation %', 'TI', 'Term', 'Free Rent', 'N/R/E/C', 'LL Brokerage', 'LL Rep', 'Source', 'Date Input'],
+    ['1', 'Acme', 'Uptown Tower', '1 Main St', 'Atlanta', 'Northside', 'Law', 'A', '2025-07-01', 'Direct', '21, 22', '29,000', '$46.00', 'NNN', '14.5', '0.03', '100', '132', '12', 'Renewal + Expansion', 'FIRM', 'Pat Lee', 'Partners', '2026-01-28'],
+    ['2', 'Birch', 'Uptown Tower', '1 Main St', 'Atlanta', 'Northside', '', 'B', '2025-08-01', 'Sublease', '', '5,000', '30', 'Plus Electric', '', '3.00%', '', '7', 'N/A', 'New Lease', '', '', 'Partners', '2026-01-28'],
+    ['3', 'Cedar', 'Uptown Tower', '1 Main St', 'Atlanta', 'Northside', '', 'A', '2025-09-01', 'Direct', '', '9,000', '41', 'Base Year', '', '', '', '65', '5', 'N/A', '', '', 'Partners', '2026-01-28'],
+  ].concat([['4', 'Dune', 'X', '', 'Atlanta', 'Northside', '', '', '2025-01-01', '', '', '100', '30', 'FSG', '', '', '', '60', '', '', '', '', '', '']], [['5', 'Elm', 'X', '', 'Atlanta', 'Northside', '', '', '2025-01-01', '', '', '100', '30', 'FSG', '', '', '', '39', '', '', '', '', '', '']]);
+  const res = L.rowsToRecords(rows, L.COMP_IMPORT_ALIASES);
+  assert.equal(res.headers[res.mapping.submarket], 'Submarket');
+  assert.equal(res.headers[res.mapping.signedDate], 'Signed Date');
+  const unit = L.termUnitFromValues(res.records.map((r) => r.termMonths));
+  assert.equal(unit, 'months');
+  const [a, b, c] = res.records.map((r) => L.cleanImportedComp(r, { assetClass: 'Office', termUnit: unit }));
+  assert.equal(a.submarket, 'Northside');
+  assert.equal(a.sf, 29000);
+  assert.equal(a.rateBasis, 'NNN ($/SF/yr)');
+  assert.equal(a.opex, 14.5);
+  assert.equal(a.escalationPct, 3);
+  assert.equal(a.termMonths, 132);
+  assert.equal(a.dealType, 'Renewal');
+  assert.equal(a.notes, 'Type: Renewal + Expansion · Class A · Floors 21, 22 · Industry: Law · LL: FIRM, Pat Lee');
+  assert.equal(b.dealType, 'Sublease');
+  assert.equal(b.rateBasis, 'Modified Gross ($/SF/yr)');
+  assert.equal(b.termMonths, 7, 'a short term in a months column stays months');
+  assert.equal(b.freeRentMonths, undefined);
+  assert.equal(c.rateBasis, 'Full Service ($/SF/yr)');
+  assert.equal(c.dealType, undefined);
+  assert.equal(c.notes, 'Class A');
+});
+
+test('comp import: a much different size on another date reads as a separate deal; short names need a full match', () => {
+  const base = { tenant: 'Acme', building: 'Uptown Tower', sf: 3000, signedDate: '2025-01-01', startingRent: 30, termMonths: 60 };
+  const [, later, same] = L.planCompImport([base, Object.assign({}, base, { sf: 6000, signedDate: '2026-01-01' }), Object.assign({}, base, { sf: 3100, signedDate: '2025-03-01' })], []);
+  assert.equal(later.status, 'possible');
+  assert.equal(later.separate, true);
+  assert.match(later.reason, /separate deal/);
+  assert.equal(same.status, 'possible');
+  assert.equal(same.separate, false);
+  const [, ge] = L.planCompImport([{ tenant: 'GE', building: 'A', sf: 6000, signedDate: '2025-01-01' }, { tenant: 'Gemini Health', building: 'B', sf: 6000, signedDate: '2024-01-01' }], []);
+  assert.equal(ge.status, 'new');
+});

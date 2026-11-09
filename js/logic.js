@@ -3372,18 +3372,24 @@
     yearBuilt: ['year built', 'yr built', 'built', 'year blt'],
     clearHeight: ['clear height', 'clear ht', 'ceiling height', 'clear'],
     tenant: ['tenant', 'tenant name', 'company', 'lessee', 'occupant'],
-    dealType: ['deal type', 'transaction type', 'lease type', 'type'],
-    sf: ['sf', 'rsf', 'square feet', 'sq ft', 'size', 'size sf', 'leased sf', 'sf leased', 'rentable sf', 'area', 'size rsf', 'total sf'],
+    dealType: ['deal type', 'transaction type', 'lease type', 'n/r/e/c', 'n/r/e', 'new/renewal', 'type'],
+    leaseKind: ['direct/sublease', 'direct or sublease', 'sublease/direct', 'lease kind'],
+    sf: ['sf', 'rsf', 'square feet', 'sq ft', 'size', 'size sf', 'leased sf', 'lease sf', 'sf leased', 'rentable sf', 'area', 'size rsf', 'total sf'],
     signedDate: ['signed', 'signed date', 'sign date', 'lease signed', 'execution date', 'date signed', 'deal date', 'transaction date', 'date'],
     commencement: ['commencement', 'commencement date', 'lease commencement', 'start date', 'move in', 'move in date'],
     termMonths: ['term', 'term months', 'term mos', 'lease term', 'term mo', 'term yrs', 'term years'],
     leaseExpiration: ['expiration', 'expiration date', 'lease expiration', 'lxd', 'exp date', 'lease end', 'end date'],
     startingRent: ['starting rent', 'lease rate', 'rent', 'rate', 'base rent', 'contract rent', 'lease rent', 'rent/sf', 'rent psf', 'rate psf', '/sf', 'asking rent', 'initial rent', 'face rent', 'start rent', 'rental rate', 'net effective'],
-    rateBasis: ['rent basis', 'rate basis', 'rate type', 'basis', 'service type', 'lease structure', 'expense structure', 'rent type'],
+    rateBasis: ['rent basis', 'rate basis', 'rate type', 'rental type', 'basis', 'service type', 'lease structure', 'expense structure', 'rent type'],
     escalationPct: ['escalation', 'escalations', 'annual escalation', 'bumps', 'annual increase', 'esc', 'rent escalation', 'increases'],
     freeRentMonths: ['free rent', 'free rent months', 'free rent mos', 'abatement', 'free', 'rent abatement', 'abated rent'],
-    opex: ['opex', 'op ex', 'op exp', 'opex/sf', 'opex psf', 'operating expenses', 'operating expense', 'operating expenses/sf', 'expenses', 'est opex', 'estimated opex', 'nnn charges', 'nnns', 'nnn expenses', 'cam', 'cam charges', 'additional rent', 'pass throughs', 'pass-throughs'],
+    opex: ['opex', 'opex est', 'opex estimate', 'op ex', 'op exp', 'opex/sf', 'opex psf', 'operating expenses', 'operating expense', 'operating expenses/sf', 'expenses', 'est opex', 'estimated opex', 'nnn charges', 'nnns', 'nnn expenses', 'cam', 'cam charges', 'additional rent', 'pass throughs', 'pass-throughs'],
     tiAllowance: ['ti', 'ti allowance', 'tis', 'ti/sf', 'ti psf', 'tenant improvements', 'tia', 'improvement allowance', 'work letter'],
+    buildingClass: ['class', 'building class', 'bldg class'],
+    floors: ['leased floors', 'floors', 'floor', 'suite floors'],
+    industry: ['business', 'industry', 'tenant industry'],
+    llBroker: ['ll brokerage', 'landlord broker', 'landlord brokerage', 'listing broker'],
+    llRep: ['ll rep', 'landlord rep', 'landlord agent'],
     source: ['source'],
     notes: ['notes', 'comments', 'remarks', 'note'],
   };
@@ -3399,7 +3405,8 @@
     const s = String(v || '').toLowerCase();
     const monthly = /\/\s*mo|per month|monthly|psf\/mo|\/sf\/mo/.test(s);
     if (/nnn|triple|net net|\bnet\b|\bnn\b/.test(s)) return monthly ? 'NNN ($/SF/mo)' : 'NNN ($/SF/yr)';
-    if (/\bmg\b|modified/.test(s)) return 'Modified Gross ($/SF/yr)';
+    if (/\bmg\b|modified|plus e|\+\s*e\b|electric/.test(s)) return 'Modified Gross ($/SF/yr)';
+    if (/base year/.test(s)) return 'Full Service ($/SF/yr)';
     if (/\bfs\b|full service|full-service|\bfsg\b/.test(s)) return 'Full Service ($/SF/yr)';
     if (/gross/.test(s)) return monthly ? 'Gross ($/SF/mo)' : 'Full Service ($/SF/yr)';
     if (monthly) return 'NNN ($/SF/mo)';
@@ -3432,8 +3439,18 @@
     const rawTerm = String(rec.termMonths || '').trim();
     const term = parseTermMonths(rawTerm.replace(/[^0-9.a-z ]/gi, ' ').trim());
     if (term) out.termMonths = /^[\d.]+$/.test(rawTerm) && (defaults.termUnit === 'years' || (!defaults.termUnit && term < 12)) ? Math.round(term * 12) : term;
-    if (rec.dealType && !basisInType && !DEAL_TYPES.includes(String(rec.dealType).trim())) out.notes = [out.notes, 'Type: ' + String(rec.dealType).trim()].filter(Boolean).join(' · ');
+    if (rec.dealType && !basisInType && !/^n\/?a$/i.test(String(rec.dealType).trim()) && !DEAL_TYPES.includes(String(rec.dealType).trim())) out.notes = [out.notes, 'Type: ' + String(rec.dealType).trim()].filter(Boolean).join(' · ');
     if (/\d\s*-\s*\$?\d/.test(String(rec.tiAllowance || ''))) out.notes = [out.notes, 'TI: ' + String(rec.tiAllowance).trim()].filter(Boolean).join(' · ');
+    // A "Direct/Sublease" column: subleases are their own deal type.
+    if (/sub/i.test(String(rec.leaseKind || '')) && (!out.dealType || out.dealType === 'New Lease')) out.dealType = 'Sublease';
+    // Details without a field of their own go in the notes.
+    const extra = [
+      rec.buildingClass && 'Class ' + String(rec.buildingClass).trim(),
+      rec.floors && 'Floors ' + String(rec.floors).trim(),
+      rec.industry && 'Industry: ' + String(rec.industry).trim(),
+      (rec.llBroker || rec.llRep) && 'LL: ' + [rec.llBroker, rec.llRep].map((x) => String(x || '').trim()).filter(Boolean).join(', '),
+    ].filter(Boolean);
+    if (extra.length) out.notes = [out.notes].concat(extra).filter(Boolean).join(' · ');
     const rent = firstNumber(rec.startingRent);
     if (rent !== null) out.startingRent = rent;
     out.rateBasis = normalizeRateBasis(rec.rateBasis, '') || normalizeRateBasis(rec.startingRent, '') || (basisInType ? normalizeRateBasis(rec.dealType, '') : '') || (out.assetClass === 'Industrial' ? 'NNN ($/SF/yr)' : 'Full Service ($/SF/yr)');
@@ -3477,11 +3494,25 @@
   //   duplicate: the same deal with the same terms (default: update the existing comp, or skip a repeat row)
   //   possible:  same tenant at the same building or size, but a different date or terms; could be an
   //              expansion, extension or a second deal, or a repeat (default: skip until approved)
+  // A Term column with no unit in its header: months when most terms are a year or more (a 7 is then 7 months),
+  // else years. '' when there's nothing to go on.
+  function termUnitFromValues(values) {
+    const n = values.map(parseNumber).filter((x) => x !== null && x > 0);
+    if (n.length < 5) return '';
+    return n.filter((x) => x >= 12).length / n.length >= 0.8 ? 'months' : n.every((x) => x <= 20) ? 'years' : '';
+  }
+
   function planCompImport(comps, existing) {
     const seen = [];
     return comps.map((c, i) => {
       const t = tenantKey(c.tenant);
-      const near = (o) => t && tenantKey(o.tenant) && (tenantKey(o.tenant).startsWith(t) || t.startsWith(tenantKey(o.tenant)));
+      // "Kilpatrick" and "Kilpatrick Townsend" are near; a short name like "GE" must match in full.
+      const near = (o) => {
+        const u = tenantKey(o.tenant);
+        if (!t || !u) return false;
+        if (u === t) return true;
+        return Math.min(u.length, t.length) >= 4 && (u.startsWith(t) || t.startsWith(u));
+      };
       const sameSpace = (o) => keyOf(o.building) === keyOf(c.building) || (keyOf(o.address) && keyOf(o.address) === keyOf(c.address)) || Math.abs((parseNumber(o.sf) || 0) - (parseNumber(c.sf) || -1)) <= 0.02 * (parseNumber(c.sf) || 0);
       const check = (list, where) => {
         const exact = list.find((o) => compKey(o) === compKey(c));
@@ -3495,7 +3526,17 @@
           if ((close.signedDate || '') !== (c.signedDate || '')) diffs.push('date');
           if (Math.round(parseNumber(close.sf) || 0) !== Math.round(parseNumber(c.sf) || 0)) diffs.push('size');
           if (!sameTerms(close, c)) diffs.push('terms');
-          return { status: 'possible', where, match: close, reason: 'Same tenant' + (keyOf(close.building) === keyOf(c.building) ? ' and building' : '') + (diffs.length ? '; different ' + diffs.join(', ') : '') };
+          // A size more than 10% apart on another date reads as an expansion or a later deal, not the same one.
+          const a = parseNumber(close.sf) || 0;
+          const b = parseNumber(c.sf) || 0;
+          const separate = diffs.includes('date') && a > 0 && b > 0 && Math.abs(a - b) > 0.1 * Math.max(a, b);
+          return {
+            status: 'possible',
+            where,
+            match: close,
+            separate,
+            reason: 'Same tenant' + (keyOf(close.building) === keyOf(c.building) ? ' and building' : '') + (diffs.length ? '; different ' + diffs.join(', ') : '') + (separate ? '. Looks like a separate deal (expansion or later lease)' : ''),
+          };
         }
         return null;
       };
@@ -3782,9 +3823,15 @@
     const mapping = {};
     const normalized = headers.map(normHeader);
     const candidates = (field) => [normHeader(field)].concat(aliases[field].map(normHeader));
+    // The closest name wins: a "Submarket" column beats "Market" for the submarket, wherever they sit.
     Object.keys(aliases).forEach((field) => {
-      const idx = normalized.findIndex((h, i) => candidates(field).includes(h) && !Object.values(mapping).includes(i));
-      if (idx >= 0) mapping[field] = idx;
+      for (const c of candidates(field)) {
+        const idx = normalized.findIndex((h, i) => h === c && !Object.values(mapping).includes(i));
+        if (idx >= 0) {
+          mapping[field] = idx;
+          break;
+        }
+      }
     });
     // Then headers with a unit tacked on, like "Total Inventory (SF)" or "Vacancy (%)".
     const bare = normalized.map((h) => h.replace(/\s*(\/?sf|psf|rsf|%|\/sf\/yr|\/sf\/mo|mos?|months|yrs?|years)$/, '').trim());
@@ -4080,6 +4127,7 @@
     matchSubmarket,
     normalizeLinkedIn,
     planNamedFixes,
+    termUnitFromValues,
     splitNotes,
     replaceNote,
     linkedInSearchUrl,

@@ -3010,7 +3010,7 @@
             x.where === 'crm'
               ? [{ value: 'update', label: 'Update the existing comp' }, { value: 'add', label: 'Add as a separate comp' }, { value: 'skip', label: 'Skip this row' }]
               : [{ value: 'skip', label: 'Skip this row' }, { value: 'add', label: 'Add as a separate comp' }];
-          const def = x.status === 'duplicate' && x.where === 'crm' ? 'update' : 'skip';
+          const def = x.status === 'duplicate' && x.where === 'crm' ? 'update' : x.separate ? 'add' : 'skip';
           return `<tr class="${x.status === 'possible' ? 'dup-possible' : ''}"><td>${line(x.comp)}</td><td>${x.where === 'crm' ? 'In the CRM: ' : 'Row ' + (x.match.row + 1) + ' of this file: '}${line(x.match)}</td><td>${badge(x.status === 'duplicate' ? 'Same deal' : 'Possible duplicate', x.status === 'duplicate' ? 'gray' : 'amber')} <span class="sub">${esc(x.reason)}</span></td><td><select name="dup-${x.i}">${options(choices, def)}</select></td></tr>`;
         })
         .join('')}</tbody></table></div></div>`;
@@ -3854,7 +3854,7 @@
     importPreview.quarter = L.normalizeQuarter(title) || L.latestDataQuarter(L.todayISO());
     importPreview.assetClass = kind === 'marketStats' && /flex|r&d/i.test(filename) ? 'Flex' : /industrial|warehouse|logistics/i.test(title) ? 'Industrial' : 'Office';
     const termHead = importPreview.result.mapping.termMonths !== undefined ? importPreview.result.headers[importPreview.result.mapping.termMonths] : '';
-    importPreview.termUnit = /\bmo/i.test(termHead) ? 'months' : /\b(yr|year)/i.test(termHead) ? 'years' : '';
+    importPreview.termUnit = /\bmo/i.test(termHead) ? 'months' : /\b(yr|year)/i.test(termHead) ? 'years' : L.termUnitFromValues(importPreview.result.records.map((r) => r.termMonths));
     if (location.hash !== '#/data') location.hash = '#/data';
     else render();
     window.scrollTo(0, 0);
@@ -3981,6 +3981,16 @@
   function readExcelRows(file, aliases) {
     return Promise.all([loadXLSX(), file.arrayBuffer()]).then(([XLSX, buf]) => {
       const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      // Date cells are read as their real date, not as displayed: a cell showing "Jun-26" holds June 15, 2026.
+      wb.SheetNames.forEach((n) =>
+        Object.keys(wb.Sheets[n]).forEach((ref) => {
+          const c = wb.Sheets[n][ref];
+          if (!c || c.t !== 'd' || !(c.v instanceof Date) || isNaN(c.v)) return;
+          const utc = c.v.getUTCHours() === 0 && c.v.getUTCMinutes() === 0;
+          const part = (f) => (utc ? c.v['getUTC' + f]() : c.v['get' + f]());
+          c.w = part('FullYear') + '-' + String(part('Month') + 1).padStart(2, '0') + '-' + String(part('Date')).padStart(2, '0');
+        })
+      );
       const sheets = wb.SheetNames.map((n) => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' }));
       const score = (rows) => Object.keys(L.rowsToRecords(rows, aliases).mapping).length;
       return sheets.sort((a, b) => score(b) - score(a))[0] || [];
@@ -4004,7 +4014,7 @@
     plan.forEach((x, i) => {
       const comp = x.comp;
       if (!comp.building) return skipped++;
-      const choice = x.status === 'new' ? 'add' : opts.choices[i] || (x.status === 'duplicate' && x.where === 'crm' ? 'update' : 'skip');
+      const choice = x.status === 'new' ? 'add' : opts.choices[i] || (x.status === 'duplicate' && x.where === 'crm' ? 'update' : x.separate ? 'add' : 'skip');
       if (choice === 'skip') return held++;
       if (choice === 'update') {
         Object.keys(comp).forEach((k) => (comp[k] === '' || comp[k] === undefined || (comp.guessed || []).includes(k)) && delete comp[k]);
