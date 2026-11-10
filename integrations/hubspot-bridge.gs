@@ -39,7 +39,7 @@ const TYPES = {
   calls: ['hs_lastmodifieddate', 'hs_timestamp', 'hs_call_title', 'hs_call_body', 'hs_call_disposition', 'hs_call_direction', 'hs_call_duration'],
   companies: [
     'hs_lastmodifieddate', 'createdate', 'name', 'domain', 'website', 'industry', 'numberofemployees', 'address', 'city', 'state',
-    'submarket', 'square_footage', 'lease_expiration',
+    'submarket', 'square_footage', 'lease_expiration', 'hs_merged_object_ids',
   ],
   contacts: ['lastmodifieddate', 'createdate', 'firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
   deals: ['hs_lastmodifieddate', 'createdate', 'dealname', 'dealstage', 'pipeline', 'closedate'],
@@ -170,6 +170,73 @@ function restoreBlankedFields() {
   });
   Logger.log('Restored: ' + total.companies + ' companies, ' + total.contacts + ' contacts, ' + total.deals + ' deals.');
   return total;
+}
+
+// HubSpot's "create and associate companies with contacts" setting made a company for every contact the CRM
+// sent on RESTORE_SINCE whose email domain didn't match one, although each contact was already linked to its
+// real company. previewDuplicateCompanies() lists what would be merged; mergeDuplicateCompanies() merges each
+// auto-created company into that real company (or, with no other company, the one company with its domain).
+// Run the preview first, then the merge. The CRM folds its own copies in on the next sync.
+function previewDuplicateCompanies() {
+  return duplicateCompanies_(false);
+}
+
+function mergeDuplicateCompanies() {
+  return duplicateCompanies_(true);
+}
+
+function duplicateCompanies_(apply) {
+  const since = new Date(RESTORE_SINCE).getTime();
+  const auto = [];
+  let after;
+  do {
+    const body = {
+      filterGroups: [{ filters: [{ propertyName: 'createdate', operator: 'GTE', value: String(since) }, { propertyName: 'hs_object_source_label', operator: 'EQ', value: 'CRM_SETTING' }] }],
+      properties: ['name', 'domain', 'createdate'],
+      limit: 100,
+    };
+    if (after) body.after = after;
+    const page = hubspot_('post', '/crm/v3/objects/companies/search', body);
+    (page.results || []).forEach(function (r) { auto.push({ id: String(r.id), properties: r.properties || {} }); });
+    after = page.paging && page.paging.next && page.paging.next.after;
+  } while (after && auto.length < 2000);
+  const autoIds = {};
+  auto.forEach(function (a) { autoIds[a.id] = true; });
+  attachAssociations_('companies', auto, 'contacts');
+  const contacts = {};
+  auto.forEach(function (a) { (a.contacts || []).forEach(function (id) { contacts[id] = { id: id }; }); });
+  const contactList = Object.keys(contacts).map(function (id) { return contacts[id]; });
+  attachAssociations_('contacts', contactList, 'companies');
+  const plan = [];
+  const left = [];
+  auto.forEach(function (a) {
+    const others = {};
+    (a.contacts || []).forEach(function (cid) {
+      (contacts[cid].companies || []).forEach(function (co) { if (!autoIds[co]) others[co] = true; });
+    });
+    let target = Object.keys(others);
+    if (!target.length && a.properties.domain) {
+      // No other company on its contacts: the one older company with the same domain, if there is exactly one.
+      const same = searchIn_('companies', 'domain', [a.properties.domain]).filter(function (r) { return !autoIds[String(r.id)]; });
+      target = same.map(function (r) { return String(r.id); });
+    }
+    if (target.length === 1) plan.push({ from: a.id, to: target[0], name: a.properties.name, domain: a.properties.domain });
+    else left.push(a.properties.name + ' (' + a.id + ', ' + (target.length ? target.length + ' possible companies' : 'no other company') + ')');
+  });
+  let merged = 0;
+  plan.forEach(function (m) {
+    if (!apply) return Logger.log('Would merge ' + m.name + ' (' + m.domain + ', ' + m.from + ') into company ' + m.to);
+    try {
+      hubspot_('post', '/crm/v3/objects/companies/merge', { primaryObjectId: m.to, objectIdToMerge: m.from });
+      merged++;
+      Logger.log('Merged ' + m.name + ' (' + m.from + ') into ' + m.to);
+    } catch (err) {
+      Logger.log('Could not merge ' + m.name + ' (' + m.from + '): ' + err.message);
+    }
+  });
+  left.forEach(function (x) { Logger.log('Left alone: ' + x); });
+  Logger.log((apply ? 'Merged ' + merged : 'Would merge ' + plan.length) + ' auto-created companies; ' + left.length + ' left alone (listed above).');
+  return { plan: plan.length, merged: merged, left: left.length };
 }
 
 // { companies: [ids], contacts: [ids], deals: [ids] } → per type { done: [ids], failed: [{ id, error }] }.

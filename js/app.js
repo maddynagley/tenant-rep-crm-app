@@ -5275,7 +5275,7 @@
       applyHubSpotRecords(plan);
       const added = S.all('activities').length - before;
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
-      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
       if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       hubspotStatus += await pushHubSpot();
@@ -5299,6 +5299,8 @@
     plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
     (plan.contacts || []).forEach((c) => S.upsert('contacts', c, { silent: true, touch: false }));
     (plan.deals || []).forEach((d) => S.upsert('deals', d, { silent: true, touch: false }));
+    // Companies merged in HubSpot are merged here too.
+    (plan.merges || []).forEach((m) => S.get('companies', m.from) && S.get('companies', m.to) && S.mergeCompanies(m.from, m.to, true));
   }
   // The HubSpot portal number, from any record linked to HubSpot (for record links).
   function hubspotPortal() {

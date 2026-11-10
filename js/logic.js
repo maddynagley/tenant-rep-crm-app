@@ -1206,6 +1206,7 @@
     let skipped = 0;
     const recordPatches = { companies: [], contacts: [], deals: [] };
     let updatedFromHubSpot = 0;
+    const merges = [];
     const created = { companies: 0, contacts: 0, deals: 0 };
     const fillBlanks = (col, current, fields) => {
       const patch = { id: current.id };
@@ -1250,7 +1251,16 @@
         hubspotUrl: hsUrl('0-2', rec.id),
       };
       const cid = companies['hs-co-' + rec.id] ? 'hs-co-' + rec.id : byHubspotId[String(rec.id)] || byWebsite[domainOf(website)] || byName[nameKey(p.name)];
+      // Companies merged in HubSpot: a CRM copy of a merged-away one folds into this one.
+      const mergedAway = String(p.hs_merged_object_ids || '').split(/[;,\s]+/).filter(Boolean);
+      const foldIn = (into) =>
+        mergedAway.forEach((id) => {
+          const dup = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[id];
+          if (dup && dup !== into && companies[dup] && !merges.some((m) => m.from === dup)) merges.push({ from: dup, to: into });
+          byHubspotId[id] = into;
+        });
       if (cid && companies[cid]) {
+        foldIn(cid);
         // Two-way: the mapped fields follow the most recent edit (see mergeFromHubSpot); the rest fill blanks.
         fillBlanks('companies', companies[cid], data.twoWay ? pickUnmapped(fields, ['name', 'website', 'address', 'city', 'submarket', 'sfOccupied', 'headcount', 'leaseExpiration']) : fields);
         if (data.twoWay) mergePatch('companies', companies[cid], p, p.hs_lastmodifieddate);
@@ -1262,6 +1272,7 @@
       if (data.twoWay) c.hubspotSync = { base: agreed('companies', p), at: new Date().toISOString() };
       if (!c.leadStage) delete c.leadStage;
       companies[c.id] = c;
+      foldIn(c.id);
       byHubspotId[String(rec.id)] = c.id;
       if (domainOf(website)) byWebsite[domainOf(website)] = c.id;
       byName[nameKey(c.name)] = c.id;
@@ -1454,7 +1465,7 @@
       if (patch) Object.assign(patch, { pendingTemplate: '' });
       else companyPatches.push({ id: cid, pendingTemplate: '' });
     });
-    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, deals: recordPatches.deals, created, skipped, updatedFromHubSpot };
+    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, deals: recordPatches.deals, merges, created, skipped, updatedFromHubSpot };
   }
 
   // ---------- shared prospect lists (two-way Google Sheet) ----------
@@ -2612,7 +2623,7 @@
     if (!from || !to || fromId === toId) return null;
     const patch = { id: to.id };
     Object.keys(from).forEach((k) => {
-      if (['id', 'name', 'createdAt', 'updatedAt', 'aliases', 'mergedHubspotIds', 'hubspotId', 'hubspotUrl'].includes(k)) return;
+      if (['id', 'name', 'createdAt', 'updatedAt', 'aliases', 'mergedHubspotIds', 'hubspotId', 'hubspotUrl', 'hubspotSync'].includes(k)) return;
       const v = from[k];
       if (v !== '' && v !== null && v !== undefined && (to[k] === '' || to[k] === null || to[k] === undefined)) patch[k] = v;
     });
@@ -2620,8 +2631,11 @@
     [from.name].concat(String(from.aliases || '').split(/\s*,\s*/)).forEach((n) => n && !aliases.includes(n) && n !== to.name && aliases.push(n));
     patch.aliases = aliases.join(', ');
     const ids = (to.mergedHubspotIds || []).concat(from.mergedHubspotIds || []);
-    if (from.hubspotId && !to.hubspotId) Object.assign(patch, { hubspotId: String(from.hubspotId), hubspotUrl: from.hubspotUrl || '' });
-    else if (from.hubspotId) ids.push(String(from.hubspotId));
+    // A record that came from HubSpot carries its HubSpot ID in its own ID.
+    const fromHs = from.hubspotId || (/^hs-co-(\d+)$/.exec(from.id) || [])[1];
+    const toHs = to.hubspotId || /^hs-co-\d+$/.test(to.id);
+    if (fromHs && !toHs) Object.assign(patch, { hubspotId: String(fromHs), hubspotUrl: from.hubspotUrl || '' });
+    else if (fromHs) ids.push(String(fromHs));
     if (ids.length) patch.mergedHubspotIds = ids.filter((x, i) => ids.indexOf(x) === i);
     const moves = {};
     ['contacts', 'deals', 'activities', 'documents', 'criticalDates'].forEach((col) => {

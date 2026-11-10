@@ -1844,3 +1844,21 @@ test('HubSpot two-way: on the first comparison a blank in the CRM is filled from
   const push = L.planHubSpotPush({ companies: [after], contacts: [], deals: [] }, {});
   assert.deepEqual(push.companies.map((x) => x.props), [{ submarket: 'Uptown' }], 'only the newer CRM value goes, no blanks');
 });
+
+test('HubSpot merges: a CRM copy of a company merged away in HubSpot folds into the one kept', () => {
+  const data = {
+    companies: [
+      { id: 'hs-co-100', name: 'Acme', website: 'https://acme.test' },
+      { id: 'hs-co-900', name: 'Acme Holdings', website: 'https://acmeholdings.test', leadStage: 'New' },
+    ],
+    contacts: [{ id: 'hs-ct-1', companyId: 'hs-co-900', firstName: 'Pat' }],
+    deals: [],
+    activities: [],
+  };
+  const plan = L.planHubSpotSync({ companies: [{ id: '100', properties: { name: 'Acme', domain: 'acme.test', hs_merged_object_ids: '900;901' } }] }, data);
+  assert.deepEqual(plan.merges, [{ from: 'hs-co-900', to: 'hs-co-100' }]);
+  const m = L.planCompanyMerge(data, 'hs-co-900', 'hs-co-100');
+  assert.deepEqual(m.moves.contacts, [{ id: 'hs-ct-1', companyId: 'hs-co-100' }]);
+  assert.deepEqual(m.company.mergedHubspotIds, ['900'], 'the merged-away HubSpot ID is remembered');
+  assert.equal(m.company.hubspotId, undefined);
+});
