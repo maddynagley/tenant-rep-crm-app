@@ -13,6 +13,7 @@
  *   1. In HubSpot create a private app with read scopes (contacts, companies, deals, sales-email-read)
  *      and, for two-way sync, write scopes (crm.objects.companies.write, crm.objects.contacts.write,
  *      crm.objects.deals.write). Copy its access token.
+ *      (HubSpot now lists private apps under Development → Legacy Apps.)
  *      Updating an existing bridge: add the write scopes to the private app (the token stays the same),
  *      paste this file over the old one, then Deploy → Manage deployments → edit → Version: New version.
  *   2. Here: Project Settings → Script properties → add HUBSPOT_TOKEN = <the token>.
