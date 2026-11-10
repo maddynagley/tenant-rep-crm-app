@@ -1029,7 +1029,8 @@
         const base = rec.hubspotSync && rec.hubspotSync.base;
         let send;
         if (!hubspotId) {
-          if (!recent(rec) && !opts.all) return;
+          // A company going to HubSpot for the first time takes its contacts and deals along, however old.
+          if (!recent(rec) && !opts.all && !newCompanies.has(rec.companyId)) return;
           send = props;
         } else if (base) {
           send = {};
@@ -1045,7 +1046,9 @@
         if (!Object.keys(item.props).length && !item.associate) return;
         out[col].push(item);
       });
+    const newCompanies = new Set();
     plan('companies', 'co', data.companies, (rec, item) => (rec.name ? item : null));
+    out.companies.forEach((x) => !x.hubspotId && newCompanies.add(x.crmId));
     const companyLink = (rec, item, needed) => {
       const co = companies[rec.companyId];
       if (!co) return needed ? null : item;

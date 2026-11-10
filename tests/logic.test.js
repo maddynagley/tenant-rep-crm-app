@@ -1808,3 +1808,18 @@ test('HubSpot push "send everything": every record not in HubSpot yet, however o
   assert.deepEqual(L.planHubSpotPush(data, { since, all: true, exclude: ['c2'] }).companies.map((x) => x.crmId), ['c1']);
   assert.equal(L.planHubSpotPush(data, { since, all: true, limit: 1 }).companies.length, 1);
 });
+
+test('HubSpot push: a company sent for the first time takes its older contacts and deals along', () => {
+  const data = {
+    companies: [{ id: 'c1', name: 'Acme', updatedAt: '2026-11-05T00:00:00Z' }, { id: 'c2', name: 'Birch', updatedAt: '2025-01-01T00:00:00Z' }],
+    contacts: [
+      { id: 'p1', companyId: 'c1', firstName: 'Pat', email: 'pat@acme.test', updatedAt: '2025-01-01T00:00:00Z' },
+      { id: 'p2', companyId: 'c2', firstName: 'Sam', email: 'sam@birch.test', updatedAt: '2025-01-01T00:00:00Z' },
+    ],
+    deals: [{ id: 'd1', companyId: 'c1', name: 'Acme move', stage: 'Touring', updatedAt: '2025-01-01T00:00:00Z' }],
+  };
+  const push = L.planHubSpotPush(data, { since: Date.parse('2026-11-01T00:00:00Z') });
+  assert.deepEqual(push.companies.map((x) => x.crmId), ['c1']);
+  assert.deepEqual(push.contacts.map((x) => x.crmId), ['p1']);
+  assert.deepEqual(push.deals.map((x) => x.crmId), ['d1']);
+});
