@@ -5205,6 +5205,8 @@
       if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       hubspotStatus += await pushHubSpot();
+      // The settings card redrew when the pull was saved; show the sending part too.
+      if (location.hash.startsWith('#/data')) render();
       runWorkflows();
       if (manual) toast('HubSpot synced: ' + hubspotStatus + '.');
     } catch (err) {
