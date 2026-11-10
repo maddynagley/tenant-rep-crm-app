@@ -123,6 +123,55 @@ function doPost(e) {
   }
 }
 
+// ---------- one-time repair ----------
+// Run restoreBlankedFields() once from the Apps Script editor (select it, then Run). It puts back any synced
+// field that an app or integration (like this bridge) blanked since RESTORE_SINCE, using the value it had just
+// before. Fields cleared by a person in HubSpot are left alone. The execution log lists every change.
+const RESTORE_SINCE = '2026-11-10T00:00:00Z';
+
+function restoreBlankedFields() {
+  const since = new Date(RESTORE_SINCE).getTime();
+  const total = { companies: 0, contacts: 0, deals: 0 };
+  ['companies', 'contacts', 'deals'].forEach(function (type) {
+    const changed = [];
+    let next = since;
+    for (let round = 0; round < 20; round++) {
+      const res = fetchSince_(type, TYPES[type], next);
+      res.items.forEach(function (r) { if (changed.indexOf(r.id) < 0) changed.push(r.id); });
+      if (!res.more || res.next <= next) break;
+      next = res.next;
+    }
+    const updates = [];
+    for (let k = 0; k < changed.length; k += 50) {
+      const res = hubspot_('post', '/crm/v3/objects/' + type + '/batch/read', {
+        properties: PUSH_PROPS[type],
+        propertiesWithHistory: PUSH_PROPS[type],
+        inputs: changed.slice(k, k + 50).map(function (id) { return { id: id }; }),
+      });
+      (res.results || []).forEach(function (r) {
+        const fix = {};
+        PUSH_PROPS[type].forEach(function (prop) {
+          const history = ((r.propertiesWithHistory || {})[prop] || []).slice().sort(function (a, b) { return new Date(b.timestamp) - new Date(a.timestamp); });
+          const latest = history[0];
+          if (!latest || String(latest.value || '') !== '' || new Date(latest.timestamp).getTime() < since) return;
+          // Only blanks written by an app or integration; a person clearing a field in HubSpot meant it.
+          if (['INTEGRATION', 'API'].indexOf(String(latest.sourceType)) < 0) return Logger.log('Left alone: ' + type + ' ' + r.id + ' ' + prop + ' (cleared by ' + latest.sourceType + ')');
+          const before = history.slice(1).filter(function (h) { return String(h.value || '') !== ''; })[0];
+          if (before) fix[prop] = before.value;
+        });
+        if (Object.keys(fix).length) {
+          updates.push({ id: r.id, properties: fix });
+          Logger.log(type + ' ' + r.id + ' (' + ((r.properties || {}).name || (r.properties || {}).dealname || (r.properties || {}).email || '') + '): ' + JSON.stringify(fix));
+        }
+      });
+    }
+    for (let k = 0; k < updates.length; k += 100) hubspot_('post', '/crm/v3/objects/' + type + '/batch/update', { inputs: updates.slice(k, k + 100) });
+    total[type] = updates.length;
+  });
+  Logger.log('Restored: ' + total.companies + ' companies, ' + total.contacts + ' contacts, ' + total.deals + ' deals.');
+  return total;
+}
+
 // { companies: [ids], contacts: [ids], deals: [ids] } → per type { done: [ids], failed: [{ id, error }] }.
 function archive_(req) {
   const out = {};
