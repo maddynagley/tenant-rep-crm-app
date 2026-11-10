@@ -2910,7 +2910,8 @@
             s.hubspotTwoWay
               ? `On since ${esc(new Date(s.hubspotPushSince).toLocaleDateString())}. Records you add or edit from then on go to HubSpot, and HubSpot edits come back here. When both sides changed the same field, the more recent edit wins. Companies match on website domain (then name), contacts on email, deals on name and company, so nothing is doubled. Deleting here never deletes in HubSpot.`
               : 'Needs the latest bridge script with write access (see the steps at the top of the script).'
-          }</p>`
+          }</p>
+          ${s.hubspotTwoWay ? '<div class="actions"><button class="btn" type="button" data-action="send-all-hubspot" title="One time: companies, contacts and deals from before two-way was on">Send everything not yet in HubSpot</button></div>' : ''}`
               : ''
           }
           <p class="hint">${s.hubspotLastSync ? 'Last synced ' + esc(new Date(s.hubspotLastSync).toLocaleString()) + (hubspotStatus ? ' · ' + esc(hubspotStatus) : '') : hubspotStatus ? esc(hubspotStatus) : 'Not connected yet.'}</p>
@@ -4474,6 +4475,8 @@
         case 'show-more-notes':
           actionEl.parentElement.querySelectorAll('.more-note').forEach((li) => (li.hidden = false));
           return actionEl.remove();
+        case 'send-all-hubspot':
+          return sendAllToHubSpot();
         case 'toggle-hubspot-two-way': {
           const on = actionEl.checked;
           if (on && !confirm('Send new and edited companies, contacts and deals to HubSpot from now on?\n\nRecords you add or edit after this go to HubSpot (matched by domain and email, so nothing is doubled). When both sides changed the same field, the more recent edit wins.')) {
@@ -5231,10 +5234,11 @@
     return rec ? /\/contacts\/(\d+)\//.exec(rec.hubspotUrl)[1] : '';
   }
   // Two-way: send what changed here since the last sync, then file HubSpot's answer (IDs, values it kept).
-  async function pushHubSpot() {
+  // opts: { all, exclude } for "Send everything not yet in HubSpot"; `tally` collects counts across batches.
+  async function pushHubSpot(opts, tally) {
     const st = S.settings();
     if (!st.hubspotTwoWay) return '';
-    const push = L.planHubSpotPush({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals') }, { since: st.hubspotPushSince, skip: st.hubspotSkip, internalDomain: myEmailDomain() });
+    const push = L.planHubSpotPush({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals') }, Object.assign({ since: st.hubspotPushSince, skip: st.hubspotSkip, internalDomain: myEmailDomain() }, opts || {}));
     const n = push.companies.length + push.contacts.length + push.deals.length;
     if (!n) return '';
     const res = await fetch(st.hubspotBridgeUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: st.hubspotBridgeKey }, push)) });
@@ -5254,7 +5258,44 @@
     const sent = ['companies', 'contacts', 'deals'].map((col) => (data[col] || []).filter((r) => !r.error).length);
     const failed = ['companies', 'contacts', 'deals'].map((col) => (data[col] || []).filter((r) => r.error).map((r) => r.error))
       .reduce((a, b) => a.concat(b), []);
+    if (tally) {
+      sent.forEach((x, i) => (tally.sent[i] += x));
+      ['companies', 'contacts', 'deals'].forEach((col) => (data[col] || []).filter((r) => r.error).forEach((r) => tally.failed.push({ id: r.crmId, error: r.error })));
+    }
     return `; sent ${sent[0]} compan${sent[0] === 1 ? 'y' : 'ies'}, ${sent[1]} contact${sent[1] === 1 ? '' : 's'} and ${sent[2]} deal${sent[2] === 1 ? '' : 's'} to HubSpot` + (failed.length ? ` (${failed.length} not sent: ${failed[0]})` : '');
+  }
+  // One time: everything in the CRM that isn't in HubSpot yet, in batches of up to 100 of each kind.
+  async function sendAllToHubSpot() {
+    const st = S.settings();
+    if (!st.hubspotTwoWay || hubspotSyncing) return;
+    const all = L.planHubSpotPush({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals') }, { all: true, limit: Infinity, skip: st.hubspotSkip, internalDomain: myEmailDomain() });
+    const counts = [all.companies.length, all.contacts.length, all.deals.length];
+    if (!(counts[0] + counts[1] + counts[2])) return toast('Everything in the CRM is already in HubSpot.');
+    const what = `${counts[0]} compan${counts[0] === 1 ? 'y' : 'ies'}, ${counts[1]} contact${counts[1] === 1 ? '' : 's'} and ${counts[2]} deal${counts[2] === 1 ? '' : 's'}`;
+    if (!confirm(`Send ${what} that aren't in HubSpot yet?\n\nAnything HubSpot already has (same website domain or name, same email, same deal at the same company) is linked, not copied. Your own colleagues are never sent. This can take a few minutes.`)) return;
+    hubspotSyncing = true;
+    const tally = { sent: [0, 0, 0], failed: [] };
+    try {
+      for (let round = 0; round < 100; round++) {
+        const left = L.planHubSpotPush({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals') }, { all: true, limit: Infinity, skip: st.hubspotSkip, internalDomain: myEmailDomain(), exclude: tally.failed.map((f) => f.id) });
+        const remaining = left.companies.length + left.contacts.length + left.deals.length;
+        if (!remaining) break;
+        toast(`Sending to HubSpot… ${tally.sent[0] + tally.sent[1] + tally.sent[2]} done, ${remaining} to go`);
+        const before = tally.sent[0] + tally.sent[1] + tally.sent[2] + tally.failed.length;
+        await pushHubSpot({ all: true, exclude: tally.failed.map((f) => f.id) }, tally);
+        // Nothing moved this round: stop rather than loop.
+        if (tally.sent[0] + tally.sent[1] + tally.sent[2] + tally.failed.length === before) break;
+      }
+      const s = tally.sent;
+      hubspotStatus = `sent everything not yet in HubSpot: ${s[0]} compan${s[0] === 1 ? 'y' : 'ies'}, ${s[1]} contact${s[1] === 1 ? '' : 's'} and ${s[2]} deal${s[2] === 1 ? '' : 's'}` + (tally.failed.length ? `; ${tally.failed.length} not sent (${tally.failed[0].error})` : '');
+      toast('HubSpot ' + hubspotStatus + '.');
+    } catch (err) {
+      hubspotStatus = 'Sending everything stopped: ' + err.message + ` (${tally.sent[0] + tally.sent[1] + tally.sent[2]} sent before that; run it again to continue)`;
+      toast('HubSpot: ' + hubspotStatus);
+    } finally {
+      hubspotSyncing = false;
+      render();
+    }
   }
   function newRecordsNote(plan) {
     const c = plan.created || {};

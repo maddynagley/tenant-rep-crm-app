@@ -1788,3 +1788,23 @@ test('HubSpot two-way push: a new contact brings its company along; a contact mo
   assert.deepEqual(push.contacts.map((x) => [x.crmId, Boolean(x.associate), x.companyHubspotId]), [['p1', true, ''], ['hs-ct-9', true, '7']]);
   assert.deepEqual(push.contacts[1].props, {}, 'only the link changes');
 });
+
+test('HubSpot push "send everything": every record not in HubSpot yet, however old, minus refused ones', () => {
+  const data = {
+    companies: [
+      { id: 'c1', name: 'Acme', updatedAt: '2025-01-01T00:00:00Z' },
+      { id: 'c2', name: 'Birch', updatedAt: '2025-01-01T00:00:00Z' },
+      { id: 'hs-co-3', name: 'Cedar', updatedAt: '2025-01-01T00:00:00Z' },
+    ],
+    contacts: [{ id: 'p1', companyId: 'c1', firstName: 'Pat', email: 'pat@acme.test', updatedAt: '2025-01-01T00:00:00Z' }],
+    deals: [{ id: 'd1', companyId: 'hs-co-3', name: 'Cedar move', stage: 'LOI', updatedAt: '2025-01-01T00:00:00Z' }],
+  };
+  const since = Date.parse('2026-11-01T00:00:00Z');
+  assert.equal(L.planHubSpotPush(data, { since }).companies.length, 0, 'normally old records stay put');
+  const all = L.planHubSpotPush(data, { since, all: true });
+  assert.deepEqual(all.companies.map((x) => x.crmId), ['c1', 'c2'], 'linked records are not resent');
+  assert.deepEqual(all.contacts.map((x) => x.crmId), ['p1']);
+  assert.deepEqual(all.deals.map((x) => x.crmId), ['d1']);
+  assert.deepEqual(L.planHubSpotPush(data, { since, all: true, exclude: ['c2'] }).companies.map((x) => x.crmId), ['c1']);
+  assert.equal(L.planHubSpotPush(data, { since, all: true, limit: 1 }).companies.length, 1);
+});

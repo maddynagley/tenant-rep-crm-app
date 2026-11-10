@@ -1006,12 +1006,15 @@
   }
   // What the CRM sends HubSpot: linked records whose values moved off the agreed base, and records new to HubSpot
   // (created or edited since `since`, when sending was switched on). Companies come first so contacts and deals
-  // can be associated with them. opts: { since (ms), skip (hubspotSkip), limit }.
+  // can be associated with them. opts: { since (ms), skip (hubspotSkip), limit, all, exclude }.
+  //   all: also every record not in HubSpot yet, however old ("Send everything not yet in HubSpot").
+  //   exclude: CRM IDs to leave out (ones HubSpot refused earlier in the same run).
   function planHubSpotPush(data, opts) {
     opts = opts || {};
     const since = Number(opts.since) || 0;
     const limit = opts.limit || 100;
     const skip = new Set((opts.skip || []).map(String));
+    const exclude = new Set(opts.exclude || []);
     const companies = {};
     data.companies.forEach((c) => (companies[c.id] = c));
     const hsIdOf = (rec, prefix) => String(rec.hubspotId || (new RegExp('^hs-' + prefix + '-(\\d+)$').exec(rec.id) || [])[1] || '');
@@ -1019,14 +1022,14 @@
     const out = { companies: [], contacts: [], deals: [] };
     const plan = (col, prefix, list, extra) =>
       list.forEach((rec) => {
-        if (out[col].length >= limit) return;
+        if (out[col].length >= limit || exclude.has(rec.id)) return;
         const hubspotId = hsIdOf(rec, prefix);
         if (hubspotId && skip.has(prefix + '-' + hubspotId)) return;
         const props = toHubSpot(col, rec);
         const base = rec.hubspotSync && rec.hubspotSync.base;
         let send;
         if (!hubspotId) {
-          if (!recent(rec)) return;
+          if (!recent(rec) && !opts.all) return;
           send = props;
         } else if (base) {
           send = {};
@@ -1066,7 +1069,7 @@
     const sending = new Set(out.companies.map((x) => x.crmId));
     out.contacts.concat(out.deals).forEach((x) => {
       const co = companies[x.companyCrmId];
-      if (!co || x.companyHubspotId || sending.has(co.id) || !co.name) return;
+      if (!co || x.companyHubspotId || sending.has(co.id) || !co.name || exclude.has(co.id)) return;
       sending.add(co.id);
       out.companies.push({ crmId: co.id, hubspotId: '', props: toHubSpot('companies', co), base: null, updatedAt: co.updatedAt || '' });
     });
