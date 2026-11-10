@@ -2207,7 +2207,7 @@
                   .map(
                     (p) => `<tr><td><button class="star ${p.keyContact ? 'on' : ''}" data-action="toggle-key" data-id="${esc(p.id)}" title="${p.keyContact ? 'Main point of contact' : 'Make main point of contact'}">${p.keyContact ? '★' : '☆'}</button><strong>${esc(contactName(p))}</strong> ${p.role ? badge(p.role, p.role === 'Decision Maker' ? 'green' : 'gray') : ''} ${verificationBadge(p.verification)}<div class="sub">${esc(p.title)}</div>${p.notes ? `<div class="sub clamp" title="${esc(p.notes)}">${esc(p.notes)}</div>` : ''}</td>
                     <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}${p.mobile ? ' · ' + phoneLink(p.mobile, p.mobileDNC, '(m)') : ''}</div><div class="sub">${linkedinCell(p)}</div></td>
-                    <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Draft an email from a template">Email</button>` : ''}<button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button></td></tr>`
+                    <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Draft an email from a template">Email</button>` : ''}<button class="icon-btn" data-action="new" data-col="activities" data-company="${esc(id)}" data-contact="${esc(p.id)}" title="Log activity">Log</button><button class="icon-btn" data-action="edit" data-col="contacts" data-id="${esc(p.id)}" title="Edit">✎</button><button class="icon-btn" data-action="delete" data-col="contacts" data-id="${esc(p.id)}" title="Remove this contact" aria-label="Remove ${esc(contactName(p))}">✕</button></td></tr>`
                   )
                   .join('')}</tbody></table>`
               : emptyState('No contacts yet.', `<button class="btn" data-action="link-contact" data-company="${esc(id)}">+ Add a contact</button>`)
@@ -4287,10 +4287,13 @@
         case 'delete': {
           e.preventDefault();
           const rec = S.get(d.col, d.id);
-          const what = d.col === 'companies' ? `"${rec.name}" and all of its contacts, deals and activity` : 'this ' + LABELS[d.col].toLowerCase();
-          if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
-          const hs = d.col === 'companies' ? rec.hubspotId || (/^hs-co-(\d+)$/.exec(rec.id) || [])[1] : d.col === 'contacts' ? (/^hs-ct-(\d+)$/.exec(rec.id) || [])[1] : '';
-          if (hs) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat((d.col === 'companies' ? 'co-' : 'ct-') + hs) });
+          const what = d.col === 'companies' ? `"${rec.name}" and all of its contacts, deals and activity` : d.col === 'contacts' ? contactName(rec) : 'this ' + LABELS[d.col].toLowerCase();
+          const inHubSpot = ['companies', 'contacts', 'deals'].includes(d.col) && (rec.hubspotId || /^hs-/.test(rec.id)) ? ' It stays in HubSpot, and HubSpot syncs won\'t bring it back.' : '';
+          if (!confirm(`Delete ${what}?${inHubSpot} This cannot be undone.`)) return;
+          // Remembered so a HubSpot sync doesn't add it again.
+          const prefix = { companies: 'co', contacts: 'ct', deals: 'dl' }[d.col];
+          const hs = prefix ? rec.hubspotId || (new RegExp('^hs-' + prefix + '-(\\d+)$').exec(rec.id) || [])[1] : '';
+          if (hs) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat(prefix + '-' + hs) });
           S.remove(d.col, d.id);
           if (d.col === 'companies') location.hash = '#/companies';
           else if (d.col === 'deals') location.hash = '#/company/' + rec.companyId;
