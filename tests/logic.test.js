@@ -1823,3 +1823,10 @@ test('HubSpot push: a company sent for the first time takes its older contacts a
   assert.deepEqual(push.contacts.map((x) => x.crmId), ['p1']);
   assert.deepEqual(push.deals.map((x) => x.crmId), ['d1']);
 });
+
+test('deal contacts: the company\'s people until some are picked; removed ones drop off', () => {
+  const contacts = [{ id: 'p1', companyId: 'c1' }, { id: 'p2', companyId: 'c1' }, { id: 'p3', companyId: 'c2' }];
+  assert.deepEqual(L.dealContacts({ companyId: 'c1' }, contacts).map((p) => p.id), ['p1', 'p2']);
+  assert.deepEqual(L.dealContacts({ companyId: 'c1', contactIds: ['p2', 'gone'] }, contacts).map((p) => p.id), ['p2']);
+  assert.deepEqual(L.dealContacts({ companyId: 'c1', contactIds: [] }, contacts), []);
+});

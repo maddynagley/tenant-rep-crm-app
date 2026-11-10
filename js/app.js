@@ -428,6 +428,36 @@
   }
 
   // The contact to reach for a company: the given one if they work there, else the best one.
+  // Who's on a deal. ✕ takes someone off the deal only (they stay at the company); + Add puts a company contact on.
+  function dealContactsCard(d) {
+    const on = L.dealContacts(d, S.all('contacts'));
+    const off = S.all('contacts').filter((p) => p.companyId === d.companyId && !on.some((x) => x.id === p.id));
+    const add = off.length
+      ? `<select class="inline" data-action-change="deal-add-contact" data-id="${esc(d.id)}" aria-label="Add a contact to this deal"><option value="">+ Add from ${esc(companyName(d.companyId))}…</option>${off.map((p) => `<option value="${esc(p.id)}">${esc(contactName(p))}${p.title ? ' · ' + esc(p.title) : ''}</option>`).join('')}</select>`
+      : '';
+    return `<section class="card">
+      <h2>Contacts on this deal <span class="muted">${on.length || ''}</span><span class="more icon-row">${add}<button class="link" data-action="new-deal-contact" data-company="${esc(d.companyId)}" data-deal="${esc(d.id)}">+ New contact</button></span></h2>
+      ${
+        on.length
+          ? `<table class="tbl compact"><tbody>${on
+              .map(
+                (p) => `<tr><td><strong>${esc(contactName(p))}</strong> ${p.keyContact ? badge('Main contact', 'gray') : ''}<div class="sub">${esc(p.title)}</div></td>
+                <td>${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : '<span class="muted">No email</span>'}<div class="sub">${phoneLink(p.phone, p.phoneDNC)}</div></td>
+                <td class="right nowrap">${p.email ? `<button class="icon-btn" data-action="draft-email" data-company="${esc(d.companyId)}" data-contact="${esc(p.id)}" data-deal="${esc(d.id)}" title="Draft an email about this deal">Email</button>` : ''}<button class="icon-btn" data-action="deal-remove-contact" data-id="${esc(d.id)}" data-contact="${esc(p.id)}" title="Take ${esc(contactName(p))} off this deal (they stay at the company)" aria-label="Remove ${esc(contactName(p))} from this deal">✕</button></td></tr>`
+              )
+              .join('')}</tbody></table>
+        <p class="hint">Deal emails and Friday recaps go to these people. ✕ takes someone off this deal only; they stay at the company.</p>`
+          : `<p class="muted">No one on this deal yet. Add someone from ${esc(companyName(d.companyId))}.</p>`
+      }
+    </section>`;
+  }
+  // The best person to write to about a deal: a deal contact with an email, else the company's.
+  function dealReach(d) {
+    const rank = (c) => (c.keyContact ? 10 : 0) + (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0);
+    const own = myEmailDomain();
+    const on = L.dealContacts(d, S.all('contacts')).filter((p) => !L.isColleague(p, own));
+    return on.length || Array.isArray(d.contactIds) ? on.sort((a, b) => rank(b) - rank(a))[0] || null : reachContact(d.companyId, '');
+  }
   function reachContact(companyId, contactId) {
     const p = S.get('contacts', contactId);
     const own = myEmailDomain();
@@ -449,7 +479,10 @@
   // Envelope next to a company name: opens a recommended follow-up email, ready to copy or open in Outlook.
   function emailIcon(companyId, contactId, opts) {
     opts = opts || {};
-    const p = companyId && reachContact(companyId, contactId);
+    // About a deal: one of its people (the deal page and pipeline cards).
+    const deal = !contactId && opts.deal ? S.get('deals', opts.deal) : null;
+    const onDeal = deal && dealReach(deal);
+    const p = onDeal || (companyId && reachContact(companyId, contactId));
     const to = p && p.email ? p : S.all('contacts').find((x) => x.companyId === companyId && x.email && !L.isColleague(x, myEmailDomain()));
     if (!to) return '';
     return `<button class="mail-icon" data-action="draft-email" data-recommended="1" data-company="${esc(companyId)}" data-contact="${esc(to.id)}"${opts.deal ? ` data-deal="${esc(opts.deal)}"` : ''}${opts.reply ? ` data-reply="${esc(opts.reply)}"` : ''} title="Recommended follow-up email to ${esc(contactName(to))}" aria-label="Draft follow-up email"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/></svg></button>`;
@@ -1132,7 +1165,7 @@
             .filter((d) => L.recapDue(d, S.all('activities'), today) && (s.recapSkipped || {})[d.id] !== today)
             .sort((a, b) => L.dealProbability(b) - L.dealProbability(a))
             .map((d) => {
-              const p = reachContact(d.companyId, '');
+              const p = dealReach(d);
               const attrs = `data-deal="${esc(d.id)}" data-company="${esc(d.companyId)}" data-contact="${esc(p ? p.id : '')}"`;
               return `<li><div class="fu-body"><div><a href="#/deal/${esc(d.id)}"><strong>${esc(d.name)}</strong></a> ${badge(d.stage, 'blue')}</div>
                 <div class="sub">${esc(companyName(d.companyId))}${p ? ' · ' + esc(contactName(p)) : ''}${d.partnerBrokers ? ' · cc ' + esc(d.partnerBrokers) : ''}</div></div>
@@ -2563,6 +2596,7 @@
 
       ${dealTermsCard(d)}
       ${documentsCard(S.all('documents').filter((x) => x.dealId === id), { deal: id, company: d.companyId })}
+      ${dealContactsCard(d)}
 
       <section class="card">
         <h2>Market survey & tours <button class="link more" data-action="new" data-col="properties" data-deal="${esc(id)}">+ Add property</button></h2>
@@ -3208,9 +3242,12 @@
     opts = opts || {};
     const c = S.get('companies', companyId);
     if (!c) return;
-    const people = S.all('contacts').filter((p) => p.companyId === companyId && p.email);
+    // About a deal: its people first (anyone else at the company stays pickable after them).
+    const deal = S.get('deals', opts.dealId);
+    const onDeal = deal ? L.dealContacts(deal, S.all('contacts')).filter((p) => p.email) : [];
+    const people = onDeal.concat(S.all('contacts').filter((p) => p.companyId === companyId && p.email && !onDeal.includes(p)));
     const templates = S.all('templates').filter((t) => t.active !== false);
-    const contact = S.get('contacts', contactId) || people.slice().sort((a, b) => !!b.keyContact - !!a.keyContact || (b.role === 'Decision Maker') - (a.role === 'Decision Maker'))[0] || null;
+    const contact = S.get('contacts', contactId) || (deal && dealReach(deal)) || people.slice().sort((a, b) => !!b.keyContact - !!a.keyContact || (b.role === 'Decision Maker') - (a.role === 'Decision Maker'))[0] || null;
     const suggested = (step && templates.find((t) => t.step === step)) || L.suggestTemplate(templates, c, { today: L.todayISO(), lastTouch: lastTouchMap()[companyId] });
     const dlg = $('#modal');
     const reply = S.get('activities', replyId);
@@ -3562,6 +3599,7 @@
     return rec;
   }
 
+  let pendingDealContact = null;
   function saveForm(form) {
     const col = form.dataset.col;
     const rec = readForm(form, col);
@@ -3574,6 +3612,11 @@
     if (col === 'deals' && rec.stage === 'Closed Won' && (!form.dataset.id || S.get('deals', form.dataset.id).stage !== 'Closed Won')) setTimeout(celebrate, 200);
     const wasSecured = col === 'companies' && form.dataset.id && L.leadStage(S.get('companies', form.dataset.id)) === 'Secured Lead';
     const saved = S.upsert(col, rec);
+    if (col === 'contacts' && !form.dataset.id && pendingDealContact && pendingDealContact.company === saved.companyId) {
+      const deal = S.get('deals', pendingDealContact.deal);
+      if (deal && Array.isArray(deal.contactIds)) S.upsert('deals', { id: deal.id, contactIds: deal.contactIds.concat(saved.id) });
+    }
+    if (col === 'contacts') pendingDealContact = null;
     if (col === 'activities') runWorkflows();
     if (col === 'companies' && !wasSecured && L.leadStage(saved) === 'Secured Lead' && createDealForLead(saved.id)) toast('Secured! Created a deal in Intro Call.');
     if (col === 'deals' && saved.inPortfolioSheet && S.settings().sheetSyncUrl) setTimeout(() => syncSheet(false), 0);
@@ -4478,6 +4521,16 @@
         case 'show-more-notes':
           actionEl.parentElement.querySelectorAll('.more-note').forEach((li) => (li.hidden = false));
           return actionEl.remove();
+        case 'new-deal-contact':
+          // Saved from here, the new person joins this deal too.
+          pendingDealContact = { deal: d.deal, company: d.company };
+          return openForm('contacts', null, { company: d.company });
+        case 'deal-remove-contact': {
+          const deal = S.get('deals', d.id);
+          const keep = L.dealContacts(deal, S.all('contacts')).map((p) => p.id).filter((x) => x !== d.contact);
+          S.upsert('deals', { id: deal.id, contactIds: keep });
+          return toast(`${contactName(S.get('contacts', d.contact))} is off this deal. They're still at ${companyName(deal.companyId)}.`);
+        }
         case 'send-all-hubspot':
           return sendAllToHubSpot();
         case 'toggle-hubspot-two-way': {
@@ -4781,6 +4834,12 @@
   document.addEventListener('change', (e) => {
     const d = e.target.dataset || {};
     if (d.inlineCol) saveInline(d.inlineCol, d.inlineId, d.inlineField, e.target.value);
+    if (d.actionChange === 'deal-add-contact' && e.target.value) {
+      const deal = S.get('deals', d.id);
+      const ids = L.dealContacts(deal, S.all('contacts')).map((p) => p.id);
+      S.upsert('deals', { id: deal.id, contactIds: ids.concat(e.target.value) });
+      toast(`${contactName(S.get('contacts', e.target.value))} is on this deal.`);
+    }
     // A quoted rate is remembered for its building; picking a building with a saved rate fills it in.
     if (['Rate', 'RateBasis', 'OpEx', 'CompBuilding'].includes(d.fillIn)) onRateFillIn(d.fillIn);
     if (e.target.name === 'basis' && e.target.closest('#quote-form')) $('#quote-opex').hidden = e.target.value !== 'NNN + OpEx';

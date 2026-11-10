@@ -2630,6 +2630,13 @@
     return Boolean(p && domain && String(p.email || '').toLowerCase().endsWith('@' + String(domain).toLowerCase()));
   }
 
+  // The people on a deal: the ones picked for it (deal.contactIds), else everyone at the client company.
+  function dealContacts(deal, contacts) {
+    if (!deal) return [];
+    if (Array.isArray(deal.contactIds)) return deal.contactIds.map((id) => contacts.find((p) => p.id === id)).filter(Boolean);
+    return contacts.filter((p) => p.companyId === deal.companyId);
+  }
+
   function contactRank(c) {
     const callable = (c.phone && !c.phoneDNC) || (c.mobile && !c.mobileDNC);
     return (c.keyContact ? 10 : 0) + (c.role === 'Decision Maker' ? 4 : 0) + (c.email ? 2 : 0) + (callable ? 2 : 0) + (c.verification === 'Web-verified' ? 1 : 0);
@@ -4376,6 +4383,7 @@
     matchSubmarket,
     normalizeLinkedIn,
     planNamedFixes,
+    dealContacts,
     toHubSpot,
     fromHubSpot,
     mergeFromHubSpot,
