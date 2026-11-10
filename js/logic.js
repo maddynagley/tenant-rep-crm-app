@@ -917,7 +917,8 @@
   const HS_STAGE_OUT = { 'Intro Call': 'Surveys/Market Research', 'Market Survey': 'Surveys/Market Research', Touring: 'Touring', RFP: 'Proposal/LOI', LOI: 'Proposal/LOI', 'Lease Negotiation': 'Lease Negotiation', 'Closed Won': 'Closed Won', 'Closed Lost': 'Closed Lost' };
   const HS_STAGE_IN = { 'surveys/market research': 'Market Survey', touring: 'Touring', 'proposal/loi': 'LOI', 'lease negotiation': 'Lease Negotiation', 'lease execution': 'Lease Negotiation', 'closed won': 'Closed Won', 'closed lost': 'Closed Lost' };
   const HS_PROPS = {
-    companies: ['name', 'domain', 'address', 'city', 'state', 'submarket', 'square_footage', 'numberofemployees', 'lease_expiration'],
+    // lead_stage: the stage of the company's HubSpot lead (the bridge reads and writes the lead record).
+    companies: ['name', 'domain', 'address', 'city', 'state', 'submarket', 'square_footage', 'numberofemployees', 'lease_expiration', 'lead_stage'],
     contacts: ['firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
     deals: ['dealname', 'dealstage', 'closedate'],
   };
@@ -939,7 +940,7 @@
     const out = {};
     if (col === 'companies') {
       const [city, ...rest] = String(rec.city || '').split(',');
-      Object.assign(out, { name: rec.name, domain: rec.website, address: rec.address, city: city, state: rest.join(',').trim(), submarket: rec.submarket, square_footage: rec.sfOccupied, numberofemployees: rec.headcount, lease_expiration: rec.leaseExpiration });
+      Object.assign(out, { name: rec.name, domain: rec.website, address: rec.address, city: city, state: rest.join(',').trim(), submarket: rec.submarket, square_footage: rec.sfOccupied, numberofemployees: rec.headcount, lease_expiration: rec.leaseExpiration, lead_stage: leadStage(rec) });
     } else if (col === 'contacts') {
       Object.assign(out, { firstname: rec.firstName, lastname: rec.lastName, email: rec.email, jobtitle: rec.title, phone: rec.phone, mobilephone: rec.mobile, hs_linkedin_url: rec.linkedin });
     } else if (col === 'deals') {
@@ -966,6 +967,7 @@
       if (has('square_footage')) out.sfOccupied = v('square_footage') === '' ? '' : Number(v('square_footage'));
       if (has('numberofemployees')) out.headcount = v('numberofemployees') === '' ? '' : Number(v('numberofemployees'));
       if (has('lease_expiration')) out.leaseExpiration = v('lease_expiration');
+      if (has('lead_stage') && LEAD_STAGES.includes(v('lead_stage'))) out.leadStage = v('lead_stage');
     } else if (col === 'contacts') {
       const map = { firstname: 'firstName', lastname: 'lastName', email: 'email', jobtitle: 'title', phone: 'phone', mobilephone: 'mobile', hs_linkedin_url: 'linkedin' };
       Object.keys(map).forEach((k) => has(k) && (out[map[k]] = v(k)));
@@ -991,19 +993,23 @@
       if (!Object.prototype.hasOwnProperty.call(hsProps, k)) return;
       const hs = hsNorm(k, hsProps[k]);
       if (hs === crm[k]) return (nextBase[k] = hs);
-      const hsChanged = !base || hs !== (base[k] || '');
-      const crmChanged = !base || crm[k] !== (base[k] || '');
+      // First comparison of this field (never agreed on, or a field added to the sync later).
+      const first = !base || !Object.prototype.hasOwnProperty.call(base, k);
+      const hsChanged = first || hs !== (base[k] || '');
+      const crmChanged = first || crm[k] !== (base[k] || '');
       // First comparison: a blank on either side never wipes the other side's value; it gets filled in.
-      if (!hs && !base) return;
-      if (!crm[k] && !base) {
+      if (!hs && first) return;
+      if (!crm[k] && first) {
         take[k] = hsProps[k];
         nextBase[k] = hs;
         return;
       }
+      // Lead stages are worked in the CRM: on the first comparison the CRM's stage wins (and is sent).
+      if (k === 'lead_stage' && first) return (nextBase[k] = hs);
       if (hsChanged && (!crmChanged || hsTime >= crmTime)) {
         take[k] = hsProps[k];
         nextBase[k] = hs;
-      } else if (!base) nextBase[k] = hs;
+      } else if (first) nextBase[k] = hs;
     });
     const patch = fromHubSpot(col, take, rec, opts);
     Object.keys(patch).forEach((k) => String(patch[k]) === String(rec[k] === undefined ? '' : rec[k]) && delete patch[k]);
@@ -1230,7 +1236,10 @@
       const m = mergeFromHubSpot(col, current, props, modified, data);
       const link = companyHs !== undefined && !(current.hubspotSync && current.hubspotSync.company) ? { company: companyHs } : {};
       recordPatches[col].push(Object.assign({ id: current.id }, m.patch, { hubspotSync: Object.assign({}, current.hubspotSync, link, { base: m.base, at: new Date().toISOString() }) }));
-      Object.assign(current, m.patch);
+      // Later steps see the updated record; the CRM's own copy is only changed when the patches are saved.
+      const updated = Object.assign({}, current, m.patch);
+      if (col === 'companies' && companies[current.id]) companies[current.id] = updated;
+      if (col === 'contacts' && contactsById[current.id]) contactsById[current.id] = updated;
       if (Object.keys(m.patch).length) updatedFromHubSpot++;
     };
     (payload.companies || []).forEach((rec) => {
@@ -1262,7 +1271,7 @@
           if (dup === into && String(companies[into].hubspotId || (/^hs-co-(\d+)$/.exec(into) || [])[1]) === id) {
             const relink = { id: into, hubspotId: String(rec.id), hubspotUrl: hsUrl('0-2', rec.id), mergedHubspotIds: (companies[into].mergedHubspotIds || []).concat(id) };
             recordPatches.companies.push(relink);
-            Object.assign(companies[into], relink);
+            companies[into] = Object.assign({}, companies[into], relink);
           }
           byHubspotId[id] = into;
         });

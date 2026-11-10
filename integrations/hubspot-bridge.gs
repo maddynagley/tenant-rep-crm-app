@@ -13,7 +13,8 @@
  * Setup (once):
  *   1. In HubSpot create a private app with read scopes (contacts, companies, deals, sales-email-read)
  *      and, for two-way sync, write scopes (crm.objects.companies.write, crm.objects.contacts.write,
- *      crm.objects.deals.write). Copy its access token.
+ *      crm.objects.deals.write, plus crm.objects.leads.read and crm.objects.leads.write so lead stages stay
+ *      in step). Copy its access token.
  *      (HubSpot now lists private apps under Development → Legacy Apps.)
  *      Updating an existing bridge: add the write scopes to the private app (the token stays the same),
  *      paste this file over the old one, then Deploy → Manage deployments → edit → Version: New version.
@@ -80,6 +81,14 @@ function doGet(e) {
       out.more[type] = res.more;
       out.next[type] = res.next;
     });
+    // Each company's lead stage, and companies whose lead changed (a lead edit doesn't touch the company).
+    if (out.companies) {
+      try {
+        addLeadStages_(out.companies, since);
+      } catch (err) {
+        out.leadsError = leadsError_(err);
+      }
+    }
     return json_(out);
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message ? err.message : err) });
@@ -92,10 +101,16 @@ function doGet(e) {
 // props are HubSpot properties as the CRM has them; base is what both sides last agreed on (null if never).
 // Answers each item with { crmId, hubspotId, props (what HubSpot now holds for them), kept, companyHubspotId, error }.
 const PUSH_PROPS = {
-  companies: ['name', 'domain', 'address', 'city', 'state', 'submarket', 'square_footage', 'numberofemployees', 'lease_expiration'],
+  companies: ['name', 'domain', 'address', 'city', 'state', 'submarket', 'square_footage', 'numberofemployees', 'lease_expiration', 'lead_stage'],
   contacts: ['firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
   deals: ['dealname', 'dealstage', 'closedate'],
 };
+// lead_stage isn't a company property: it's the stage of the company's lead record (Leads object).
+const LEAD_PROP = 'lead_stage';
+const LEAD_TO_COMPANY = 580; // HubSpot's "Lead with Primary Company" association
+function realProps_(type) {
+  return PUSH_PROPS[type].filter(function (p) { return p !== LEAD_PROP; });
+}
 
 function doPost(e) {
   let body;
@@ -144,13 +159,13 @@ function restoreBlankedFields() {
     const updates = [];
     for (let k = 0; k < changed.length; k += 50) {
       const res = hubspot_('post', '/crm/v3/objects/' + type + '/batch/read', {
-        properties: PUSH_PROPS[type],
-        propertiesWithHistory: PUSH_PROPS[type],
+        properties: realProps_(type),
+        propertiesWithHistory: realProps_(type),
         inputs: changed.slice(k, k + 50).map(function (id) { return { id: id }; }),
       });
       (res.results || []).forEach(function (r) {
         const fix = {};
-        PUSH_PROPS[type].forEach(function (prop) {
+        realProps_(type).forEach(function (prop) {
           const history = ((r.propertiesWithHistory || {})[prop] || []).slice().sort(function (a, b) { return new Date(b.timestamp) - new Date(a.timestamp); });
           const latest = history[0];
           if (!latest || String(latest.value || '') !== '' || new Date(latest.timestamp).getTime() < since) return;
@@ -285,6 +300,7 @@ function pushType_(type, items, companyIds) {
   const current = readCurrent_(type, linked);
   const updates = [];
   const creates = [];
+  const leadWrites = [];
   items.forEach(function (it, i) {
     const r = results[i];
     const props = it.props || {};
@@ -300,14 +316,19 @@ function pushType_(type, items, companyIds) {
       Object.keys(props).forEach(function (k) {
         if (PUSH_PROPS[type].indexOf(k) < 0) return;
         const mine = norm_(k, props[k]);
+        // A lead stage is only ever set, never cleared (a company that stops being a lead keeps its HubSpot lead).
+        if (k === LEAD_PROP && !mine) return;
+        if (k === LEAD_PROP && current._leadsError) return (r.leadError = current._leadsError);
         const theirs = norm_(k, type === 'deals' && k === 'dealstage' ? now.stageLabel : now.properties[k]);
         if (mine === theirs) return (r.props[k] = theirs);
-        const base = it.base ? norm_(k, it.base[k]) : null;
+        const base = it.base && Object.prototype.hasOwnProperty.call(it.base, k) ? norm_(k, it.base[k]) : null;
         const hsChanged = base === null ? Boolean(theirs) : theirs !== base;
         // HubSpot changed this field since the last agreement and more recently than the CRM's edit: it stays.
-        if (hsChanged && hsTime > crmTime) return (r.kept[k] = type === 'deals' && k === 'dealstage' ? now.stageLabel : now.properties[k]);
+        // (Except a lead stage never agreed on: lead stages are worked in the CRM, so the CRM's goes.)
+        if (hsChanged && hsTime > crmTime && !(k === LEAD_PROP && base === null)) return (r.kept[k] = type === 'deals' && k === 'dealstage' ? now.stageLabel : now.properties[k]);
         // Never blank a HubSpot value on a first link.
         if (!mine && base === null) return (r.kept[k] = now.properties[k]);
+        if (k === LEAD_PROP) return leadWrites.push({ i: i, stage: mine, leadId: now.lead && now.lead.id, name: props.name || now.properties.name });
         send[k] = mine;
         r.props[k] = mine;
       });
@@ -315,6 +336,7 @@ function pushType_(type, items, companyIds) {
     } else {
       Object.keys(props).forEach(function (k) {
         const v = norm_(k, props[k]);
+        if (k === LEAD_PROP) return v && leadWrites.push({ i: i, stage: v, name: props.name });
         if (PUSH_PROPS[type].indexOf(k) >= 0 && v) {
           send[k] = v;
           r.props[k] = v;
@@ -331,6 +353,7 @@ function pushType_(type, items, companyIds) {
   });
   batchWrite_(type, 'update', updates, results);
   batchWrite_(type, 'create', creates, results);
+  if (leadWrites.length) writeLeads_(leadWrites, results);
   // 3. Link new (or moved) contacts and deals to their company.
   if (type !== 'companies') {
     const links = [];
@@ -349,6 +372,114 @@ function pushType_(type, items, companyIds) {
   }
   if (type === 'companies') results.forEach(function (r) { if (r.hubspotId) companyIds[r.crmId] = r.hubspotId; });
   return results;
+}
+
+// ---------- leads (a company's lead record carries its lead stage) ----------
+function leadsError_(err) {
+  const m = String(err && err.message ? err.message : err);
+  return /40[13]/.test(m) ? 'Lead stages need the leads scopes (crm.objects.leads.read and .write) on the HubSpot private app' : m;
+}
+
+// Lead pipeline stages: name (lower case) → { id, pipeline }, ID → name, and the pipeline for new leads.
+function leadStages_() {
+  const res = hubspot_('get', '/crm/v3/pipelines/leads');
+  const out = { byLabel: {}, byId: {}, pipeline: '' };
+  (res.results || []).forEach(function (pl, n) {
+    if (n === 0) out.pipeline = pl.id;
+    (pl.stages || []).forEach(function (st) {
+      out.byId[st.id] = st.label;
+      if (!out.byLabel[String(st.label).toLowerCase()]) out.byLabel[String(st.label).toLowerCase()] = { id: st.id, pipeline: pl.id };
+    });
+  });
+  return out;
+}
+
+// Company ID → its lead { id, label, modified } (the most recently changed one when a merge left several).
+function leadsFor_(companyIds) {
+  const stages = leadStages_();
+  const companies = companyIds.map(function (id) { return { id: String(id) }; });
+  attachAssociations_('companies', companies, 'leads');
+  const leadIds = [];
+  companies.forEach(function (c) { (c.leads || []).forEach(function (id) { if (leadIds.indexOf(id) < 0) leadIds.push(id); }); });
+  const leads = {};
+  for (let k = 0; k < leadIds.length; k += 100) {
+    const res = hubspot_('post', '/crm/v3/objects/leads/batch/read', {
+      properties: ['hs_pipeline_stage', 'hs_lastmodifieddate'],
+      inputs: leadIds.slice(k, k + 100).map(function (id) { return { id: id }; }),
+    });
+    (res.results || []).forEach(function (r) { leads[String(r.id)] = r.properties || {}; });
+  }
+  const out = {};
+  companies.forEach(function (c) {
+    (c.leads || []).forEach(function (id) {
+      const l = leads[id];
+      if (!l) return;
+      if (!out[c.id] || new Date(l.hs_lastmodifieddate) > new Date(out[c.id].modified)) out[c.id] = { id: id, label: stages.byId[l.hs_pipeline_stage] || '', modified: l.hs_lastmodifieddate };
+    });
+  });
+  return out;
+}
+
+// Pulled companies get lead_stage; companies whose lead changed since `since` are added to the list.
+function addLeadStages_(companies, since) {
+  const byId = {};
+  companies.forEach(function (c) { byId[String(c.id)] = c; });
+  const changedLeads = [];
+  let after;
+  do {
+    const body = { filterGroups: [{ filters: [{ propertyName: 'hs_lastmodifieddate', operator: 'GTE', value: String(since) }] }], properties: ['hs_lastmodifieddate'], limit: 100 };
+    if (after) body.after = after;
+    const page = hubspot_('post', '/crm/v3/objects/leads/search', body);
+    (page.results || []).forEach(function (r) { changedLeads.push({ id: String(r.id) }); });
+    after = page.paging && page.paging.next && page.paging.next.after;
+  } while (after && changedLeads.length < MAX_PER_TYPE);
+  attachAssociations_('leads', changedLeads, 'companies');
+  const extra = [];
+  changedLeads.forEach(function (l) { (l.companies || []).forEach(function (id) { if (!byId[id] && extra.indexOf(id) < 0) extra.push(id); }); });
+  for (let k = 0; k < extra.length; k += 100) {
+    const res = hubspot_('post', '/crm/v3/objects/companies/batch/read', { properties: TYPES.companies, inputs: extra.slice(k, k + 100).map(function (id) { return { id: id }; }) });
+    (res.results || []).forEach(function (r) {
+      const c = { id: String(r.id), properties: r.properties || {}, companies: [] };
+      companies.push(c);
+      byId[c.id] = c;
+    });
+  }
+  const leads = leadsFor_(Object.keys(byId));
+  Object.keys(leads).forEach(function (id) {
+    const p = byId[id].properties;
+    p.lead_stage = leads[id].label;
+    // The company counts as changed when its lead did.
+    if (new Date(leads[id].modified) > new Date(p.hs_lastmodifieddate || 0)) p.hs_lastmodifieddate = leads[id].modified;
+  });
+}
+
+// Lead stage changes from the CRM: update the company's lead, or create one linked to the company.
+function writeLeads_(rows, results) {
+  let stages;
+  try {
+    stages = leadStages_();
+  } catch (err) {
+    rows.forEach(function (row) { results[row.i].leadError = leadsError_(err); });
+    return;
+  }
+  rows.forEach(function (row) {
+    const r = results[row.i];
+    const st = stages.byLabel[String(row.stage).toLowerCase()];
+    if (r.error || !r.hubspotId || !st) return;
+    try {
+      if (row.leadId) {
+        hubspot_('patch', '/crm/v3/objects/leads/' + row.leadId, { properties: { hs_pipeline_stage: st.id } });
+      } else {
+        hubspot_('post', '/crm/v3/objects/leads', {
+          properties: { hs_lead_name: row.name || 'Lead', hs_pipeline: st.pipeline, hs_pipeline_stage: st.id },
+          associations: [{ to: { id: r.hubspotId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: LEAD_TO_COMPANY }] }],
+        });
+      }
+      r.props[LEAD_PROP] = row.stage;
+    } catch (err) {
+      r.leadError = leadsError_(err);
+    }
+  });
 }
 
 // HubSpot property values to write: deal stages by name → this portal's stage ID.
@@ -414,13 +545,27 @@ function readCurrent_(type, ids) {
   const labels = type === 'deals' ? stageLabels_() : {};
   for (let k = 0; k < ids.length; k += 100) {
     const res = hubspot_('post', '/crm/v3/objects/' + type + '/batch/read', {
-      properties: PUSH_PROPS[type].concat([modified]),
+      properties: realProps_(type).concat([modified]),
       inputs: ids.slice(k, k + 100).map(function (id) { return { id: id }; }),
     });
     (res.results || []).forEach(function (r) {
       const p = r.properties || {};
       out[String(r.id)] = { properties: p, modified: p[modified], stageLabel: labels[p.dealstage] || '' };
     });
+  }
+  if (type === 'companies' && ids.length) {
+    try {
+      const leads = leadsFor_(ids);
+      Object.keys(out).forEach(function (id) {
+        const lead = leads[id];
+        if (!lead) return;
+        out[id].lead = lead;
+        out[id].properties.lead_stage = lead.label;
+        if (new Date(lead.modified) > new Date(out[id].modified || 0)) out[id].modified = lead.modified;
+      });
+    } catch (err) {
+      out._leadsError = leadsError_(err);
+    }
   }
   return out;
 }

@@ -5277,11 +5277,14 @@
       plan.activities.forEach((a) => S.upsert('activities', a, { silent: true, touch: false }));
       applyHubSpotRecords(plan);
       const added = S.all('activities').length - before;
+      const leadsNote = data.leadsError && S.settings().hubspotTwoWay ? '. Lead stages: ' + data.leadsError : '';
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
-      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '') + leadsNote;
       if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       hubspotStatus += await pushHubSpot();
+      // The missing-scopes note once is enough.
+      if (leadsNote) hubspotStatus = hubspotStatus.replace(/\. Lead stages not sent: .*$/, '');
       hubspotStatus += await archiveHubSpot(false);
       // The settings card redrew when the pull was saved; show the sending part too.
       if (location.hash.startsWith('#/data')) render();
@@ -5299,7 +5302,13 @@
     return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain(), submarketMap: S.settings().submarketMap, twoWay: Boolean(S.settings().hubspotTwoWay) };
   }
   function applyHubSpotRecords(plan) {
-    plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
+    plan.companies.forEach((c) => {
+      const existing = S.get('companies', c.id);
+      const was = existing ? L.leadStage(existing) : '';
+      S.upsert('companies', c, { silent: true, touch: false });
+      // A lead secured in HubSpot goes to the Pipeline here, as it does when secured in the CRM.
+      if (c.leadStage === 'Secured Lead' && existing && was !== 'Secured Lead') createDealForLead(c.id);
+    });
     (plan.contacts || []).forEach((c) => S.upsert('contacts', c, { silent: true, touch: false }));
     (plan.deals || []).forEach((d) => S.upsert('deals', d, { silent: true, touch: false }));
     // Companies merged in HubSpot are merged here too.
@@ -5339,7 +5348,8 @@
       sent.forEach((x, i) => (tally.sent[i] += x));
       ['companies', 'contacts', 'deals'].forEach((col) => (data[col] || []).filter((r) => r.error).forEach((r) => tally.failed.push({ id: r.crmId, error: r.error })));
     }
-    return `; sent ${sent[0]} compan${sent[0] === 1 ? 'y' : 'ies'}, ${sent[1]} contact${sent[1] === 1 ? '' : 's'} and ${sent[2]} deal${sent[2] === 1 ? '' : 's'} to HubSpot` + (failed.length ? ` (${failed.length} not sent: ${failed[0]})` : '');
+    const leadError = (data.companies || []).map((r) => r.leadError).find(Boolean);
+    return `; sent ${sent[0]} compan${sent[0] === 1 ? 'y' : 'ies'}, ${sent[1]} contact${sent[1] === 1 ? '' : 's'} and ${sent[2]} deal${sent[2] === 1 ? '' : 's'} to HubSpot` + (failed.length ? ` (${failed.length} not sent: ${failed[0]})` : '') + (leadError ? `. Lead stages not sent: ${leadError}` : '');
   }
   // Records deleted here that Maddy chose to delete in HubSpot too. Kept in a queue until HubSpot confirms,
   // so one sent while offline goes on the next sync.

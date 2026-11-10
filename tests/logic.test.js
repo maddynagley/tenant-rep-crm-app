@@ -1883,3 +1883,33 @@ test('HubSpot merges: a CRM company linked to a merged-away HubSpot ID is re-lin
   const linked = Object.assign({}, data.companies[0], acme, { updatedAt: '2026-11-10T00:00:00Z', hubspotSync: { base: { name: 'Acme', domain: 'acme.test' } }, submarket: 'Uptown' });
   assert.equal(L.planHubSpotPush({ companies: [linked], contacts: [], deals: [] }, {}).companies[0].hubspotId, '555');
 });
+
+test('HubSpot lead stages: the CRM stage wins the first comparison, then the newer edit wins', () => {
+  const co = { id: 'hs-co-7', name: 'Acme', status: 'Contacted', leadStage: 'Engaged', updatedAt: '2026-11-01T00:00:00Z' };
+  assert.equal(L.toHubSpot('companies', co).lead_stage, 'Engaged');
+  assert.equal(L.toHubSpot('companies', Object.assign({}, co, { relationship: 'Landlord' })).lead_stage, '', 'only leads have a lead stage');
+  assert.deepEqual(L.fromHubSpot('companies', { lead_stage: 'Follow Up' }, co), { leadStage: 'Follow Up' });
+  assert.deepEqual(L.fromHubSpot('companies', { lead_stage: 'Mystery' }, co), {});
+  // HubSpot's workflow made a lead at New today; the CRM has Engaged from last week: the CRM wins and is sent.
+  const base = L.toHubSpot('companies', co);
+  delete base.lead_stage; // linked before lead stages were synced
+  const linked = Object.assign({}, co, { hubspotSync: { base } });
+  let m = L.mergeFromHubSpot('companies', linked, Object.assign({}, base, { lead_stage: 'New' }), '2026-11-10T20:00:00Z');
+  assert.deepEqual(m.patch, {});
+  assert.equal(m.base.lead_stage, 'New');
+  const push = L.planHubSpotPush({ companies: [Object.assign({}, linked, { hubspotSync: { base: m.base } })], contacts: [], deals: [] }, {});
+  assert.deepEqual(push.companies[0].props, { lead_stage: 'Engaged' });
+  // Agreed on Engaged; then moved to Follow Up in HubSpot: it comes in.
+  const agreed = Object.assign({}, linked, { hubspotSync: { base: Object.assign({}, base, { lead_stage: 'Engaged' }) } });
+  m = L.mergeFromHubSpot('companies', agreed, Object.assign({}, base, { lead_stage: 'Follow Up' }), '2026-11-10T21:00:00Z');
+  assert.deepEqual(m.patch, { leadStage: 'Follow Up' });
+});
+
+test('HubSpot sync planning never changes the CRM records it is given', () => {
+  const co = { id: 'hs-co-7', name: 'Acme', status: 'Contacted', leadStage: 'Engaged', updatedAt: '2026-11-01T00:00:00Z', hubspotSync: { base: { name: 'Acme', lead_stage: 'Engaged' } } };
+  const data = { companies: [co], contacts: [], deals: [], activities: [], twoWay: true };
+  const plan = L.planHubSpotSync({ companies: [{ id: '7', properties: { name: 'Acme', lead_stage: 'Secured Lead', hs_lastmodifieddate: '2026-11-10T00:00:00Z', hs_merged_object_ids: '7' } }] }, data);
+  assert.ok(plan.companies.some((c) => c.leadStage === 'Secured Lead'));
+  assert.equal(co.leadStage, 'Engaged');
+  assert.equal(co.hubspotId, undefined);
+});
