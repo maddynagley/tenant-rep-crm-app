@@ -1862,3 +1862,24 @@ test('HubSpot merges: a CRM copy of a company merged away in HubSpot folds into 
   assert.deepEqual(m.company.mergedHubspotIds, ['900'], 'the merged-away HubSpot ID is remembered');
   assert.equal(m.company.hubspotId, undefined);
 });
+
+test('HubSpot merges: a CRM company linked to a merged-away HubSpot ID is re-linked to the new one', () => {
+  const data = { companies: [{ id: 'hs-co-100', name: 'Acme', website: 'https://acme.test' }, { id: 'c2', name: 'Birch', hubspotId: '200', website: 'https://birch.test' }], contacts: [], deals: [], activities: [] };
+  const plan = L.planHubSpotSync(
+    {
+      companies: [
+        { id: '555', properties: { name: 'Acme', domain: 'acme.test', hs_merged_object_ids: '100;900' } },
+        { id: '666', properties: { name: 'Birch', domain: 'birch.test', hs_merged_object_ids: '200' } },
+      ],
+    },
+    data
+  );
+  const acme = plan.companies.find((c) => c.id === 'hs-co-100' && c.hubspotId);
+  assert.equal(acme.hubspotId, '555');
+  assert.deepEqual(acme.mergedHubspotIds, ['100']);
+  assert.equal(plan.companies.find((c) => c.id === 'c2' && c.hubspotId).hubspotId, '666');
+  assert.deepEqual(plan.merges, []);
+  // The push now uses the new ID.
+  const linked = Object.assign({}, data.companies[0], acme, { updatedAt: '2026-11-10T00:00:00Z', hubspotSync: { base: { name: 'Acme', domain: 'acme.test' } }, submarket: 'Uptown' });
+  assert.equal(L.planHubSpotPush({ companies: [linked], contacts: [], deals: [] }, {}).companies[0].hubspotId, '555');
+});

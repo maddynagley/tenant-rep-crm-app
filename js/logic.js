@@ -1253,10 +1253,17 @@
       const cid = companies['hs-co-' + rec.id] ? 'hs-co-' + rec.id : byHubspotId[String(rec.id)] || byWebsite[domainOf(website)] || byName[nameKey(p.name)];
       // Companies merged in HubSpot: a CRM copy of a merged-away one folds into this one.
       const mergedAway = String(p.hs_merged_object_ids || '').split(/[;,\s]+/).filter(Boolean);
+      // A HubSpot merge gives the kept company a new ID: a CRM company linked to one of the merged IDs is
+      // re-linked to it, and other CRM copies fold in.
       const foldIn = (into) =>
         mergedAway.forEach((id) => {
           const dup = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[id];
           if (dup && dup !== into && companies[dup] && !merges.some((m) => m.from === dup)) merges.push({ from: dup, to: into });
+          if (dup === into && String(companies[into].hubspotId || (/^hs-co-(\d+)$/.exec(into) || [])[1]) === id) {
+            const relink = { id: into, hubspotId: String(rec.id), hubspotUrl: hsUrl('0-2', rec.id), mergedHubspotIds: (companies[into].mergedHubspotIds || []).concat(id) };
+            recordPatches.companies.push(relink);
+            Object.assign(companies[into], relink);
+          }
           byHubspotId[id] = into;
         });
       if (cid && companies[cid]) {
