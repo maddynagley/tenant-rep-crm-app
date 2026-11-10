@@ -2160,8 +2160,9 @@
       ['Industry', c.industry],
       ['Address', [c.address, c.floor].filter(Boolean).join(', ')],
       ['Building', c.building],
+      // Always shown, so it can be filled in right here.
+      ['RSF', editCell('companies', id, 'sfOccupied', 'number', c.sfOccupied, c.sfOccupied ? L.fmtNumber(c.sfOccupied) + ' RSF' : ''), true],
       ['Market / submarket', [c.city, c.submarket].filter(Boolean).join(' · ')],
-      ['SF occupied', L.fmtNumber(c.sfOccupied)],
       ['Headcount', L.fmtNumber(c.headcount)],
       ['SF / person', c.sfOccupied && c.headcount ? Math.round(c.sfOccupied / c.headcount) : ''],
       ['Landlord', c.landlord],
@@ -2514,6 +2515,8 @@
     const reqs = [
       ['Deal type', d.dealType],
       ['Size', L.dealSizeLabel(d) || 'RSF not set yet'],
+      // The client's space today (from the company), editable here.
+      ['Current RSF', editCell('companies', d.companyId, 'sfOccupied', 'number', (S.get('companies', d.companyId) || {}).sfOccupied, (S.get('companies', d.companyId) || {}).sfOccupied ? L.fmtNumber(S.get('companies', d.companyId).sfOccupied) + ' RSF today' : ''), true],
       ...(L.dealOfficeLabel(d) ? [['Office portion', L.dealOfficeLabel(d)]] : []),
       ['Budget', `${inlineSelect('deals', d.id, 'budgetUnit', [{ value: 'Per RSF', label: '$/SF per year' }, { value: 'Total per month', label: 'Monthly budget' }], d.budgetUnit || 'Per RSF')} ${editCell('deals', d.id, 'budgetRate', 'number', d.budgetRate, d.budgetRate ? esc(L.dealBudgetLabel(d)) : '')}`, true],
       ['Est. deal SF', L.fmtNumber(d.estSF)],
