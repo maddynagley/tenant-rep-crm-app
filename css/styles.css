@@ -175,6 +175,8 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 input[type='checkbox'] { width: 16px; height: 16px; min-height: 0; accent-color: var(--accent); }
 label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
+label.check.wrap { white-space: normal; align-items: flex-start; margin-top: 14px; }
+label.check.wrap input { margin-top: 3px; }
 
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
 .toolbar input[type='search'] { flex: 1 1 240px; width: auto; }

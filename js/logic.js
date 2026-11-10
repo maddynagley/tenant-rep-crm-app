@@ -910,6 +910,198 @@
   const isFreeMail = (dom) => FREE_MAIL.test(String(dom || ''));
 
   // Turns a bridge payload into CRM changes: activities to add or update, and last-contacted dates.
+  // ---------- two-way HubSpot sync ----------
+  // Each linked record keeps `hubspotSync.base`: the HubSpot-side values both systems last agreed on. A field
+  // changed on one side only takes that side; changed on both, the more recent edit wins.
+  // CRM stage → HubSpot stage label (Maddy's "Tenant Advisory Pipeline"), and back.
+  const HS_STAGE_OUT = { 'Intro Call': 'Surveys/Market Research', 'Market Survey': 'Surveys/Market Research', Touring: 'Touring', RFP: 'Proposal/LOI', LOI: 'Proposal/LOI', 'Lease Negotiation': 'Lease Negotiation', 'Closed Won': 'Closed Won', 'Closed Lost': 'Closed Lost' };
+  const HS_STAGE_IN = { 'surveys/market research': 'Market Survey', touring: 'Touring', 'proposal/loi': 'LOI', 'lease negotiation': 'Lease Negotiation', 'lease execution': 'Lease Negotiation', 'closed won': 'Closed Won', 'closed lost': 'Closed Lost' };
+  const HS_PROPS = {
+    companies: ['name', 'domain', 'address', 'city', 'state', 'submarket', 'square_footage', 'numberofemployees', 'lease_expiration'],
+    contacts: ['firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
+    deals: ['dealname', 'dealstage', 'closedate'],
+  };
+  const HS_MODIFIED = { companies: 'hs_lastmodifieddate', contacts: 'lastmodifieddate', deals: 'hs_lastmodifieddate' };
+  const hsDomain = (url) => String(url || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#\s]/)[0];
+  // One value as HubSpot holds it, so the two sides compare cleanly ('' for blank).
+  function hsNorm(prop, v) {
+    if (v === undefined || v === null) return '';
+    const s = String(v).trim();
+    if (!s) return '';
+    if (prop === 'lease_expiration' || prop === 'closedate') return hsDate(s);
+    if (prop === 'square_footage' || prop === 'numberofemployees') return parseNumber(s) === null ? '' : String(parseNumber(s));
+    if (prop === 'email') return s.toLowerCase();
+    if (prop === 'domain') return hsDomain(s);
+    return s;
+  }
+  // A CRM record as HubSpot properties. companies: { byId } for a deal's stage/close date context is not needed.
+  function toHubSpot(col, rec) {
+    const out = {};
+    if (col === 'companies') {
+      const [city, ...rest] = String(rec.city || '').split(',');
+      Object.assign(out, { name: rec.name, domain: rec.website, address: rec.address, city: city, state: rest.join(',').trim(), submarket: rec.submarket, square_footage: rec.sfOccupied, numberofemployees: rec.headcount, lease_expiration: rec.leaseExpiration });
+    } else if (col === 'contacts') {
+      Object.assign(out, { firstname: rec.firstName, lastname: rec.lastName, email: rec.email, jobtitle: rec.title, phone: rec.phone, mobilephone: rec.mobile, hs_linkedin_url: rec.linkedin });
+    } else if (col === 'deals') {
+      const closed = /^Closed/.test(rec.stage || '');
+      Object.assign(out, { dealname: rec.name, dealstage: HS_STAGE_OUT[rec.stage] || '', closedate: closed ? rec.closedDate || rec.targetClose : rec.targetClose });
+    }
+    Object.keys(out).forEach((k) => (out[k] = hsNorm(k, out[k])));
+    return out;
+  }
+  // HubSpot properties (only those given) → a CRM patch. rec: the CRM record (for the parts a property doesn't hold).
+  function fromHubSpot(col, props, rec, opts) {
+    const has = (k) => Object.prototype.hasOwnProperty.call(props, k);
+    const v = (k) => hsNorm(k, props[k]);
+    const out = {};
+    if (col === 'companies') {
+      if (has('name') && v('name')) out.name = v('name');
+      if (has('domain') && v('domain') !== hsDomain(rec.website)) out.website = v('domain') ? 'https://' + v('domain') : '';
+      if (has('address')) out.address = v('address');
+      if (has('city') || has('state')) {
+        const [city, ...rest] = String(rec.city || '').split(',');
+        out.city = [has('city') ? v('city') : city.trim(), has('state') ? v('state') : rest.join(',').trim()].filter(Boolean).join(', ');
+      }
+      if (has('submarket')) out.submarket = mapSubmarket(v('submarket'), opts && opts.submarketMap, rec.assetClass);
+      if (has('square_footage')) out.sfOccupied = v('square_footage') === '' ? '' : Number(v('square_footage'));
+      if (has('numberofemployees')) out.headcount = v('numberofemployees') === '' ? '' : Number(v('numberofemployees'));
+      if (has('lease_expiration')) out.leaseExpiration = v('lease_expiration');
+    } else if (col === 'contacts') {
+      const map = { firstname: 'firstName', lastname: 'lastName', email: 'email', jobtitle: 'title', phone: 'phone', mobilephone: 'mobile', hs_linkedin_url: 'linkedin' };
+      Object.keys(map).forEach((k) => has(k) && (out[map[k]] = v(k)));
+      if (out.firstName === '') delete out.firstName;
+    } else if (col === 'deals') {
+      if (has('dealname') && v('dealname')) out.name = v('dealname');
+      const stage = has('dealstage') ? HS_STAGE_IN[v('dealstage').toLowerCase()] : '';
+      if (stage && HS_STAGE_OUT[rec.stage] !== HS_STAGE_OUT[stage]) out.stage = stage;
+      if (has('closedate')) out[/^Closed/.test(out.stage || rec.stage || '') ? 'closedDate' : 'targetClose'] = v('closedate');
+    }
+    return out;
+  }
+  // HubSpot's copy of a linked record against the CRM's. hsModified: HubSpot's last-modified time. Returns the
+  // CRM patch (fields HubSpot wins) and the new agreed base.
+  function mergeFromHubSpot(col, rec, hsProps, hsModified, opts) {
+    const base = (rec.hubspotSync && rec.hubspotSync.base) || null;
+    const crm = toHubSpot(col, rec);
+    const hsTime = new Date(/^\d+$/.test(String(hsModified)) ? Number(hsModified) : hsModified || 0).getTime() || 0;
+    const crmTime = new Date(rec.updatedAt || 0).getTime() || 0;
+    const nextBase = Object.assign({}, base || {});
+    const take = {};
+    HS_PROPS[col].forEach((k) => {
+      if (!Object.prototype.hasOwnProperty.call(hsProps, k)) return;
+      const hs = hsNorm(k, hsProps[k]);
+      if (hs === crm[k]) return (nextBase[k] = hs);
+      const hsChanged = !base || hs !== (base[k] || '');
+      const crmChanged = !base || crm[k] !== (base[k] || '');
+      // A blank in HubSpot never wipes a value the CRM has unless HubSpot cleared it since the last agreement.
+      if (!hs && !base) return;
+      if (hsChanged && (!crmChanged || hsTime >= crmTime)) {
+        take[k] = hsProps[k];
+        nextBase[k] = hs;
+      } else if (!base) nextBase[k] = hs;
+    });
+    const patch = fromHubSpot(col, take, rec, opts);
+    Object.keys(patch).forEach((k) => String(patch[k]) === String(rec[k] === undefined ? '' : rec[k]) && delete patch[k]);
+    return { patch, base: nextBase };
+  }
+  // What the CRM sends HubSpot: linked records whose values moved off the agreed base, and records new to HubSpot
+  // (created or edited since `since`, when sending was switched on). Companies come first so contacts and deals
+  // can be associated with them. opts: { since (ms), skip (hubspotSkip), limit }.
+  function planHubSpotPush(data, opts) {
+    opts = opts || {};
+    const since = Number(opts.since) || 0;
+    const limit = opts.limit || 100;
+    const skip = new Set((opts.skip || []).map(String));
+    const companies = {};
+    data.companies.forEach((c) => (companies[c.id] = c));
+    const hsIdOf = (rec, prefix) => String(rec.hubspotId || (new RegExp('^hs-' + prefix + '-(\\d+)$').exec(rec.id) || [])[1] || '');
+    const recent = (r) => since && new Date(r.updatedAt || r.createdAt || 0).getTime() >= since;
+    const out = { companies: [], contacts: [], deals: [] };
+    const plan = (col, prefix, list, extra) =>
+      list.forEach((rec) => {
+        if (out[col].length >= limit) return;
+        const hubspotId = hsIdOf(rec, prefix);
+        if (hubspotId && skip.has(prefix + '-' + hubspotId)) return;
+        const props = toHubSpot(col, rec);
+        const base = rec.hubspotSync && rec.hubspotSync.base;
+        let send;
+        if (!hubspotId) {
+          if (!recent(rec)) return;
+          send = props;
+        } else if (base) {
+          send = {};
+          Object.keys(props).forEach((k) => props[k] !== (base[k] || '') && (send[k] = props[k]));
+        } else {
+          // Linked but never compared: send what's set, if edited since sending was switched on.
+          if (!recent(rec)) return;
+          send = {};
+          Object.keys(props).forEach((k) => props[k] && (send[k] = props[k]));
+        }
+        const item = extra(rec, { crmId: rec.id, hubspotId, props: send, base: base || null, updatedAt: rec.updatedAt || '' });
+        if (!item) return;
+        if (!Object.keys(item.props).length && !item.associate) return;
+        out[col].push(item);
+      });
+    plan('companies', 'co', data.companies, (rec, item) => (rec.name ? item : null));
+    const companyLink = (rec, item, needed) => {
+      const co = companies[rec.companyId];
+      if (!co) return needed ? null : item;
+      const coHs = hsIdOf(co, 'co');
+      item.companyCrmId = co.id;
+      item.companyHubspotId = coHs;
+      // New to HubSpot, or moved to another company in the CRM since the last sync: link it there.
+      const linkedTo = rec.hubspotSync ? rec.hubspotSync.company : undefined;
+      if (!item.hubspotId || (linkedTo !== undefined && coHs && linkedTo !== coHs)) item.associate = true;
+      return item;
+    };
+    plan('contacts', 'ct', data.contacts, (rec, item) => {
+      if (!rec.firstName && !rec.lastName) return null;
+      // A contact's email is how HubSpot finds them; never send a colleague as a client contact.
+      const dom = String(rec.email || '').toLowerCase().split('@')[1];
+      if (dom && opts.internalDomain && dom === String(opts.internalDomain).toLowerCase()) return null;
+      return companyLink(rec, item, false);
+    });
+    plan('deals', 'dl', data.deals, (rec, item) => (rec.name ? companyLink(rec, item, true) : null));
+    // A contact or deal whose company isn't in HubSpot yet takes the company along.
+    const sending = new Set(out.companies.map((x) => x.crmId));
+    out.contacts.concat(out.deals).forEach((x) => {
+      const co = companies[x.companyCrmId];
+      if (!co || x.companyHubspotId || sending.has(co.id) || !co.name) return;
+      sending.add(co.id);
+      out.companies.push({ crmId: co.id, hubspotId: '', props: toHubSpot('companies', co), base: null, updatedAt: co.updatedAt || '' });
+    });
+    return out;
+  }
+  // The bridge's answer to a push → CRM patches: HubSpot IDs and links for new records, values HubSpot kept
+  // (it had the newer edit) and the new agreed base. results: { companies: [{ crmId, hubspotId, props, kept, error }], … }
+  function planPushResults(results, data, portal) {
+    const out = { companies: [], contacts: [], deals: [] };
+    const type = { companies: '0-2', contacts: '0-1', deals: '0-3' };
+    const byId = {};
+    ['companies', 'contacts', 'deals'].forEach((col) => data[col].forEach((r) => (byId[col + '|' + r.id] = r)));
+    let errors = 0;
+    ['companies', 'contacts', 'deals'].forEach((col) =>
+      ((results && results[col]) || []).forEach((r) => {
+        const rec = byId[col + '|' + r.crmId];
+        if (!rec) return;
+        if (r.error || !r.hubspotId) return errors++;
+        const kept = r.kept || {};
+        const base = Object.assign({}, (rec.hubspotSync && rec.hubspotSync.base) || {}, r.props || {});
+        Object.keys(kept).forEach((k) => (base[k] = hsNorm(k, kept[k])));
+        const patch = Object.assign({ id: rec.id }, fromHubSpot(col, kept, rec, data));
+        Object.keys(patch).forEach((k) => k !== 'id' && String(patch[k]) === String(rec[k] === undefined ? '' : rec[k]) && delete patch[k]);
+        const company = col === 'companies' ? undefined : r.companyHubspotId || (rec.hubspotSync && rec.hubspotSync.company);
+        patch.hubspotSync = Object.assign({ base, at: new Date().toISOString() }, company ? { company: String(company) } : {});
+        if (!rec.hubspotId && !/^hs-/.test(rec.id)) {
+          patch.hubspotId = String(r.hubspotId);
+          if (portal) patch.hubspotUrl = `https://app.hubspot.com/contacts/${portal}/record/${type[col]}/${r.hubspotId}`;
+        }
+        out[col].push(patch);
+      })
+    );
+    return Object.assign(out, { errors });
+  }
+
   function planHubSpotSync(payload, data) {
     const companies = {};
     const byHubspotId = {};
@@ -1001,14 +1193,33 @@
       if (nameKey(c.name)) byName[nameKey(c.name)] = c.id;
     });
     let skipped = 0;
-    const recordPatches = { companies: [], contacts: [] };
-    const created = { companies: 0, contacts: 0 };
+    const recordPatches = { companies: [], contacts: [], deals: [] };
+    let updatedFromHubSpot = 0;
+    const created = { companies: 0, contacts: 0, deals: 0 };
     const fillBlanks = (col, current, fields) => {
       const patch = { id: current.id };
       Object.keys(fields).forEach((k) => {
         if (fields[k] !== '' && fields[k] !== undefined && fields[k] !== null && (current[k] === undefined || current[k] === null || current[k] === '')) patch[k] = fields[k];
       });
       if (Object.keys(patch).length > 1) recordPatches[col].push(patch);
+    };
+    const pickUnmapped = (fields, mapped) => {
+      const out = {};
+      Object.keys(fields).forEach((k) => !mapped.includes(k) && (out[k] = fields[k]));
+      return out;
+    };
+    const agreed = (col, props) => {
+      const base = {};
+      HS_PROPS[col].forEach((k) => (base[k] = hsNorm(k, props[k])));
+      return base;
+    };
+    // companyHs: the company HubSpot links a contact or deal to.
+    const mergePatch = (col, current, props, modified, companyHs) => {
+      const m = mergeFromHubSpot(col, current, props, modified, data);
+      const link = companyHs !== undefined && !(current.hubspotSync && current.hubspotSync.company) ? { company: companyHs } : {};
+      recordPatches[col].push(Object.assign({ id: current.id }, m.patch, { hubspotSync: Object.assign({}, current.hubspotSync, link, { base: m.base, at: new Date().toISOString() }) }));
+      Object.assign(current, m.patch);
+      if (Object.keys(m.patch).length) updatedFromHubSpot++;
     };
     (payload.companies || []).forEach((rec) => {
       const p = rec.properties || {};
@@ -1029,12 +1240,15 @@
       };
       const cid = companies['hs-co-' + rec.id] ? 'hs-co-' + rec.id : byHubspotId[String(rec.id)] || byWebsite[domainOf(website)] || byName[nameKey(p.name)];
       if (cid && companies[cid]) {
-        fillBlanks('companies', companies[cid], fields);
+        // Two-way: the mapped fields follow the most recent edit (see mergeFromHubSpot); the rest fill blanks.
+        fillBlanks('companies', companies[cid], data.twoWay ? pickUnmapped(fields, ['name', 'website', 'address', 'city', 'submarket', 'sfOccupied', 'headcount', 'leaseExpiration']) : fields);
+        if (data.twoWay) mergePatch('companies', companies[cid], p, p.hs_lastmodifieddate);
         byHubspotId[String(rec.id)] = cid;
         return;
       }
       const fresh = hsDate(p.createdate) >= addDays(todayISO(), -30);
       const c = Object.assign({ id: 'hs-co-' + rec.id }, fields, { status: 'Target', priority: 'B', growthSignal: 'Unknown', source: 'HubSpot', leadStage: fresh ? 'New' : undefined });
+      if (data.twoWay) c.hubspotSync = { base: agreed('companies', p), at: new Date().toISOString() };
       if (!c.leadStage) delete c.leadStage;
       companies[c.id] = c;
       byHubspotId[String(rec.id)] = c.id;
@@ -1055,10 +1269,15 @@
         phone: p.phone || '',
         mobile: p.mobilephone || '',
         linkedin: p.hs_linkedin_url || '',
+        hubspotId: String(rec.id),
         hubspotUrl: hsUrl('0-1', rec.id),
       };
+      const linkContact = (current) => {
+        fillBlanks('contacts', current, data.twoWay ? pickUnmapped(fields, ['firstName', 'lastName', 'title', 'email', 'phone', 'mobile', 'linkedin']) : fields);
+        if (data.twoWay) mergePatch('contacts', current, p, p.lastmodifieddate, String((rec.companies || [])[0] || ''));
+      };
       const current = contactsById['hs-ct-' + rec.id] || (email && byEmail[email]);
-      if (current) return fillBlanks('contacts', current, fields);
+      if (current) return linkContact(current);
       let companyId = '';
       for (const id of rec.companies || []) if (!companyId) companyId = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[String(id)] || '';
       const dom = email.split('@')[1];
@@ -1070,12 +1289,14 @@
       const n = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
       const twin = data.contacts.find((c) => c.companyId === companyId && n(c.firstName) === n(p.firstname) && n(c.lastName) === n(p.lastname) && (!c.email || String(c.email).toLowerCase() === email));
       if (twin) {
-        fillBlanks('contacts', twin, fields);
+        linkContact(twin);
         contactsById['hs-ct-' + rec.id] = Object.assign({}, twin, { email: twin.email || email });
         if (email) byEmail[email] = contactsById['hs-ct-' + rec.id];
         return;
       }
       const contact = Object.assign({ id: 'hs-ct-' + rec.id, companyId }, fields, { source: 'HubSpot' });
+      delete contact.hubspotId;
+      if (data.twoWay) contact.hubspotSync = { base: agreed('contacts', p), company: String((rec.companies || [])[0] || ''), at: new Date().toISOString() };
       contactsById[contact.id] = contact;
       if (email) {
         byEmail[email] = contact;
@@ -1083,6 +1304,28 @@
       }
       recordPatches.contacts.push(contact);
       created.contacts++;
+    });
+
+    // Deals (two-way only): linked ones follow the most recent edit; new HubSpot deals for a CRM company are added.
+    const dealsById = {};
+    data.deals.forEach((d) => (dealsById[d.id] = d));
+    const dealByHs = {};
+    data.deals.forEach((d) => d.hubspotId && (dealByHs[String(d.hubspotId)] = d));
+    (data.twoWay ? payload.deals || [] : []).forEach((rec) => {
+      const p = Object.assign({}, rec.properties || {});
+      // The bridge sends the stage's label alongside its ID.
+      if (p.dealstage_label) p.dealstage = p.dealstage_label;
+      if (!p.dealname || skip.has('dl-' + rec.id)) return;
+      const current = dealsById['hs-dl-' + rec.id] || dealByHs[String(rec.id)];
+      if (current) return mergePatch('deals', current, p, p.hs_lastmodifieddate, String((rec.companies || [])[0] || ''));
+      let companyId = '';
+      for (const id of rec.companies || []) if (!companyId) companyId = companies['hs-co-' + id] ? 'hs-co-' + id : byHubspotId[String(id)] || '';
+      if (!companyId) return skipped++;
+      const stub = { stage: 'Market Survey' };
+      const deal = Object.assign({ id: 'hs-dl-' + rec.id, companyId, name: String(p.dealname).trim(), stage: 'Market Survey', assetClass: (companies[companyId] && companies[companyId].assetClass) || 'Office', source: 'HubSpot', hubspotUrl: hsUrl('0-3', rec.id) }, fromHubSpot('deals', p, stub, data));
+      deal.hubspotSync = { base: agreed('deals', p), company: String((rec.companies || [])[0] || ''), at: new Date().toISOString() };
+      recordPatches.deals.push(deal);
+      created.deals++;
     });
 
     // A template drafted from the CRM in the last two weeks names the next email sent to that company.
@@ -1200,7 +1443,7 @@
       if (patch) Object.assign(patch, { pendingTemplate: '' });
       else companyPatches.push({ id: cid, pendingTemplate: '' });
     });
-    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, created, skipped };
+    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, deals: recordPatches.deals, created, skipped, updatedFromHubSpot };
   }
 
   // ---------- shared prospect lists (two-way Google Sheet) ----------
@@ -4127,6 +4370,11 @@
     matchSubmarket,
     normalizeLinkedIn,
     planNamedFixes,
+    toHubSpot,
+    fromHubSpot,
+    mergeFromHubSpot,
+    planHubSpotPush,
+    planPushResults,
     termUnitFromValues,
     splitNotes,
     replaceNote,

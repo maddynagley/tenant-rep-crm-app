@@ -2,13 +2,19 @@
  * Tenant Rep CRM – HubSpot bridge (Google Apps Script web app).
  *
  * Lets the CRM pick up emails (with opens and replies), notes, meetings and calls that HubSpot logs from
- * Outlook, plus new and updated companies and contacts (e.g. ones the ZoomInfo extension sends to HubSpot),
- * without ever putting a HubSpot key in the browser. The HubSpot token stays in this
- * script's properties; the CRM only holds the bridge URL and a sync key.
+ * Outlook, plus new and updated companies, contacts and deals (e.g. ones the ZoomInfo extension sends to
+ * HubSpot), without ever putting a HubSpot key in the browser. With two-way sync on, the CRM also sends its
+ * new and edited companies, contacts and deals here (doPost), and this script writes them to HubSpot:
+ * new records are matched first (companies by domain, then name; contacts by email; deals by name and
+ * company) so nothing is doubled, and a field HubSpot changed more recently than the CRM is left alone.
+ * The HubSpot token stays in this script's properties; the CRM only holds the bridge URL and a sync key.
  *
  * Setup (once):
  *   1. In HubSpot create a private app with read scopes (contacts, companies, deals, sales-email-read)
- *      and copy its access token.
+ *      and, for two-way sync, write scopes (crm.objects.companies.write, crm.objects.contacts.write,
+ *      crm.objects.deals.write). Copy its access token.
+ *      Updating an existing bridge: add the write scopes to the private app (the token stays the same),
+ *      paste this file over the old one, then Deploy → Manage deployments → edit → Version: New version.
  *   2. Here: Project Settings → Script properties → add HUBSPOT_TOKEN = <the token>.
  *   3. Run setup() once and approve the permissions; the execution log shows your sync key.
  *   4. Deploy → New deployment → Web app → Execute as: Me, Who has access: Anyone. Copy the URL.
@@ -34,12 +40,13 @@ const TYPES = {
     'submarket', 'square_footage', 'lease_expiration',
   ],
   contacts: ['lastmodifieddate', 'createdate', 'firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
+  deals: ['hs_lastmodifieddate', 'createdate', 'dealname', 'dealstage', 'pipeline', 'closedate'],
 };
 
 // Contacts name their last-modified date differently from every other object.
 const MODIFIED = { contacts: 'lastmodifieddate' };
 // Which associations to read for each type.
-const LINKS = { companies: [], contacts: ['companies'] };
+const LINKS = { companies: [], contacts: ['companies'], deals: ['companies'] };
 
 function setup() {
   const props = PropertiesService.getScriptProperties();
@@ -77,6 +84,268 @@ function doGet(e) {
   }
 }
 
+// ---------- two-way: CRM → HubSpot ----------
+// Body: { key, companies: [item], contacts: [item], deals: [item] }, where an item is
+//   { crmId, hubspotId, props, base, updatedAt, companyCrmId, companyHubspotId, associate }.
+// props are HubSpot properties as the CRM has them; base is what both sides last agreed on (null if never).
+// Answers each item with { crmId, hubspotId, props (what HubSpot now holds for them), kept, companyHubspotId, error }.
+const PUSH_PROPS = {
+  companies: ['name', 'domain', 'address', 'city', 'state', 'submarket', 'square_footage', 'numberofemployees', 'lease_expiration'],
+  contacts: ['firstname', 'lastname', 'email', 'jobtitle', 'phone', 'mobilephone', 'hs_linkedin_url'],
+  deals: ['dealname', 'dealstage', 'closedate'],
+};
+
+function doPost(e) {
+  let body;
+  try {
+    body = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return json_({ ok: false, error: 'Bad request' });
+  }
+  if (body.key !== PropertiesService.getScriptProperties().getProperty('SYNC_KEY')) return json_({ ok: false, error: 'Wrong sync key' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const out = { ok: true, now: Date.now() };
+    const companyIds = {};
+    ['companies', 'contacts', 'deals'].forEach(function (type) {
+      out[type] = pushType_(type, (body[type] || []).slice(0, 100), companyIds);
+    });
+    return json_(out);
+  } catch (err) {
+    return json_({ ok: false, error: String(err && err.message ? err.message : err) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// The same tidy form the CRM compares in ('' for blank).
+function norm_(prop, v) {
+  if (v === undefined || v === null) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  if (prop === 'lease_expiration' || prop === 'closedate') {
+    const d = new Date(/^\d+$/.test(s) ? Number(s) : s);
+    return isNaN(d) ? '' : Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+  }
+  if (prop === 'square_footage' || prop === 'numberofemployees') return isNaN(Number(s.replace(/,/g, ''))) ? '' : String(Number(s.replace(/,/g, '')));
+  if (prop === 'email') return s.toLowerCase();
+  if (prop === 'domain') return s.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#\s]/)[0];
+  return s;
+}
+
+function pushType_(type, items, companyIds) {
+  const results = items.map(function (it) { return { crmId: it.crmId, hubspotId: String(it.hubspotId || ''), props: {}, kept: {} }; });
+  const stages = type === 'deals' ? stageIds_() : null;
+  // Contacts and deals hang off a company the CRM may only just have sent.
+  items.forEach(function (it, i) {
+    if (type !== 'companies') results[i].companyHubspotId = String(it.companyHubspotId || companyIds[it.companyCrmId] || '');
+  });
+  // 1. New to HubSpot: look for the same record there first.
+  findExisting_(type, items, results);
+  // 2. Read what HubSpot holds now for every linked record, to keep its newer edits.
+  const linked = results.filter(function (r) { return r.hubspotId; }).map(function (r) { return r.hubspotId; });
+  const current = readCurrent_(type, linked);
+  const updates = [];
+  const creates = [];
+  items.forEach(function (it, i) {
+    const r = results[i];
+    const props = it.props || {};
+    const send = {};
+    if (r.hubspotId) {
+      const now = current[r.hubspotId];
+      if (!now) {
+        r.error = 'Not in HubSpot any more (deleted there?)';
+        return;
+      }
+      const hsTime = new Date(now.modified || 0).getTime() || 0;
+      const crmTime = new Date(it.updatedAt || 0).getTime() || 0;
+      Object.keys(props).forEach(function (k) {
+        if (PUSH_PROPS[type].indexOf(k) < 0) return;
+        const mine = norm_(k, props[k]);
+        const theirs = norm_(k, type === 'deals' && k === 'dealstage' ? now.stageLabel : now.properties[k]);
+        if (mine === theirs) return (r.props[k] = theirs);
+        const base = it.base ? norm_(k, it.base[k]) : null;
+        const hsChanged = base === null ? Boolean(theirs) : theirs !== base;
+        // HubSpot changed this field since the last agreement and more recently than the CRM's edit: it stays.
+        if (hsChanged && hsTime > crmTime) return (r.kept[k] = type === 'deals' && k === 'dealstage' ? now.stageLabel : now.properties[k]);
+        // Never blank a HubSpot value on a first link.
+        if (!mine && base === null) return (r.kept[k] = now.properties[k]);
+        send[k] = mine;
+        r.props[k] = mine;
+      });
+      if (Object.keys(send).length) updates.push({ i: i, id: r.hubspotId, properties: toWrite_(type, send, stages) });
+    } else {
+      Object.keys(props).forEach(function (k) {
+        const v = norm_(k, props[k]);
+        if (PUSH_PROPS[type].indexOf(k) >= 0 && v) {
+          send[k] = v;
+          r.props[k] = v;
+        }
+      });
+      if (type === 'deals' && !r.companyHubspotId) {
+        r.error = 'Its company is not in HubSpot yet';
+        return;
+      }
+      const properties = toWrite_(type, send, stages);
+      if (type === 'deals' && !properties.pipeline) properties.pipeline = stages.pipeline;
+      creates.push({ i: i, properties: properties });
+    }
+  });
+  batchWrite_(type, 'update', updates, results);
+  batchWrite_(type, 'create', creates, results);
+  // 3. Link new (or moved) contacts and deals to their company.
+  if (type !== 'companies') {
+    const links = [];
+    items.forEach(function (it, i) {
+      const r = results[i];
+      if (r.error || !r.hubspotId || !r.companyHubspotId) return;
+      if (it.associate || !it.hubspotId) links.push({ from: { id: r.hubspotId }, to: { id: r.companyHubspotId } });
+    });
+    for (let k = 0; k < links.length; k += 100) {
+      try {
+        hubspot_('post', '/crm/v4/associations/' + type + '/companies/batch/associate/default', { inputs: links.slice(k, k + 100) });
+      } catch (err) {
+        Logger.log('Association failed: ' + err.message);
+      }
+    }
+  }
+  if (type === 'companies') results.forEach(function (r) { if (r.hubspotId) companyIds[r.crmId] = r.hubspotId; });
+  return results;
+}
+
+// HubSpot property values to write: deal stages by name → this portal's stage ID.
+function toWrite_(type, props, stages) {
+  const out = {};
+  Object.keys(props).forEach(function (k) {
+    if (type === 'deals' && k === 'dealstage') {
+      const st = stages.byLabel[String(props[k]).toLowerCase()];
+      if (st) {
+        out.dealstage = st.id;
+        out.pipeline = st.pipeline;
+      }
+      return;
+    }
+    out[k] = props[k];
+  });
+  return out;
+}
+
+function findExisting_(type, items, results) {
+  const want = [];
+  items.forEach(function (it, i) {
+    if (results[i].hubspotId) return;
+    const p = it.props || {};
+    if (type === 'companies' && (p.domain || p.name)) want.push({ i: i, prop: p.domain ? 'domain' : 'name', value: p.domain ? norm_('domain', p.domain) : String(p.name).trim() });
+    if (type === 'contacts' && p.email) want.push({ i: i, prop: 'email', value: norm_('email', p.email) });
+    if (type === 'deals' && p.dealname) want.push({ i: i, prop: 'dealname', value: String(p.dealname).trim() });
+  });
+  ['domain', 'name', 'email', 'dealname'].forEach(function (prop) {
+    const group = want.filter(function (w) { return w.prop === prop; });
+    for (let k = 0; k < group.length; k += 100) {
+      const chunk = group.slice(k, k + 100);
+      const found = searchIn_(type, prop, chunk.map(function (w) { return w.value; }));
+      if (type === 'deals') attachAssociations_('deals', found, 'companies');
+      chunk.forEach(function (w) {
+        const hits = found.filter(function (f) {
+          if (norm_(prop, f.properties[prop]).toLowerCase() !== String(w.value).toLowerCase()) return false;
+          // A deal only matches one with the same name at the same company.
+          return type !== 'deals' || (f.companies || []).indexOf(results[w.i].companyHubspotId) >= 0;
+        });
+        if (hits.length) results[w.i].hubspotId = String(hits[0].id);
+      });
+    }
+  });
+}
+
+function searchIn_(type, prop, values) {
+  const out = [];
+  let after;
+  do {
+    const body = { filterGroups: [{ filters: [{ propertyName: prop, operator: 'IN', values: values }] }], properties: [prop], limit: 100 };
+    if (after) body.after = after;
+    const page = hubspot_('post', '/crm/v3/objects/' + type + '/search', body);
+    (page.results || []).forEach(function (r) { out.push({ id: r.id, properties: r.properties || {} }); });
+    after = page.paging && page.paging.next && page.paging.next.after;
+  } while (after && out.length < 500);
+  return out;
+}
+
+function readCurrent_(type, ids) {
+  const out = {};
+  const modified = MODIFIED[type] || 'hs_lastmodifieddate';
+  const labels = type === 'deals' ? stageLabels_() : {};
+  for (let k = 0; k < ids.length; k += 100) {
+    const res = hubspot_('post', '/crm/v3/objects/' + type + '/batch/read', {
+      properties: PUSH_PROPS[type].concat([modified]),
+      inputs: ids.slice(k, k + 100).map(function (id) { return { id: id }; }),
+    });
+    (res.results || []).forEach(function (r) {
+      const p = r.properties || {};
+      out[String(r.id)] = { properties: p, modified: p[modified], stageLabel: labels[p.dealstage] || '' };
+    });
+  }
+  return out;
+}
+
+function batchWrite_(type, action, rows, results) {
+  for (let k = 0; k < rows.length; k += 100) {
+    const chunk = rows.slice(k, k + 100);
+    const inputs = chunk.map(function (row) { return action === 'update' ? { id: row.id, properties: row.properties } : { properties: row.properties }; });
+    try {
+      const res = hubspot_('post', '/crm/v3/objects/' + type + '/batch/' + action, { inputs: inputs });
+      // Batch answers aren't in input order: creates are matched back by their properties.
+      (res.results || []).forEach(function (r, n) {
+        if (action === 'update') return;
+        const row = chunk.filter(function (c) { return !c.done && sameWrite_(c.properties, r.properties || {}); })[0] || chunk[n];
+        if (!row) return;
+        row.done = true;
+        results[row.i].hubspotId = String(r.id);
+      });
+    } catch (err) {
+      // One bad record fails the batch: retry one by one so the rest still go through.
+      chunk.forEach(function (row) {
+        try {
+          const r = action === 'update'
+            ? hubspot_('patch', '/crm/v3/objects/' + type + '/' + row.id, { properties: row.properties })
+            : hubspot_('post', '/crm/v3/objects/' + type, { properties: row.properties });
+          if (action === 'create') results[row.i].hubspotId = String(r.id);
+        } catch (e2) {
+          // HubSpot already has this email: link to that contact instead.
+          const existing = /Existing ID: (\d+)/.exec(e2.message);
+          if (action === 'create' && existing) results[row.i].hubspotId = existing[1];
+          else results[row.i].error = e2.message;
+        }
+      });
+    }
+  }
+}
+
+function sameWrite_(sent, got) {
+  return Object.keys(sent).every(function (k) { return k === 'dealstage' || k === 'pipeline' || norm_(k, sent[k]) === norm_(k, got[k]); });
+}
+
+// Stage name (lower case) → { id, pipeline }, and the first pipeline for new deals; ID → name for reads.
+function stageIds_() {
+  const res = hubspot_('get', '/crm/v3/pipelines/deals');
+  const out = { byLabel: {}, pipeline: 'default' };
+  (res.results || []).forEach(function (pl, n) {
+    if (n === 0 || pl.id === 'default') out.pipeline = pl.id;
+    (pl.stages || []).forEach(function (st) {
+      const key = String(st.label).toLowerCase();
+      if (!out.byLabel[key] || pl.id === 'default') out.byLabel[key] = { id: st.id, pipeline: pl.id };
+    });
+  });
+  return out;
+}
+
+function stageLabels_() {
+  const res = hubspot_('get', '/crm/v3/pipelines/deals');
+  const out = {};
+  (res.results || []).forEach(function (pl) { (pl.stages || []).forEach(function (st) { out[st.id] = st.label; }); });
+  return out;
+}
+
 function fetchSince_(type, properties, since) {
   const modified = MODIFIED[type] || 'hs_lastmodifieddate';
   const results = [];
@@ -101,6 +370,11 @@ function fetchSince_(type, properties, since) {
     after = page.paging && page.paging.next && page.paging.next.after;
   } while (after && results.length < MAX_PER_TYPE);
   (LINKS[type] || ['companies', 'contacts', 'deals']).forEach(function (toType) { attachAssociations_(type, results, toType); });
+  // Deal stages travel as their names too, since stage IDs differ from portal to portal.
+  if (type === 'deals') {
+    const labels = stageLabels_();
+    results.forEach(function (r) { r.properties.dealstage_label = labels[r.properties.dealstage] || ''; });
+  }
   const last = results.length ? results[results.length - 1].properties[modified] : null;
   return { items: results, more: Boolean(after), next: last ? new Date(last).getTime() : since };
 }

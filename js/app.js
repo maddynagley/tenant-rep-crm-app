@@ -2903,6 +2903,16 @@
             <label class="wide">Sync key<input name="hubspotBridgeKey" type="password" autocomplete="off" value="${esc(s.hubspotBridgeKey)}" /></label>
             <div class="wide actions"><button class="btn primary" type="submit">Save</button>${s.hubspotBridgeUrl ? '<button class="btn" type="button" data-action="sync-hubspot">Sync now</button><button class="btn" type="button" data-action="backfill-hubspot" title="One time: every email and note HubSpot has, not just the past week">Load full history</button>' : ''}</div>
           </form>
+          ${
+            s.hubspotBridgeUrl
+              ? `<label class="check wrap"><input type="checkbox" data-action="toggle-hubspot-two-way" ${s.hubspotTwoWay ? 'checked' : ''} /> Two-way: also send new and edited companies, contacts and deals to HubSpot</label>
+          <p class="hint">${
+            s.hubspotTwoWay
+              ? `On since ${esc(new Date(s.hubspotPushSince).toLocaleDateString())}. Records you add or edit from then on go to HubSpot, and HubSpot edits come back here. When both sides changed the same field, the more recent edit wins. Companies match on website domain (then name), contacts on email, deals on name and company, so nothing is doubled. Deleting here never deletes in HubSpot.`
+              : 'Needs the latest bridge script with write access (see the steps at the top of the script).'
+          }</p>`
+              : ''
+          }
           <p class="hint">${s.hubspotLastSync ? 'Last synced ' + esc(new Date(s.hubspotLastSync).toLocaleString()) + (hubspotStatus ? ' · ' + esc(hubspotStatus) : '') : hubspotStatus ? esc(hubspotStatus) : 'Not connected yet.'}</p>
         </section>
         <section class="card">
@@ -4464,6 +4474,17 @@
         case 'show-more-notes':
           actionEl.parentElement.querySelectorAll('.more-note').forEach((li) => (li.hidden = false));
           return actionEl.remove();
+        case 'toggle-hubspot-two-way': {
+          const on = actionEl.checked;
+          if (on && !confirm('Send new and edited companies, contacts and deals to HubSpot from now on?\n\nRecords you add or edit after this go to HubSpot (matched by domain and email, so nothing is doubled). When both sides changed the same field, the more recent edit wins.')) {
+            actionEl.checked = false;
+            return;
+          }
+          S.saveSettings(on ? { hubspotTwoWay: true, hubspotPushSince: S.settings().hubspotPushSince || Date.now() } : { hubspotTwoWay: false });
+          toast(on ? 'Two-way HubSpot sync is on.' : 'Two-way HubSpot sync is off. HubSpot still syncs into the CRM.');
+          if (on) syncHubSpot(true);
+          return render();
+        }
         case 'insert-market-line': {
           const f = $('#quick-note-form');
           const line = marketLineFor(f.dataset.col, S.get(f.dataset.col, f.dataset.id));
@@ -5180,9 +5201,10 @@
       applyHubSpotRecords(plan);
       const added = S.all('activities').length - before;
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
-      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
-      if (!manual && (plan.created.companies || plan.created.contacts)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '');
+      if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
+      hubspotStatus += await pushHubSpot();
       runWorkflows();
       if (manual) toast('HubSpot synced: ' + hubspotStatus + '.');
     } catch (err) {
@@ -5194,15 +5216,47 @@
     }
   }
   function hubspotData() {
-    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain(), submarketMap: S.settings().submarketMap };
+    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain(), submarketMap: S.settings().submarketMap, twoWay: Boolean(S.settings().hubspotTwoWay) };
   }
   function applyHubSpotRecords(plan) {
     plan.companies.forEach((c) => S.upsert('companies', c, { silent: true, touch: false }));
     (plan.contacts || []).forEach((c) => S.upsert('contacts', c, { silent: true, touch: false }));
+    (plan.deals || []).forEach((d) => S.upsert('deals', d, { silent: true, touch: false }));
+  }
+  // The HubSpot portal number, from any record linked to HubSpot (for record links).
+  function hubspotPortal() {
+    const rec = S.all('companies').concat(S.all('contacts')).find((r) => /\/contacts\/(\d+)\//.test(r.hubspotUrl || ''));
+    return rec ? /\/contacts\/(\d+)\//.exec(rec.hubspotUrl)[1] : '';
+  }
+  // Two-way: send what changed here since the last sync, then file HubSpot's answer (IDs, values it kept).
+  async function pushHubSpot() {
+    const st = S.settings();
+    if (!st.hubspotTwoWay) return '';
+    const push = L.planHubSpotPush({ companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals') }, { since: st.hubspotPushSince, skip: st.hubspotSkip, internalDomain: myEmailDomain() });
+    const n = push.companies.length + push.contacts.length + push.deals.length;
+    if (!n) return '';
+    const res = await fetch(st.hubspotBridgeUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: st.hubspotBridgeKey }, push)) });
+    // An older bridge has no doPost and answers with a Google error page.
+    const update = 'Update the HubSpot bridge script to the latest version to send changes';
+    let data;
+    try {
+      data = JSON.parse(await res.text());
+    } catch (e) {
+      throw new Error(update);
+    }
+    if (!data.ok) throw new Error(data.error || 'Sending to HubSpot failed');
+    if (!data.companies) throw new Error(update);
+    const plan = L.planPushResults(data, { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), submarketMap: st.submarketMap }, hubspotPortal());
+    ['companies', 'contacts', 'deals'].forEach((col) => plan[col].forEach((r) => S.upsert(col, r, { silent: true, touch: false })));
+    S.saveSettings({});
+    const sent = ['companies', 'contacts', 'deals'].map((col) => (data[col] || []).filter((r) => !r.error).length);
+    const failed = ['companies', 'contacts', 'deals'].map((col) => (data[col] || []).filter((r) => r.error).map((r) => r.error))
+      .reduce((a, b) => a.concat(b), []);
+    return `; sent ${sent[0]} compan${sent[0] === 1 ? 'y' : 'ies'}, ${sent[1]} contact${sent[1] === 1 ? '' : 's'} and ${sent[2]} deal${sent[2] === 1 ? '' : 's'} to HubSpot` + (failed.length ? ` (${failed.length} not sent: ${failed[0]})` : '');
   }
   function newRecordsNote(plan) {
     const c = plan.created || {};
-    const parts = [c.companies ? `${c.companies} new compan${c.companies > 1 ? 'ies' : 'y'}` : '', c.contacts ? `${c.contacts} new contact${c.contacts > 1 ? 's' : ''}` : ''].filter(Boolean);
+    const parts = [c.companies ? `${c.companies} new compan${c.companies > 1 ? 'ies' : 'y'}` : '', c.contacts ? `${c.contacts} new contact${c.contacts > 1 ? 's' : ''}` : '', c.deals ? `${c.deals} new deal${c.deals > 1 ? 's' : ''}` : ''].filter(Boolean);
     return parts.length ? ', ' + parts.join(' and ') : '';
   }
   // One-time pull of everything HubSpot holds, type by type, in pages of up to 1,000.
@@ -5213,7 +5267,7 @@
     const totals = { added: 0, updated: 0, skipped: 0, companies: 0, contacts: 0 };
     try {
       // Companies and contacts first, so the emails that follow can find them.
-      for (const type of ['companies', 'contacts', 'emails', 'notes', 'meetings', 'calls']) {
+      for (const type of ['companies', 'contacts', 'deals', 'emails', 'notes', 'meetings', 'calls']) {
         let since = 0;
         for (let page = 0; page < 50; page++) {
           toast(`Loading HubSpot ${type}${page ? ' (page ' + (page + 1) + ')' : ''}…`);

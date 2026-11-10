@@ -746,7 +746,7 @@ test('companies and contacts new in HubSpot are added; existing ones only get bl
   assert.equal(co('hs-co-3').city, 'Atlanta, GA');
   assert.equal(co('hs-co-3').hubspotUrl, 'https://app.hubspot.com/contacts/999/record/0-2/3');
   assert.equal(co('hs-co-9'), undefined);
-  assert.deepEqual(plan.created, { companies: 1, contacts: 2 });
+  assert.deepEqual(plan.created, { companies: 1, contacts: 2, deals: 0 });
   const ct = (id) => plan.contacts.find((c) => c.id === id);
   assert.equal(ct('p1').title, 'COO');
   assert.equal(ct('hs-ct-12').companyId, 'hs-co-3');
@@ -1668,4 +1668,123 @@ test('comp import: a much different size on another date reads as a separate dea
   assert.equal(same.separate, false);
   const [, ge] = L.planCompImport([{ tenant: 'GE', building: 'A', sf: 6000, signedDate: '2025-01-01' }, { tenant: 'Gemini Health', building: 'B', sf: 6000, signedDate: '2024-01-01' }], []);
   assert.equal(ge.status, 'new');
+});
+
+test('HubSpot two-way: fields map both ways; a field changed on one side takes that side, both changed the newer wins', () => {
+  const co = { id: 'c1', name: 'Acme', website: 'https://www.acme.test/about', city: 'Atlanta, GA', sfOccupied: 12000, leaseExpiration: '2027-06-30', updatedAt: '2026-11-01T10:00:00Z' };
+  const hs = L.toHubSpot('companies', co);
+  assert.equal(hs.domain, 'acme.test');
+  assert.equal(hs.city, 'Atlanta');
+  assert.equal(hs.state, 'GA');
+  assert.equal(hs.square_footage, '12000');
+  assert.deepEqual(L.fromHubSpot('companies', { city: 'Marietta', square_footage: '15000.0' }, co), { city: 'Marietta, GA', sfOccupied: 15000 });
+  // Agreed base = what both held after the last sync.
+  const linked = Object.assign({}, co, { hubspotSync: { base: Object.assign({}, hs) } });
+  // HubSpot changed the size only: HubSpot's value comes in.
+  let m = L.mergeFromHubSpot('companies', linked, Object.assign({}, hs, { square_footage: '15000' }), '2026-10-01T00:00:00Z');
+  assert.deepEqual(m.patch, { sfOccupied: 15000 });
+  // The CRM changed the size only (HubSpot still has the base): nothing comes in, the base stays so the push sends it.
+  m = L.mergeFromHubSpot('companies', Object.assign({}, linked, { sfOccupied: 14000 }), hs, '2026-11-05T00:00:00Z');
+  assert.deepEqual(m.patch, {});
+  assert.equal(m.base.square_footage, '12000');
+  // Both changed: the more recent edit wins.
+  const both = Object.assign({}, linked, { sfOccupied: 14000 });
+  assert.deepEqual(L.mergeFromHubSpot('companies', both, Object.assign({}, hs, { square_footage: '15000' }), '2026-11-02T00:00:00Z').patch, { sfOccupied: 15000 });
+  assert.deepEqual(L.mergeFromHubSpot('companies', both, Object.assign({}, hs, { square_footage: '15000' }), '2026-10-30T00:00:00Z').patch, {});
+  // Never compared before: the newer side wins; a blank in HubSpot never wipes the CRM.
+  m = L.mergeFromHubSpot('companies', co, Object.assign({}, hs, { submarket: 'Northside', lease_expiration: '' }), '2026-11-02T00:00:00Z');
+  assert.deepEqual(m.patch, { submarket: 'Northside' });
+  m = L.mergeFromHubSpot('companies', co, Object.assign({}, hs, { address: '9 Elm St' }), '2026-10-02T00:00:00Z');
+  assert.deepEqual(m.patch, {});
+  assert.equal(m.base.address, '9 Elm St', 'base is HubSpot, so the push sends the CRM value');
+});
+
+test('HubSpot two-way: what the CRM pushes, and applying the bridge answer', () => {
+  const since = Date.parse('2026-11-01T00:00:00Z');
+  const data = {
+    companies: [
+      { id: 'c-new', name: 'Acme', website: 'acme.test', updatedAt: '2026-11-05T00:00:00Z' },
+      { id: 'c-old', name: 'Birch', updatedAt: '2026-01-05T00:00:00Z' },
+      { id: 'hs-co-7', name: 'Cedar', submarket: 'Uptown', updatedAt: '2026-11-06T00:00:00Z', hubspotSync: { base: L.toHubSpot('companies', { name: 'Cedar', submarket: 'Northside' }) } },
+      { id: 'hs-co-8', name: 'Dune', updatedAt: '2026-11-06T00:00:00Z', hubspotSync: { base: L.toHubSpot('companies', { name: 'Dune' }) } },
+    ],
+    contacts: [
+      { id: 'p1', companyId: 'c-new', firstName: 'Pat', lastName: 'Lee', email: 'Pat@Acme.test', updatedAt: '2026-11-05T00:00:00Z' },
+      { id: 'p2', companyId: 'c-new', firstName: 'Sam', email: 'sam@myfirm.test', updatedAt: '2026-11-05T00:00:00Z' },
+    ],
+    deals: [
+      { id: 'd1', companyId: 'hs-co-7', name: 'Cedar relocation', stage: 'RFP', targetClose: '2027-03-31', updatedAt: '2026-11-05T00:00:00Z' },
+      { id: 'd2', companyId: 'gone', name: 'Orphan', stage: 'LOI', updatedAt: '2026-11-05T00:00:00Z' },
+    ],
+  };
+  const push = L.planHubSpotPush(data, { since, internalDomain: 'myfirm.test' });
+  assert.deepEqual(push.companies.map((x) => x.crmId), ['c-new', 'hs-co-7'], 'old unlinked and unchanged linked records stay put');
+  assert.equal(push.companies[0].hubspotId, '');
+  assert.equal(push.companies[0].props.domain, 'acme.test');
+  assert.deepEqual(push.companies[1].props, { submarket: 'Uptown' }, 'only what changed');
+  assert.equal(push.companies[1].hubspotId, '7');
+  assert.deepEqual(push.contacts.map((x) => [x.crmId, x.props.email, x.companyCrmId, x.associate]), [['p1', 'pat@acme.test', 'c-new', true]], 'colleagues never go to HubSpot');
+  assert.deepEqual(push.deals.map((x) => [x.crmId, x.props.dealstage, x.companyHubspotId]), [['d1', 'Proposal/LOI', '7']], 'a deal needs its company');
+  // The bridge created Acme (or found it by domain), and HubSpot had the newer submarket for Cedar.
+  const res = L.planPushResults(
+    { companies: [{ crmId: 'c-new', hubspotId: '55', props: push.companies[0].props }, { crmId: 'hs-co-7', hubspotId: '7', props: {}, kept: { submarket: 'Riverside' } }], contacts: [{ crmId: 'p1', hubspotId: '91', props: push.contacts[0].props, companyHubspotId: '55' }], deals: [{ crmId: 'd1', error: 'HubSpot 400' }] },
+    data,
+    '1234'
+  );
+  const acme = res.companies.find((x) => x.id === 'c-new');
+  assert.equal(acme.hubspotId, '55');
+  assert.equal(acme.hubspotUrl, 'https://app.hubspot.com/contacts/1234/record/0-2/55');
+  assert.equal(acme.hubspotSync.base.domain, 'acme.test');
+  const cedar = res.companies.find((x) => x.id === 'hs-co-7');
+  assert.equal(cedar.submarket, 'Riverside');
+  assert.equal(cedar.hubspotId, undefined, 'HubSpot-born records keep their ID in the record ID');
+  assert.equal(cedar.hubspotSync.base.submarket, 'Riverside');
+  assert.equal(res.contacts[0].hubspotSync.company, '55');
+  assert.equal(res.errors, 1);
+});
+
+test('HubSpot two-way pull: new HubSpot deals for CRM companies are added, linked deals follow the newer edit', () => {
+  const data = {
+    companies: [{ id: 'hs-co-7', name: 'Cedar', assetClass: 'Industrial' }],
+    contacts: [],
+    deals: [{ id: 'hs-dl-3', companyId: 'hs-co-7', name: 'Cedar renewal', stage: 'Touring', updatedAt: '2026-10-01T00:00:00Z', hubspotSync: { base: { dealname: 'Cedar renewal', dealstage: 'Touring', closedate: '' } } }],
+    activities: [],
+    twoWay: true,
+  };
+  const payload = {
+    deals: [
+      { id: '3', companies: ['7'], properties: { dealname: 'Cedar renewal', dealstage: '3472', dealstage_label: 'Proposal/LOI', closedate: '2027-01-31T00:00:00Z', hs_lastmodifieddate: '2026-11-02T00:00:00Z' } },
+      { id: '4', companies: ['7'], properties: { dealname: 'Cedar expansion', dealstage_label: 'Closed Won', closedate: '2026-10-15T00:00:00Z', hs_lastmodifieddate: '2026-11-02T00:00:00Z' } },
+      { id: '5', companies: ['99'], properties: { dealname: 'Elsewhere', dealstage_label: 'Touring' } },
+    ],
+  };
+  const plan = L.planHubSpotSync(payload, data);
+  const linked = plan.deals.find((d) => d.id === 'hs-dl-3');
+  assert.equal(linked.stage, 'LOI');
+  assert.equal(linked.targetClose, '2027-01-31');
+  const fresh = plan.deals.find((d) => d.id === 'hs-dl-4');
+  assert.deepEqual([fresh.companyId, fresh.name, fresh.stage, fresh.closedDate, fresh.assetClass], ['hs-co-7', 'Cedar expansion', 'Closed Won', '2026-10-15', 'Industrial']);
+  assert.equal(plan.created.deals, 1);
+  assert.equal(plan.skipped, 1);
+  // Without two-way, deals are left alone.
+  assert.deepEqual(L.planHubSpotSync(payload, Object.assign({}, data, { twoWay: false })).deals, []);
+});
+
+test('HubSpot two-way push: a new contact brings its company along; a contact moved in the CRM is re-linked', () => {
+  const data = {
+    companies: [
+      { id: 'c-old', name: 'Birch', website: 'birch.test', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: 'hs-co-7', name: 'Cedar', updatedAt: '2026-01-01T00:00:00Z', hubspotSync: { base: L.toHubSpot('companies', { name: 'Cedar' }) } },
+    ],
+    contacts: [
+      { id: 'p1', companyId: 'c-old', firstName: 'Pat', email: 'pat@birch.test', updatedAt: '2026-11-05T00:00:00Z' },
+      { id: 'hs-ct-9', companyId: 'hs-co-7', firstName: 'Kim', email: 'kim@cedar.test', updatedAt: '2026-01-01T00:00:00Z', hubspotSync: { company: '3', base: L.toHubSpot('contacts', { firstName: 'Kim', email: 'kim@cedar.test' }) } },
+      { id: 'hs-ct-10', companyId: 'hs-co-7', firstName: 'Lou', updatedAt: '2026-01-01T00:00:00Z', hubspotSync: { company: '7', base: L.toHubSpot('contacts', { firstName: 'Lou' }) } },
+    ],
+    deals: [],
+  };
+  const push = L.planHubSpotPush(data, { since: Date.parse('2026-11-01T00:00:00Z') });
+  assert.deepEqual(push.companies.map((x) => [x.crmId, x.props.domain]), [['c-old', 'birch.test']]);
+  assert.deepEqual(push.contacts.map((x) => [x.crmId, Boolean(x.associate), x.companyHubspotId]), [['p1', true, ''], ['hs-ct-9', true, '7']]);
+  assert.deepEqual(push.contacts[1].props, {}, 'only the link changes');
 });
