@@ -1694,9 +1694,13 @@ test('HubSpot two-way: fields map both ways; a field changed on one side takes t
   // Never compared before: the newer side wins; a blank in HubSpot never wipes the CRM.
   m = L.mergeFromHubSpot('companies', co, Object.assign({}, hs, { submarket: 'Northside', lease_expiration: '' }), '2026-11-02T00:00:00Z');
   assert.deepEqual(m.patch, { submarket: 'Northside' });
-  m = L.mergeFromHubSpot('companies', co, Object.assign({}, hs, { address: '9 Elm St' }), '2026-10-02T00:00:00Z');
-  assert.deepEqual(m.patch, {});
-  assert.equal(m.base.address, '9 Elm St', 'base is HubSpot, so the push sends the CRM value');
+  m = L.mergeFromHubSpot('companies', co, Object.assign({}, hs, { address: '9 Elm St', submarket: 'Northside' }), '2026-10-02T00:00:00Z');
+  assert.deepEqual(m.patch, { address: '9 Elm St', submarket: 'Northside' }, "an older HubSpot value still fills the CRM's blanks");
+  assert.equal(m.base.address, '9 Elm St');
+  const withSub = Object.assign({}, co, { submarket: 'Uptown' });
+  m = L.mergeFromHubSpot('companies', withSub, Object.assign({}, hs, { submarket: 'Northside' }), '2026-10-02T00:00:00Z');
+  assert.deepEqual(m.patch, {}, 'the newer CRM value stays');
+  assert.equal(m.base.submarket, 'Northside', 'base is HubSpot, so the push sends the CRM value');
 });
 
 test('HubSpot two-way: what the CRM pushes, and applying the bridge answer', () => {
@@ -1829,4 +1833,14 @@ test('deal contacts: the company\'s people until some are picked; removed ones d
   assert.deepEqual(L.dealContacts({ companyId: 'c1' }, contacts).map((p) => p.id), ['p1', 'p2']);
   assert.deepEqual(L.dealContacts({ companyId: 'c1', contactIds: ['p2', 'gone'] }, contacts).map((p) => p.id), ['p2']);
   assert.deepEqual(L.dealContacts({ companyId: 'c1', contactIds: [] }, contacts), []);
+});
+
+test('HubSpot two-way: on the first comparison a blank in the CRM is filled from HubSpot, never pushed over it', () => {
+  const crm = { id: 'hs-co-7', name: 'Cedar', submarket: 'Uptown', updatedAt: '2026-11-10T12:00:00Z' };
+  const m = L.mergeFromHubSpot('companies', crm, { name: 'Cedar', domain: 'cedar.test', submarket: 'Northside' }, '2026-11-08T00:00:00Z');
+  assert.deepEqual(m.patch, { website: 'https://cedar.test' }, 'the blank website is filled; the newer CRM submarket stays');
+  assert.equal(m.base.domain, 'cedar.test');
+  const after = Object.assign({}, crm, m.patch, { hubspotSync: { base: m.base } });
+  const push = L.planHubSpotPush({ companies: [after], contacts: [], deals: [] }, {});
+  assert.deepEqual(push.companies.map((x) => x.props), [{ submarket: 'Uptown' }], 'only the newer CRM value goes, no blanks');
 });

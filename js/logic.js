@@ -993,8 +993,13 @@
       if (hs === crm[k]) return (nextBase[k] = hs);
       const hsChanged = !base || hs !== (base[k] || '');
       const crmChanged = !base || crm[k] !== (base[k] || '');
-      // A blank in HubSpot never wipes a value the CRM has unless HubSpot cleared it since the last agreement.
+      // First comparison: a blank on either side never wipes the other side's value; it gets filled in.
       if (!hs && !base) return;
+      if (!crm[k] && !base) {
+        take[k] = hsProps[k];
+        nextBase[k] = hs;
+        return;
+      }
       if (hsChanged && (!crmChanged || hsTime >= crmTime)) {
         take[k] = hsProps[k];
         nextBase[k] = hs;

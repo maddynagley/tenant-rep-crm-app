@@ -4,7 +4,8 @@
  * Lets the CRM pick up emails (with opens and replies), notes, meetings and calls that HubSpot logs from
  * Outlook, plus new and updated companies, contacts and deals (e.g. ones the ZoomInfo extension sends to
  * HubSpot), without ever putting a HubSpot key in the browser. With two-way sync on, the CRM also sends its
- * new and edited companies, contacts and deals here (doPost), and this script writes them to HubSpot:
+ * new and edited companies, contacts and deals here (doPost), and this script writes them to HubSpot (and
+ * deletes the ones Maddy deleted in the CRM and chose to delete in HubSpot too):
  * new records are matched first (companies by domain, then name; contacts by email; deals by name and
  * company) so nothing is doubled, and a field HubSpot changed more recently than the CRM is left alone.
  * The HubSpot token stays in this script's properties; the CRM only holds the bridge URL and a sync key.
@@ -110,14 +111,33 @@ function doPost(e) {
     const out = { ok: true, now: Date.now() };
     const companyIds = {};
     ['companies', 'contacts', 'deals'].forEach(function (type) {
-      out[type] = pushType_(type, (body[type] || []).slice(0, 100), companyIds);
+      out[type] = (body[type] || []).length ? pushType_(type, body[type].slice(0, 100), companyIds) : [];
     });
+    // Records deleted in the CRM that Maddy chose to delete in HubSpot too (they go to HubSpot's recycling bin).
+    if (body.archive) out.archived = archive_(body.archive);
     return json_(out);
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message ? err.message : err) });
   } finally {
     lock.releaseLock();
   }
+}
+
+// { companies: [ids], contacts: [ids], deals: [ids] } → per type { done: [ids], failed: [{ id, error }] }.
+function archive_(req) {
+  const out = {};
+  ['companies', 'contacts', 'deals'].forEach(function (type) {
+    const ids = (req[type] || []).map(String).slice(0, 100);
+    out[type] = { done: [], failed: [] };
+    if (!ids.length) return;
+    try {
+      hubspot_('post', '/crm/v3/objects/' + type + '/batch/archive', { inputs: ids.map(function (id) { return { id: id }; }) });
+      out[type].done = ids;
+    } catch (err) {
+      ids.forEach(function (id) { out[type].failed.push({ id: id, error: err.message }); });
+    }
+  });
+  return out;
 }
 
 // The same tidy form the CRM compares in ('' for blank).

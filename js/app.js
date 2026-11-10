@@ -4331,12 +4331,21 @@
           e.preventDefault();
           const rec = S.get(d.col, d.id);
           const what = d.col === 'companies' ? `"${rec.name}" and all of its contacts, deals and activity` : d.col === 'contacts' ? contactName(rec) : 'this ' + LABELS[d.col].toLowerCase();
-          const inHubSpot = ['companies', 'contacts', 'deals'].includes(d.col) && (rec.hubspotId || /^hs-/.test(rec.id)) ? ' It stays in HubSpot, and HubSpot syncs won\'t bring it back.' : '';
-          if (!confirm(`Delete ${what}?${inHubSpot} This cannot be undone.`)) return;
-          // Remembered so a HubSpot sync doesn't add it again.
           const prefix = { companies: 'co', contacts: 'ct', deals: 'dl' }[d.col];
           const hs = prefix ? rec.hubspotId || (new RegExp('^hs-' + prefix + '-(\\d+)$').exec(rec.id) || [])[1] : '';
+          const twoWay = S.settings().hubspotTwoWay;
+          const inHubSpot = hs && !twoWay ? ' It stays in HubSpot, and HubSpot syncs won\'t bring it back.' : '';
+          if (!confirm(`Delete ${what}?${inHubSpot} This cannot be undone.`)) return;
+          // With two-way on, HubSpot's copy can go too (to HubSpot's recycling bin, restorable there for 90 days).
+          const label = d.col === 'contacts' ? contactName(rec) : rec.name || 'this record';
+          const alsoHubSpot =
+            hs && twoWay && confirm(`Also delete ${label} from HubSpot?\n\nOK = delete it in HubSpot too (HubSpot keeps it in its recycling bin for 90 days).\nCancel = keep it in HubSpot.${d.col === 'companies' ? '\n\nIts contacts and deals in HubSpot are not deleted.' : ''}`);
+          // Remembered so a HubSpot sync doesn't add it again.
           if (hs) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat(prefix + '-' + hs) });
+          if (alsoHubSpot) {
+            S.saveSettings({ hubspotArchive: (S.settings().hubspotArchive || []).concat(prefix + '-' + hs) });
+            setTimeout(() => archiveHubSpot(true), 0);
+          }
           S.remove(d.col, d.id);
           if (d.col === 'companies') location.hash = '#/companies';
           else if (d.col === 'deals') location.hash = '#/company/' + rec.companyId;
@@ -5270,6 +5279,7 @@
       if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       hubspotStatus += await pushHubSpot();
+      hubspotStatus += await archiveHubSpot(false);
       // The settings card redrew when the pull was saved; show the sending part too.
       if (location.hash.startsWith('#/data')) render();
       runWorkflows();
@@ -5326,6 +5336,38 @@
     }
     return `; sent ${sent[0]} compan${sent[0] === 1 ? 'y' : 'ies'}, ${sent[1]} contact${sent[1] === 1 ? '' : 's'} and ${sent[2]} deal${sent[2] === 1 ? '' : 's'} to HubSpot` + (failed.length ? ` (${failed.length} not sent: ${failed[0]})` : '');
   }
+  // Records deleted here that Maddy chose to delete in HubSpot too. Kept in a queue until HubSpot confirms,
+  // so one sent while offline goes on the next sync.
+  async function archiveHubSpot(manual) {
+    const st = S.settings();
+    const queue = st.hubspotArchive || [];
+    if (!queue.length || !st.hubspotBridgeUrl) return '';
+    const types = { co: 'companies', ct: 'contacts', dl: 'deals' };
+    const archive = { companies: [], contacts: [], deals: [] };
+    queue.forEach((k) => {
+      const [prefix, id] = k.split('-');
+      if (types[prefix]) archive[types[prefix]].push(id);
+    });
+    try {
+      const res = await fetch(st.hubspotBridgeUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ key: st.hubspotBridgeKey, archive }) });
+      let data;
+      try {
+        data = JSON.parse(await res.text());
+      } catch (e) {
+        data = {};
+      }
+      if (!data.ok || !data.archived) throw new Error(data.error || 'Update the HubSpot bridge script to the latest version to delete in HubSpot');
+      const done = new Set();
+      Object.keys(types).forEach((prefix) => ((data.archived[types[prefix]] || {}).done || []).forEach((id) => done.add(prefix + '-' + id)));
+      S.saveSettings({ hubspotArchive: (S.settings().hubspotArchive || []).filter((k) => !done.has(k)) });
+      if (manual && done.size) toast(`Deleted in HubSpot too (${done.size}).`);
+      return done.size ? `; deleted ${done.size} in HubSpot` : '';
+    } catch (err) {
+      if (manual) toast('Not deleted in HubSpot yet: ' + err.message + '. It will be tried again on the next sync.');
+      return '';
+    }
+  }
+
   // One time: everything in the CRM that isn't in HubSpot yet, in batches of up to 100 of each kind.
   async function sendAllToHubSpot() {
     const st = S.settings();
