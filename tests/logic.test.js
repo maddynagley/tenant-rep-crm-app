@@ -1996,3 +1996,46 @@ test('HubSpot sync: an email deleted in the CRM is not brought back', () => {
   const payload = { emails: [55, 56].map((id) => ({ id: String(id), companies: ['1'], properties: { hs_timestamp: '2026-10-29T12:00:00Z', hs_email_subject: 'Hello', hs_email_direction: 'EMAIL' } })) };
   assert.deepEqual(L.planHubSpotSync(payload, data).activities.map((a) => a.id), ['hs-em-56']);
 });
+
+test('quoted rates from broker emails: building, rate, type and OpEx; nothing guessed', () => {
+  const buildings = L.knownBuildings({ companies: [{ building: 'Uptown Tower' }], properties: [{ building: 'Riverside Center', address: '100 Main Street' }], comps: [], buildingRates: {} });
+  const q = (subject, body) => L.quotesFromEmail({ subject, body, date: '2026-11-10' }, buildings);
+  // One building in the subject, the rate and type in the body.
+  assert.deepEqual(q('RE: Uptown Tower availability', 'Hi Maddy,\nAsking rent is $32.50/RSF full service with 3% bumps. TI of $60/RSF available.\nThanks'), [
+    { building: 'Uptown Tower', rate: 32.5, basis: 'Full service', date: '2026-11-10', basisStated: true },
+  ]);
+  // NNN with an OpEx estimate.
+  assert.deepEqual(q('Riverside Center', 'Quoting $24.00 NNN. OpEx estimated at $11.25 for 2026.'), [
+    { building: 'Riverside Center', rate: 24, basis: 'NNN + OpEx', opex: 11.25, date: '2026-11-10', basisStated: true },
+  ]);
+  // Several buildings in one reply: each rate goes with the building named on its line or above it.
+  const multi = q('Options for your client', 'Here are a few:\n\nUptown Tower - Suite 400, 5,200 RSF\nRate: $34.00/RSF FS\n\n250 Peachtree Street NE: $29.50 psf full service\n');
+  assert.deepEqual(multi.map((x) => [x.building, x.rate, x.basis]), [['Uptown Tower', 34, 'Full service'], ['250 Peachtree Street NE', 29.5, 'Full service']]);
+  // The earlier thread quoted below the reply is ignored.
+  assert.deepEqual(q('RE: Uptown Tower', 'Sounds good, will send a proposal.\n\nOn Mon, Nov 9, 2026 at 9:00 AM Pat Lee wrote:\n> Asking is $30.00/RSF FS'), []);
+  // Money that isn't rent: TI, OpEx alone, parking, monthly or totals.
+  assert.deepEqual(q('Uptown Tower', 'TI allowance $55.00/RSF. Parking is $95/month. OpEx $12.10/RSF. Deposit of $25,000.'), []);
+  // No building it can tell: nothing saved rather than a guess.
+  assert.deepEqual(q('Quick question', 'We are asking $31.00/RSF full service.'), []);
+  // No type stated: saved as NNN but flagged.
+  assert.equal(q('Uptown Tower', 'Asking $33.00/RSF.')[0].basisStated, false);
+});
+
+test('quoted rates from emails: newer quotes replace older ones; removed ones stay removed', () => {
+  const rates = L.rememberRate({}, 'Uptown Tower', 30, '2026-10-01', 'Full service');
+  const quotes = [{ building: 'Uptown Tower', rate: 32, basis: 'Full service', date: '2026-11-10', emailId: 'hs-em-1', from: 'pat@landlord.test', subject: 'Uptown Tower', basisStated: true }];
+  const r = L.applyEmailQuotes(rates, quotes, []);
+  assert.equal(r.rates['uptown tower'].rate, 32);
+  assert.equal(r.rates['uptown tower'].emailId, 'hs-em-1');
+  assert.equal(r.saved.length, 1);
+  assert.equal(L.applyEmailQuotes(r.rates, quotes, []).saved.length, 0, 'the same email again changes nothing');
+  assert.equal(L.applyEmailQuotes(rates, [Object.assign({}, quotes[0], { date: '2026-09-01' })], []).saved.length, 0, 'an older email never replaces a newer quote');
+  assert.equal(L.applyEmailQuotes({}, quotes, ['uptown tower|hs-em-1']).saved.length, 0, 'removed stays removed');
+});
+
+test('HubSpot sync reads quotes from incoming emails, even ones not filed under a company', () => {
+  const data = { companies: [{ id: 'c1', name: 'Acme', building: 'Uptown Tower' }], contacts: [], deals: [], activities: [], internalDomain: 'myfirm.test' };
+  const email = (id, dir, from, body) => ({ id, properties: { hs_email_direction: dir, hs_email_from_email: from, hs_email_subject: 'RE: Uptown Tower', hs_email_text: body, hs_timestamp: '2026-11-10T15:00:00Z' } });
+  const plan = L.planHubSpotSync({ emails: [email('1', 'INCOMING_EMAIL', 'pat@landlord.test', 'Asking $35.00/RSF FS.'), email('2', 'EMAIL', 'me@myfirm.test', 'Is it still $35.00/RSF FS?'), email('3', 'INCOMING_EMAIL', 'sam@myfirm.test', 'They said $36.00/RSF FS.')] }, data);
+  assert.deepEqual(plan.quotes.map((q) => [q.building, q.rate, q.emailId, q.from]), [['Uptown Tower', 35, 'hs-em-1', 'pat@landlord.test']]);
+});

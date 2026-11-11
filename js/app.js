@@ -1756,6 +1756,14 @@
   }
 
   // Building quotes saved from the Draft email window; 6 months old or more is flagged to re-confirm.
+  // Where a quote came from: a broker's email (with who sent it), and whether the email said NNN or full service.
+  function quoteSource(r) {
+    if (!r.emailId) return '';
+    const email = S.get('activities', r.emailId);
+    const label = 'From email' + (r.from ? ' · ' + r.from : '');
+    const link = email && email.companyId ? `<a href="#/company/${esc(email.companyId)}" title="${esc(r.subject || '')}">${esc(label)}</a>` : `<span title="${esc(r.subject || '')}">${esc(label)}</span>`;
+    return `<div class="sub">${link}${r.basisStated === false ? ' ' + badge('Type not stated: check', 'amber') : ''}</div>`;
+  }
   function quotedRates(q) {
     const list = L.quotedRateList(S.settings().buildingRates || {}, q, L.todayISO());
     const total = Object.keys(S.settings().buildingRates || {}).length;
@@ -1778,14 +1786,14 @@
         <datalist id="quote-buildings">${buildings.map((b) => `<option value="${esc(b)}"></option>`).join('')}</datalist>
       </form>`;
     return `<section class="card"><h2>Quoted rates</h2>
-      <p class="hint">What each building is quoting. Add one here, or type a rate in the Draft email window and it's saved for that building. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; saving the rate again restarts the clock.</p>
+      <p class="hint">What each building is quoting. Rates brokers quote in emails HubSpot logs are saved here automatically (when the email names the building and the rate). Add one here, or type a rate in the Draft email window and it's saved for that building. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; saving the rate again restarts the clock.</p>
       ${form}
       ${
         list.length
           ? `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Building</th><th class="right">Quote</th><th>Saved</th><th></th><th></th></tr></thead><tbody>${list
               .map(
                 (r) => `<tr><td><strong>${esc(r.building)}</strong></td><td class="right nowrap">${esc(r.text)}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
-              <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : `<span class="muted">${r.ageMonths ? r.ageMonths + ' mo ago' : 'This month'}</span>`}</td>
+              <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : `<span class="muted">${r.ageMonths ? r.ageMonths + ' mo ago' : 'This month'}</span>`}${quoteSource(r)}</td>
               <td class="right nowrap"><button class="btn small" data-action="edit-quote" data-key="${esc(r.key)}">Edit</button> <button class="btn small" data-action="delete-quote" data-key="${esc(r.key)}">Remove</button></td></tr>`
               )
               .join('')}</tbody></table></div>`
@@ -4637,7 +4645,8 @@
           const r = rates[d.key];
           if (!r || !confirm('Remove the saved quote for ' + r.building + '?')) return;
           delete rates[d.key];
-          S.saveSettings({ buildingRates: rates });
+          // A quote read from an email isn't saved again from that same email.
+          S.saveSettings(Object.assign({ buildingRates: rates }, r.emailId ? { quoteDismissed: (S.settings().quoteDismissed || []).concat(d.key + '|' + r.emailId).slice(-500) } : {}));
           return render();
         }
         case 'save-fill-in': {
@@ -5314,7 +5323,8 @@
       const added = S.all('activities').length - before;
       const leadsNote = data.leadsError && S.settings().hubspotTwoWay ? '. Lead stages: ' + data.leadsError : '';
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
-      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '') + leadsNote;
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '') + quotesNote(plan) + leadsNote;
+      if (!manual && plan.quotesSaved && plan.quotesSaved.length) toast('Saved ' + quotesNote(plan).replace(/^, /, '') + '. See Comps & Dates → Quoted rates.');
       if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
       hubspotStatus += await pushHubSpot();
@@ -5334,7 +5344,7 @@
     }
   }
   function hubspotData() {
-    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain(), submarketMap: S.settings().submarketMap, twoWay: Boolean(S.settings().hubspotTwoWay) };
+    return { companies: S.all('companies'), contacts: S.all('contacts'), deals: S.all('deals'), activities: S.all('activities'), hubspotSkip: S.settings().hubspotSkip, internalDomain: myEmailDomain(), submarketMap: S.settings().submarketMap, twoWay: Boolean(S.settings().hubspotTwoWay), comps: S.all('comps'), properties: S.all('properties'), buildingRates: S.settings().buildingRates };
   }
   function applyHubSpotRecords(plan) {
     plan.companies.forEach((c) => {
@@ -5348,6 +5358,11 @@
     (plan.deals || []).forEach((d) => S.upsert('deals', d, { silent: true, touch: false }));
     // Companies merged in HubSpot are merged here too.
     (plan.merges || []).forEach((m) => S.get('companies', m.from) && S.get('companies', m.to) && S.mergeCompanies(m.from, m.to, true));
+    // Rates brokers quoted by email go to Comps & Dates → Quoted rates.
+    const st = S.settings();
+    const q = L.applyEmailQuotes(st.buildingRates, plan.quotes, st.quoteDismissed);
+    if (q.saved.length) S.saveSettings({ buildingRates: q.rates });
+    plan.quotesSaved = q.saved;
   }
   // The HubSpot portal number, from any record linked to HubSpot (for record links).
   function hubspotPortal() {
@@ -5450,6 +5465,10 @@
       hubspotSyncing = false;
       render();
     }
+  }
+  function quotesNote(plan) {
+    const q = plan.quotesSaved || [];
+    return q.length ? `, ${q.length} quoted rate${q.length > 1 ? 's' : ''} from broker emails (${q.map((x) => x.building).join(', ')})` : '';
   }
   function newRecordsNote(plan) {
     const c = plan.created || {};

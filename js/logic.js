@@ -1397,6 +1397,18 @@
     };
     const replies = [];
 
+    // Rates quoted in incoming emails (brokers answering building inquiries), whether or not the email is filed.
+    const quotes = [];
+    const buildings = knownBuildings(data);
+    (payload.emails || []).forEach((rec) => {
+      const p = rec.properties || {};
+      if (p.hs_email_direction !== 'INCOMING_EMAIL' || skip.has('hs-em-' + rec.id)) return;
+      const from = String(p.hs_email_from_email || '').toLowerCase();
+      if (ownDomains.has(from.split('@')[1])) return;
+      quotesFromEmail({ subject: p.hs_email_subject, body: p.hs_email_text, date: hsDate(p.hs_timestamp) }, buildings).forEach((q) =>
+        quotes.push(Object.assign(q, { emailId: 'hs-em-' + rec.id, from, subject: String(p.hs_email_subject || '') }))
+      );
+    });
     (payload.emails || []).forEach((rec) => {
       const p = rec.properties || {};
       const inbound = p.hs_email_direction === 'INCOMING_EMAIL';
@@ -1501,7 +1513,7 @@
       if (patch) Object.assign(patch, { pendingTemplate: '' });
       else companyPatches.push({ id: cid, pendingTemplate: '' });
     });
-    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, deals: recordPatches.deals, merges, created, skipped, updatedFromHubSpot };
+    return { activities: upserts, companies: recordPatches.companies.concat(companyPatches), contacts: recordPatches.contacts, deals: recordPatches.deals, merges, quotes, created, skipped, updatedFromHubSpot };
   }
 
   // ---------- shared prospect lists (two-way Google Sheet) ----------
@@ -2007,6 +2019,100 @@
         ? 'Quoted ' + fmtDate(hit.date) + ' (' + rateText(hit.rate, hit.basis || 'NNN', hit.opex) + '), ' + age + ' months ago. Re-confirm the rate at ' + hit.building + ' before sending.'
         : 'Saved for ' + hit.building + ' on ' + fmtDate(hit.date) + ': ' + rateText(hit.rate, hit.basis || 'NNN', hit.opex) + '.',
     });
+  }
+
+  // ---------- quoted rates read from broker emails ----------
+  // Building names the CRM knows (companies, comps, market survey properties, saved quotes), longest first.
+  function knownBuildings(data) {
+    const names = []
+      .concat((data.companies || []).map((c) => c.building))
+      .concat((data.comps || []).map((c) => c.building))
+      .concat((data.properties || []).map((p) => p.building))
+      .concat((data.properties || []).map((p) => p.address))
+      .concat(Object.values(data.buildingRates || {}).map((r) => r.building))
+      .map((n) => String(n || '').trim())
+      .filter((n) => buildingKey(n).length >= 5 && !/^\d+$/.test(buildingKey(n)));
+    const seen = {};
+    return names.filter((n) => !seen[buildingKey(n)] && (seen[buildingKey(n)] = true)).sort((a, b) => b.length - a.length);
+  }
+  const STREET = '(?:St|Street|Rd|Road|Pkwy|Pky|Parkway|Blvd|Boulevard|Ave|Avenue|Dr|Drive|Way|Ln|Lane|Cir|Circle|Ct|Court|Pl|Place|Hwy|Highway|Pike|Trl|Trail|Ctr|Center|Centre|Plaza|Sq|Square|Concourse|Point|Park)';
+  const ADDRESS_RE = new RegExp('\\b\\d{2,5}\\s+(?:[NSEW]\\.?\\s+)?[A-Z0-9][\\w.\'&-]*(?:\\s+[A-Z0-9][\\w.\'&-]*){0,4}?\\s+' + STREET + '\\b\\.?(?:\\s+(?:NE|NW|SE|SW))?');
+  // A rent per SF per year, e.g. "$32.50/RSF", "$28 psf NNN", "asking $41.00 full service" (not TI, OpEx, parking
+  // or monthly figures).
+  const RATE_RE = /\$\s?(\d{1,3}(?:\.\d{1,2})?)(?:\s*[-–]\s*\$?\s?\d{1,3}(?:\.\d{1,2})?)?(\s*(?:\/\s*(?:r?sf|sq\.?\s?ft\.?|square foot)(?:\s*\/\s*(?:yr|year))?|psf|per\s+(?:r?sf|square foot))?)(\s*,?\s*(?:nnn|triple net|full service|fsg?|full-service|gross|modified gross|mg|net)\b)?/gi;
+  function basisOf(text) {
+    if (/full[\s-]?service|\bfsg?\b|\bgross\b|\bmodified gross\b|\bmg\b/i.test(text)) return 'Full service';
+    if (/\bnnn\b|triple net|\bnet\b/i.test(text)) return 'NNN';
+    return '';
+  }
+  // One email → quotes [{ building, rate, basis, opex, date, basisStated }]. buildings: knownBuildings().
+  function quotesFromEmail(email, buildings) {
+    const own = String(email.body || '')
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*(?:On .{0,200}wrote:|From:\s.+|-{2,}\s*Original Message|_{8,})/i)[0]
+      .split('\n')
+      .filter((l) => !/^\s*>/.test(l))
+      .join('\n');
+    if (!/\$\s?\d/.test(own)) return [];
+    const keys = (buildings || []).map((b) => ({ name: b, key: ' ' + buildingKey(b) + ' ' }));
+    const findBuilding = (text) => {
+      const k = ' ' + buildingKey(text) + ' ';
+      const hit = keys.find((b) => k.includes(b.key));
+      if (hit) return hit.name;
+      const addr = ADDRESS_RE.exec(String(text || ''));
+      return addr ? addr[0].replace(/\.$/, '').trim() : '';
+    };
+    const subject = String(email.subject || '').replace(/^\s*((re|fw|fwd)\s*:\s*|\[external\]\s*|reply:\s*)+/gi, '');
+    const fromSubject = findBuilding(subject);
+    const wholeBasis = basisOf(own);
+    const out = [];
+    let current = '';
+    own.split(/\n+/).forEach((line) => {
+      const here = findBuilding(line);
+      if (here) current = here;
+      RATE_RE.lastIndex = 0;
+      let m;
+      while ((m = RATE_RE.exec(line))) {
+        const rate = parseNumber(m[1]);
+        const unit = Boolean(m[2] && m[2].trim());
+        const basisWord = m[3] ? basisOf(m[3]) : '';
+        const before = line.slice(Math.max(0, m.index - 40), m.index).toLowerCase();
+        const after = line.slice(m.index + m[0].length, m.index + m[0].length + 12).toLowerCase();
+        // Not rent: improvement allowances, operating costs, parking, monthly or total figures.
+        if (/\b(ti|tia|allowance|improvement|opex|op ex|operating|cam|tax|taxes|insurance|expenses|parking|deposit|commission|fee)\b[^$]*$/.test(before)) continue;
+        if (/^\s*(\/\s*(mo|month|space|stall)|per\s+(month|space)|\s*(k|m|mm|million|thousand)\b)/.test(after)) continue;
+        const rentWord = /\b(rate|rent|asking|quoted?|lease rate|rental)\b/.test(before);
+        if (!unit && !basisWord && !rentWord) continue;
+        if (rate < 5 || rate > 150) continue;
+        const building = current || fromSubject;
+        if (!building || out.some((q) => buildingKey(q.building) === buildingKey(building))) continue;
+        const basis = basisWord || basisOf(line) || wholeBasis;
+        const opexMatch = /(?:opex|op ex|operating expenses|cam|est(?:imated)?\.?\s+(?:opex|nnn|expenses)|nnn(?:s| charges| expenses)?)\D{0,25}\$\s?(\d{1,2}(?:\.\d{1,2})?)/i.exec(own);
+        const opex = opexMatch ? parseNumber(opexMatch[1]) : null;
+        const q = { building, rate, basis: basis === 'NNN' && opex ? 'NNN + OpEx' : basis || 'NNN', date: email.date, basisStated: Boolean(basis) };
+        if (q.basis === 'NNN + OpEx') q.opex = opex;
+        out.push(q);
+      }
+    });
+    return out;
+  }
+
+  // Quotes found in emails → the saved quotes. A newer quote for a building replaces an older one; one Maddy
+  // removed (dismissed: ['key|emailId']) isn't saved again. Returns { rates, saved: [quotes] }.
+  function applyEmailQuotes(rates, quotes, dismissed) {
+    const out = Object.assign({}, rates || {});
+    const gone = new Set(dismissed || []);
+    const saved = [];
+    (quotes || []).forEach((q) => {
+      const key = buildingKey(q.building);
+      const cur = out[key];
+      if (!key || gone.has(key + '|' + q.emailId) || (cur && (cur.emailId === q.emailId || (cur.date || '') >= (q.date || '')))) return;
+      const next = rememberRate(out, q.building, q.rate, q.date, q.basis, q.opex);
+      next[key] = Object.assign(next[key], { emailId: q.emailId, from: q.from, subject: q.subject, basisStated: q.basisStated });
+      Object.assign(out, next);
+      saved.push(q);
+    });
+    return { rates: out, saved };
   }
 
   // Every saved building quote for the Quoted rates list, matching a search, by building name.
@@ -4456,6 +4562,9 @@
     matchSubmarket,
     normalizeLinkedIn,
     planNamedFixes,
+    knownBuildings,
+    quotesFromEmail,
+    applyEmailQuotes,
     dealContacts,
     toHubSpot,
     fromHubSpot,
