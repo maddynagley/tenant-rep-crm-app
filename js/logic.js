@@ -2023,12 +2023,15 @@
   function buildingKey(name) {
     return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
-  function rememberRate(rates, building, rate, today, basis, opex, address) {
+  function rememberRate(rates, building, rate, today, basis, opex, address, asset) {
     const out = Object.assign({}, rates);
     const key = buildingKey(building);
     const r = parseNumber(rate);
     if (!key || !r) return out;
+    // Office or Industrial: the one given, else the one already saved for this building.
+    const keepAsset = asset || (out[key] && out[key].asset) || '';
     out[key] = { building: String(building).trim(), rate: r, date: today || todayISO() };
+    if (keepAsset) out[key].asset = keepAsset;
     if (String(address || '').trim() && buildingKey(address) !== key) out[key].address = String(address).trim();
     if (basis && basis !== 'NNN') out[key].basis = basis;
     if (basis === 'NNN + OpEx' && parseNumber(opex)) out[key].opex = parseNumber(opex);
@@ -2201,7 +2204,7 @@
       .concat(
         []
           .concat(data.properties || [], data.comps || [], data.companies || [])
-          .map((r) => ({ building: String(r.building || '').trim(), address: String(r.address || '').trim() }))
+          .map((r) => ({ building: String(r.building || '').trim(), address: String(r.address || '').trim(), asset: normalizeAssetClass(r.assetClass) }))
       )
       .filter((r) => r.building || r.address);
     const looksLikeAddress = (t) => /^\d{2,5}\s+\S/.test(String(t || '').trim());
@@ -2211,11 +2214,25 @@
         if (!k) return { building: '', address: '' };
         const named = rows.filter((r) => r.building && placeKey(r.building) === k);
         const addressed = rows.filter((r) => r.address && placeKey(r.address) === k);
+        const asset = (named.concat(addressed).find((r) => r.asset === 'Office' || r.asset === 'Industrial') || {}).asset || '';
         const name = (named[0] && named[0].building) || (addressed.find((r) => r.building && !looksLikeAddress(r.building)) || {}).building || '';
         const address = (named.find((r) => r.address) || {}).address || (addressed[0] && addressed[0].address) || (looksLikeAddress(text) ? String(text).trim() : '');
-        return { building: name || (looksLikeAddress(text) ? '' : String(text).trim()), address: address && buildingKey(address) !== buildingKey(name) ? address : '' };
+        const out = { building: name || (looksLikeAddress(text) ? '' : String(text).trim()), address: address && buildingKey(address) !== buildingKey(name) ? address : '' };
+        if (asset) out.asset = asset;
+        return out;
       },
     };
+  }
+
+  // Office or Industrial for a quoted building: the one saved with the quote, else what the CRM's comps,
+  // surveys and companies say about that building, else a guess from the rate (FSG quotes are office;
+  // NNN or NNN + OpEx under $20/SF is industrial). Returns { asset, guessed }.
+  function quoteAsset(quote, known) {
+    if (quote.asset === 'Office' || quote.asset === 'Industrial') return { asset: quote.asset, guessed: false };
+    if (known === 'Office' || known === 'Industrial') return { asset: known, guessed: false };
+    const basis = quote.basis || 'NNN';
+    const rate = parseNumber(quote.rate) || 0;
+    return { asset: basis !== 'Full service' && rate > 0 && rate < 20 ? 'Industrial' : 'Office', guessed: true };
   }
 
   // Every saved building quote for the Quoted rates list, matching a search, by building name.
@@ -4685,6 +4702,7 @@
     quotesFromEmail,
     applyEmailQuotes,
     buildingDirectory,
+    quoteAsset,
     QUOTE_BASIS_OPTIONS,
     planSurveyRates,
     buildingKey,

@@ -2106,3 +2106,14 @@ test('portfolio sheet: CRM deal notes are never written to the sheet; sheet Note
   assert.equal(deal.stage, 'Closed Lost');
   assert.ok(L.isRescinded(deal));
 });
+
+test('quoteAsset: saved, then known building, then a guess from the rate', () => {
+  assert.deepEqual(L.quoteAsset({ rate: 12, asset: 'Office' }, 'Industrial'), { asset: 'Office', guessed: false });
+  assert.deepEqual(L.quoteAsset({ rate: 12 }, 'Office'), { asset: 'Office', guessed: false });
+  assert.deepEqual(L.quoteAsset({ rate: 8.5 }), { asset: 'Industrial', guessed: true });
+  assert.deepEqual(L.quoteAsset({ rate: 37, basis: 'Full service' }), { asset: 'Office', guessed: true });
+  const dir = L.buildingDirectory({ comps: [{ building: 'Cedar Park', address: '10 Main St', assetClass: 'Industrial' }] });
+  assert.equal(dir.lookup('Cedar Park').asset, 'Industrial');
+  const rates = L.rememberRate({ 'cedar park': { building: 'Cedar Park', rate: 9, asset: 'Industrial' } }, 'Cedar Park', 9.5, '2026-11-11');
+  assert.equal(rates['cedar park'].asset, 'Industrial');
+});

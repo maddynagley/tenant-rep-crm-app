@@ -24,7 +24,7 @@
       companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '', hideExpired: '' },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
       sharedList: { sort: 'score', dir: '' },
-      quotes: { sort: 'building', dir: '' },
+      quotes: { sort: 'building', dir: '', asset: 'All' },
       prospecting: { period: 'thisWeek', drill: '' },
       research: { statsAsset: 'Office', statsSub: '', statsQuarter: '', statsMetric: 'vacancy' },
       today: { sub: '' },
@@ -1769,6 +1769,12 @@
     if (!info.building && /^\d{2,5}\s/.test(r.building)) return { building: '', address: r.address || r.building };
     return { building: info.building || r.building, address: r.address || info.address || '' };
   }
+  // Office or Industrial for a quote (saved, else from the CRM's records of that building, else guessed from the rate).
+  function quoteAssetOf(r) {
+    const dir = quoteDirectory();
+    const known = dir.lookup(r.building).asset || (r.address ? dir.lookup(r.address).asset : '');
+    return L.quoteAsset(r, known);
+  }
   // Where a quote came from: a broker's email (with who sent it), and whether the email said NNN or full service.
   function quoteSource(r) {
     if (!r.emailId) return '<div class="sub">Typed in</div>';
@@ -1778,7 +1784,10 @@
     return `<div class="sub">${link}${r.basisStated === false ? ' ' + badge('Type not stated: check', 'amber') : ''}</div>`;
   }
   function quotedRates(q) {
-    const list = L.quotedRateList(S.settings().buildingRates || {}, q, L.todayISO());
+    const qa = state.quotes.asset || 'All';
+    const all = L.quotedRateList(S.settings().buildingRates || {}, q, L.todayISO()).map((r) => Object.assign(r, quoteNameAndAddress(r), quoteAssetOf(r)));
+    const list = all.filter((r) => qa === 'All' || r.asset === qa);
+    const assetCount = (a) => all.filter((r) => a === 'All' || r.asset === a).length;
     const total = Object.keys(S.settings().buildingRates || {}).length;
     const buildings = Array.from(
       new Set(
@@ -1793,6 +1802,7 @@
         <label>Building name<input name="building" list="quote-buildings" placeholder="e.g. Royal Woods" required /></label>
         <label>Address<input name="address" placeholder="e.g. 5238 Royal Woods Pkwy" /></label>
         <label>Rate ($/SF/yr)<input name="rate" inputmode="decimal" placeholder="12.75" required /></label>
+        <label>Asset<select name="asset">${options(['Office', 'Industrial'], '', 'Not sure')}</select></label>
         <label>Type<select name="basis">${options(L.QUOTE_BASIS_OPTIONS, 'NNN')}</select></label>
         <label id="quote-opex" hidden>OpEx ($/SF/yr)<input name="opex" inputmode="decimal" placeholder="3.50" /></label>
         <label>Date quoted<input type="date" name="date" value="${L.todayISO()}" /></label>
@@ -1802,22 +1812,25 @@
     return `<section class="card"><h2>Quoted rates <button class="btn small more" data-action="find-past-quotes" title="Read the broker emails already in the CRM for quoted rates">Find quotes in past emails</button></h2>
       <p class="hint">What each building is quoting. Rates brokers quote in emails HubSpot logs are saved here automatically (when the email names the building and the rate). Add one here, or type a rate in the Draft email window and it's saved for that building. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; saving the rate again restarts the clock.</p>
       ${form}
+      ${all.length ? `<div class="toolbar"><div class="seg" role="tablist">${['All', 'Office', 'Industrial']
+        .map((a) => `<button class="${qa === a ? 'on' : ''}" data-action="set-filter" data-scope="quotes" data-key="asset" data-value="${a}">${a} <span class="muted">${assetCount(a)}</span></button>`)
+        .join('')}</div></div>` : ''}
       ${
         list.length
-          ? `<div class="table-wrap"><table class="tbl compact"><thead><tr>${sortHead('quotes', 'building', 'Building')}${sortHead('quotes', 'address', 'Address')}${sortHead('quotes', 'quote', 'Quote', 'right')}${sortHead('quotes', 'opex', 'OpEx', 'right')}${sortHead('quotes', 'saved', 'Saved')}${sortHead('quotes', 'source', 'Source')}<th></th></tr></thead><tbody>${L.sortRows(
-              list.map((r) => Object.assign(r, quoteNameAndAddress(r))),
+          ? `<div class="table-wrap"><table class="tbl compact"><thead><tr>${sortHead('quotes', 'building', 'Building')}${sortHead('quotes', 'address', 'Address')}${sortHead('quotes', 'asset', 'Asset')}${sortHead('quotes', 'quote', 'Quote', 'right')}${sortHead('quotes', 'opex', 'OpEx', 'right')}${sortHead('quotes', 'saved', 'Saved')}${sortHead('quotes', 'source', 'Source')}<th></th></tr></thead><tbody>${L.sortRows(
+              list,
               SORT_COLUMNS.quotes,
               SORT_COLUMNS.quotes[state.quotes.sort] ? state.quotes.sort : 'building',
               state.quotes.dir,
               (a, b) => String(a.building || a.address).localeCompare(String(b.building || b.address))
             )
               .map(
-                (r) => `<tr><td>${r.building ? `<strong>${esc(r.building)}</strong>` : '<span class="muted">No name yet</span>'}</td><td>${r.address ? esc(r.address) : '<span class="muted">—</span>'}</td><td class="right nowrap">${esc(r.short)}</td><td class="right nowrap">${r.opex ? '$' + Number(r.opex).toFixed(2) : '<span class="muted">—</span>'}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
+                (r) => `<tr><td>${r.building ? `<strong>${esc(r.building)}</strong>` : '<span class="muted">No name yet</span>'}</td><td>${r.address ? esc(r.address) : '<span class="muted">—</span>'}</td><td class="nowrap"><select class="inline quiet" data-quote-asset="${esc(r.key)}" title="${r.guessed ? 'Guessed from the rate: pick Office or Industrial to confirm' : 'Office or industrial building'}">${options(['Office', 'Industrial'], r.asset)}</select>${r.guessed ? ' <span class="muted">guess</span>' : ''}</td><td class="right nowrap">${esc(r.short)}</td><td class="right nowrap">${r.opex ? '$' + Number(r.opex).toFixed(2) : '<span class="muted">—</span>'}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
               <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : ''}${quoteSource(r)}</td>
               <td class="right nowrap"><button class="btn small" data-action="edit-quote" data-key="${esc(r.key)}">Edit</button> <button class="btn small" data-action="delete-quote" data-key="${esc(r.key)}">Remove</button></td></tr>`
               )
               .join('')}</tbody></table></div>`
-          : emptyState(total ? 'No saved quotes match that search.' : 'No quotes saved yet. Add one above, or type a quoted rate in the Draft email window.')
+          : emptyState(total ? (all.length ? 'No ' + qa.toLowerCase() + ' quotes yet.' : 'No saved quotes match that search.') : 'No quotes saved yet. Add one above, or type a quoted rate in the Draft email window.')
       }</section>`;
   }
 
@@ -1915,6 +1928,7 @@
     quotes: {
       building: { get: (r) => r.building || r.address },
       address: { get: (r) => r.address },
+      asset: { get: (r) => r.asset },
       quote: { get: (r) => L.parseNumber(r.rate), desc: true },
       basis: { get: (r) => (r.basis === 'Full service' ? 'FSG' : 'NNN') },
       opex: { get: (r) => L.parseNumber(r.opex), desc: true },
@@ -4679,6 +4693,7 @@
           el.address.value = named.address;
           el.rate.value = r.rate;
           el.basis.value = r.basis || 'NNN';
+          el.asset.value = r.asset || '';
           el.opex.value = r.opex || '';
           el.date.value = r.date || L.todayISO();
           $('#quote-opex').hidden = el.basis.value !== 'NNN + OpEx';
@@ -4950,6 +4965,16 @@
     // A quoted rate is remembered for its building; picking a building with a saved rate fills it in.
     if (['Rate', 'RateBasis', 'OpEx', 'CompBuilding'].includes(d.fillIn)) onRateFillIn(d.fillIn);
     if (e.target.name === 'basis' && e.target.closest('#quote-form')) $('#quote-opex').hidden = e.target.value !== 'NNN + OpEx';
+    // Office or Industrial picked for a saved quote.
+    if (e.target.dataset && e.target.dataset.quoteAsset) {
+      const rates = Object.assign({}, S.settings().buildingRates || {});
+      const key = e.target.dataset.quoteAsset;
+      if (rates[key]) {
+        rates[key] = Object.assign({}, rates[key], { asset: e.target.value });
+        S.saveSettings({ buildingRates: rates });
+        render();
+      }
+    }
     if (e.target.id === 'add-day' && e.target.value) {
       toggleMeetingDay(e.target.value, true);
       e.target.value = '';
@@ -5021,7 +5046,7 @@
       let rates = Object.assign({}, S.settings().buildingRates || {});
       // Editing a quote under a new building name moves it rather than leaving the old one behind.
       if (fd.get('key')) delete rates[fd.get('key')];
-      rates = L.rememberRate(rates, building, fd.get('rate'), fd.get('date') || L.todayISO(), fd.get('basis'), fd.get('opex'), String(fd.get('address') || '').trim());
+      rates = L.rememberRate(rates, building, fd.get('rate'), fd.get('date') || L.todayISO(), fd.get('basis'), fd.get('opex'), String(fd.get('address') || '').trim(), fd.get('asset') || '');
       S.saveSettings({ buildingRates: rates });
       toast('Saved the quote for ' + building + '.');
       return render();
