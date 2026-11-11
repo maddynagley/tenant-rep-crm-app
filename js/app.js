@@ -21,7 +21,7 @@
   const UI_KEY = 'tenant-rep-crm.ui';
   const state = mergeUIState(
     {
-      companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '' },
+      companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '', hideExpired: '' },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
       sharedList: { sort: 'score', dir: '' },
       quotes: { sort: 'building', dir: '' },
@@ -1760,7 +1760,7 @@
   // Building quotes saved from the Draft email window; 6 months old or more is flagged to re-confirm.
   // A quote's building name and address, filling either one in from the companies, comps and surveys that have it.
   function quoteDirectory() {
-    return L.buildingDirectory({ companies: S.all('companies'), comps: S.all('comps'), properties: S.all('properties') });
+    return L.buildingDirectory({ names: S.settings().buildingNames, companies: S.all('companies'), comps: S.all('comps'), properties: S.all('properties') });
   }
   function quoteNameAndAddress(r) {
     if (r.address && !/^\d{2,5}\s/.test(r.building)) return { building: r.building, address: r.address };
@@ -2138,7 +2138,13 @@
     const f = state.companies;
     if (f.list) return viewSharedList(f.list);
     const rows = filteredCompanies();
-    const shown = rows.slice(0, f.limit || 100);
+    // Leases already past their expiration go in their own section below the list (latest first when sorted by expiration).
+    const today = L.todayISO();
+    const isExpired = (r) => r.c.leaseExpiration && r.c.leaseExpiration < today;
+    const current = rows.filter((r) => !isExpired(r));
+    let expired = rows.filter(isExpired);
+    if ((f.sort || 'score') === 'expiration') expired = expired.slice().sort((a, b) => b.c.leaseExpiration.localeCompare(a.c.leaseExpiration) || byName(a, b));
+    const shown = current.slice(0, f.limit || 100);
     const totalSF = rows.reduce((t, r) => t + (L.parseNumber(r.c.sfOccupied) || 0), 0);
     const submarkets = distinct('companies', 'submarket');
     const windows = [{ value: '0-24', label: 'Next 24 months' }, { value: '0-36', label: 'Next 36 months' }].concat(
@@ -2175,15 +2181,31 @@
           f.sort
         )}</select>
       </div>
-      <p class="count">${rows.length} companies · ${L.fmtNumber(totalSF)} SF</p>
+      <p class="count">${rows.length} companies · ${L.fmtNumber(totalSF)} SF${expired.length ? ` · ${expired.length} with expired leases (listed separately below)` : ''}</p>
       ${hiddenSearchMatches(rows.length)}
       ${
-        rows.length
+        current.length
           ? `<div class="table-wrap"><table class="tbl">
-          <thead><tr>${sortHead('companies', 'score', 'Score')}${sortHead('companies', 'name', 'Company')}${sortHead('companies', 'asset', 'Asset')}${sortHead('companies', 'status', 'Status')}${sortHead('companies', 'submarket', 'Submarket')}${sortHead('companies', 'sf', 'SF', 'right')}${sortHead('companies', 'expiration', 'Lease expiration')}${sortHead('companies', 'lastTouch', 'Last touch')}</tr></thead>
-          <tbody>${shown
-            .map(
-              ({ c, score, last }) => `<tr data-href="#/company/${esc(c.id)}">
+          <thead><tr>${companyListHead()}</tr></thead>
+          <tbody>${shown.map(companyListRow).join('')}</tbody></table></div>
+          ${current.length > shown.length ? `<div class="show-more"><span class="muted">Showing ${shown.length} of ${current.length}</span> <button class="btn" data-action="show-more">Show ${Math.min(200, current.length - shown.length)} more</button></div>` : ''}`
+          : emptyState(expired.length ? 'Every company that matches has an expired lease (below).' : 'No companies match these filters.')
+      }
+      ${
+        expired.length
+          ? `<div class="section-head expired-head"><h2>Expired leases <span class="muted">${expired.length}</span></h2>
+              <span class="muted">Lease expiration has passed: confirm whether they renewed, moved or are in holdover, then update the date.</span>
+              <button class="btn" data-action="set-filter" data-scope="companies" data-key="hideExpired" data-value="${f.hideExpired ? '' : '1'}">${f.hideExpired ? 'Show' : 'Hide'}</button></div>
+            ${!f.hideExpired ? `<div class="table-wrap"><table class="tbl"><thead><tr>${companyListHead()}</tr></thead><tbody>${expired.map(companyListRow).join('')}</tbody></table></div>` : ''}`
+          : ''
+      }`;
+  }
+
+  function companyListHead() {
+    return `${sortHead('companies', 'score', 'Score')}${sortHead('companies', 'name', 'Company')}${sortHead('companies', 'asset', 'Asset')}${sortHead('companies', 'status', 'Status')}${sortHead('companies', 'submarket', 'Submarket')}${sortHead('companies', 'sf', 'SF', 'right')}${sortHead('companies', 'expiration', 'Lease expiration')}${sortHead('companies', 'lastTouch', 'Last touch')}`;
+  }
+  function companyListRow({ c, score, last }) {
+    return `<tr data-href="#/company/${esc(c.id)}">
               <td>${scoreChip(score)}</td>
               <td><strong>${esc(c.name)}</strong> <span class="icon-row">${summarizeIcon('companies', c.id)}${emailIcon(c.id, '')}</span> ${c.priority ? badge(c.priority, 'prio') : ''}<div class="sub">${esc([c.industry, c.building || c.address].filter(Boolean).join(' · '))}</div></td>
               <td>${inlineSelect('companies', c.id, 'assetClass', L.ASSET_CLASSES, c.assetClass, '—')}</td>
@@ -2191,12 +2213,7 @@
               <td>${editCell('companies', c.id, 'submarket', 'text', c.submarket, esc(c.submarket))}</td>
               <td class="right">${editCell('companies', c.id, 'sfOccupied', 'number', c.sfOccupied, esc(L.fmtNumber(c.sfOccupied)))}</td>
               <td>${editCell('companies', c.id, 'leaseExpiration', 'date', c.leaseExpiration, c.leaseExpiration ? expirationBadge(c.leaseExpiration) : '')}${shouldBeInMarket(c) ? ' <span class="flag" title="Inside typical lead time and not engaged">⚑</span>' : ''}</td>
-              <td>${last ? esc(L.fmtDate(last)) : '<span class="muted">Never</span>'}</td></tr>`
-            )
-            .join('')}</tbody></table></div>
-          ${rows.length > shown.length ? `<div class="show-more"><span class="muted">Showing ${shown.length} of ${rows.length}</span> <button class="btn" data-action="show-more">Show ${Math.min(200, rows.length - shown.length)} more</button></div>` : ''}`
-          : emptyState('No companies match these filters.')
-      }`;
+              <td>${last ? esc(L.fmtDate(last)) : '<span class="muted">Never</span>'}</td></tr>`;
   }
 
   function viewCompany(id) {

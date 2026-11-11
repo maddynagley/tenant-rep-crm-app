@@ -2187,18 +2187,30 @@
 
   // Building names and their street addresses, from companies, comps and market survey properties.
   // lookup(text) → { building, address } for a name or an address the CRM knows.
+  // data.names: { address: building name } saved in settings (buildingNames), checked first.
+  const STREET_WORDS = { parkway: 'pkwy', pky: 'pkwy', pkway: 'pkwy', street: 'st', road: 'rd', avenue: 'ave', av: 'ave', boulevard: 'blvd', drive: 'dr', lane: 'ln', court: 'ct', place: 'pl', highway: 'hwy', circle: 'cir', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw' };
+  function placeKey(text) {
+    return buildingKey(text)
+      .split(' ')
+      .map((w) => STREET_WORDS[w] || w)
+      .join(' ');
+  }
   function buildingDirectory(data) {
-    const rows = []
-      .concat(data.properties || [], data.comps || [], data.companies || [])
-      .map((r) => ({ building: String(r.building || '').trim(), address: String(r.address || '').trim() }))
+    const saved = Object.keys(data.names || {}).map((a) => ({ building: String(data.names[a] || '').trim(), address: String(a).trim() }));
+    const rows = saved
+      .concat(
+        []
+          .concat(data.properties || [], data.comps || [], data.companies || [])
+          .map((r) => ({ building: String(r.building || '').trim(), address: String(r.address || '').trim() }))
+      )
       .filter((r) => r.building || r.address);
     const looksLikeAddress = (t) => /^\d{2,5}\s+\S/.test(String(t || '').trim());
     return {
       lookup(text) {
-        const k = buildingKey(text);
+        const k = placeKey(text);
         if (!k) return { building: '', address: '' };
-        const named = rows.filter((r) => r.building && buildingKey(r.building) === k);
-        const addressed = rows.filter((r) => r.address && buildingKey(r.address) === k);
+        const named = rows.filter((r) => r.building && placeKey(r.building) === k);
+        const addressed = rows.filter((r) => r.address && placeKey(r.address) === k);
         const name = (named[0] && named[0].building) || (addressed.find((r) => r.building && !looksLikeAddress(r.building)) || {}).building || '';
         const address = (named.find((r) => r.address) || {}).address || (addressed[0] && addressed[0].address) || (looksLikeAddress(text) ? String(text).trim() : '');
         return { building: name || (looksLikeAddress(text) ? '' : String(text).trim()), address: address && buildingKey(address) !== buildingKey(name) ? address : '' };

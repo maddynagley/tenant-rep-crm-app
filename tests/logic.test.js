@@ -2088,3 +2088,10 @@ test('quoted rates keep a building name and an address, filled in from what the 
   assert.equal(L.rememberedRate(r, '2325 Lakeview Pky', '2026-11-11').rate, 37);
   assert.equal(L.quotedRateList(r, '', '2026-11-11')[0].short, '$37.00 FSG');
 });
+
+test('buildingDirectory: saved names and street-word spellings (Pky = Pkwy = Parkway)', () => {
+  const dir = L.buildingDirectory({ names: { '5238 Royal Woods Pkwy': 'Royal Woods Business Center' } });
+  assert.deepEqual(dir.lookup('5238 Royal Woods Pky'), { building: 'Royal Woods Business Center', address: '5238 Royal Woods Pkwy' });
+  assert.deepEqual(dir.lookup('5238 Royal Woods Parkway'), { building: 'Royal Woods Business Center', address: '5238 Royal Woods Pkwy' });
+  assert.deepEqual(dir.lookup('Royal Woods Business Center'), { building: 'Royal Woods Business Center', address: '5238 Royal Woods Pkwy' });
+});

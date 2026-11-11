@@ -519,3 +519,8 @@ dialog:has(.wide-dialog) { width: min(920px, calc(100vw - 24px)); }
 #submarket-form .dialog-body { padding: 8px 18px; max-height: 65vh; overflow: auto; }
 #submarket-form input { height: 30px; font-size: 13px; padding: 0 8px; width: calc(100% - 28px); min-width: 120px; }
 #submarket-form input.changed { border-color: var(--accent); background: var(--gray-soft); }
+
+/* Companies list: expired leases in their own section below the list */
+.expired-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 28px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
+.expired-head h2 { margin: 0; }
+.expired-head .btn { margin-left: auto; }
