@@ -24,6 +24,7 @@
       companies: { q: '', asset: 'All', status: '', submarket: '', window: '', priority: '', sort: 'score', dir: '', limit: 100, list: '', listStatus: '' },
       leads: { q: '', asset: 'All', stage: 'active', temp: '', sort: 'expiration', dir: '', limit: 100 },
       sharedList: { sort: 'score', dir: '' },
+      quotes: { sort: 'building', dir: '' },
       prospecting: { period: 'thisWeek', drill: '' },
       research: { statsAsset: 'Office', statsSub: '', statsQuarter: '', statsMetric: 'vacancy' },
       today: { sub: '' },
@@ -1757,9 +1758,20 @@
   }
 
   // Building quotes saved from the Draft email window; 6 months old or more is flagged to re-confirm.
+  // A quote's building name and address, filling either one in from the companies, comps and surveys that have it.
+  function quoteDirectory() {
+    return L.buildingDirectory({ companies: S.all('companies'), comps: S.all('comps'), properties: S.all('properties') });
+  }
+  function quoteNameAndAddress(r) {
+    if (r.address && !/^\d{2,5}\s/.test(r.building)) return { building: r.building, address: r.address };
+    const info = quoteDirectory().lookup(r.building);
+    // Saved under its street address with no name known: the address goes in its own column.
+    if (!info.building && /^\d{2,5}\s/.test(r.building)) return { building: '', address: r.address || r.building };
+    return { building: info.building || r.building, address: r.address || info.address || '' };
+  }
   // Where a quote came from: a broker's email (with who sent it), and whether the email said NNN or full service.
   function quoteSource(r) {
-    if (!r.emailId) return '';
+    if (!r.emailId) return '<div class="sub">Typed in</div>';
     const email = S.get('activities', r.emailId);
     const label = 'From email' + (r.from ? ' · ' + r.from : '');
     const link = email && email.companyId ? `<a href="#/company/${esc(email.companyId)}" title="${esc(r.subject || '')}">${esc(label)}</a>` : `<span title="${esc(r.subject || '')}">${esc(label)}</span>`;
@@ -1778,9 +1790,10 @@
     ).sort();
     const form = `<form id="quote-form" class="quote-form">
         <input type="hidden" name="key" />
-        <label>Building<input name="building" list="quote-buildings" placeholder="e.g. Royal Woods" required /></label>
+        <label>Building name<input name="building" list="quote-buildings" placeholder="e.g. Royal Woods" required /></label>
+        <label>Address<input name="address" placeholder="e.g. 5238 Royal Woods Pkwy" /></label>
         <label>Rate ($/SF/yr)<input name="rate" inputmode="decimal" placeholder="12.75" required /></label>
-        <label>Type<select name="basis">${options(L.QUOTE_BASES, 'NNN')}</select></label>
+        <label>Type<select name="basis">${options(L.QUOTE_BASIS_OPTIONS, 'NNN')}</select></label>
         <label id="quote-opex" hidden>OpEx ($/SF/yr)<input name="opex" inputmode="decimal" placeholder="3.50" /></label>
         <label>Date quoted<input type="date" name="date" value="${L.todayISO()}" /></label>
         <span class="quote-form-buttons"><button type="submit" class="btn primary">Save quote</button><button type="button" class="btn" data-action="clear-quote" hidden>Cancel edit</button></span>
@@ -1791,10 +1804,16 @@
       ${form}
       ${
         list.length
-          ? `<div class="table-wrap"><table class="tbl compact"><thead><tr><th>Building</th><th class="right">Quote</th><th>Saved</th><th></th><th></th></tr></thead><tbody>${list
+          ? `<div class="table-wrap"><table class="tbl compact"><thead><tr>${sortHead('quotes', 'building', 'Building')}${sortHead('quotes', 'address', 'Address')}${sortHead('quotes', 'quote', 'Quote', 'right')}${sortHead('quotes', 'opex', 'OpEx', 'right')}${sortHead('quotes', 'saved', 'Saved')}${sortHead('quotes', 'source', 'Source')}<th></th></tr></thead><tbody>${L.sortRows(
+              list.map((r) => Object.assign(r, quoteNameAndAddress(r))),
+              SORT_COLUMNS.quotes,
+              SORT_COLUMNS.quotes[state.quotes.sort] ? state.quotes.sort : 'building',
+              state.quotes.dir,
+              (a, b) => String(a.building || a.address).localeCompare(String(b.building || b.address))
+            )
               .map(
-                (r) => `<tr><td><strong>${esc(r.building)}</strong></td><td class="right nowrap">${esc(r.text)}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
-              <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : `<span class="muted">${r.ageMonths ? r.ageMonths + ' mo ago' : 'This month'}</span>`}${quoteSource(r)}</td>
+                (r) => `<tr><td>${r.building ? `<strong>${esc(r.building)}</strong>` : '<span class="muted">No name yet</span>'}</td><td>${r.address ? esc(r.address) : '<span class="muted">—</span>'}</td><td class="right nowrap">${esc(r.short)}</td><td class="right nowrap">${r.opex ? '$' + Number(r.opex).toFixed(2) : '<span class="muted">—</span>'}</td><td class="nowrap">${esc(L.fmtDate(r.date))}</td>
+              <td>${r.stale ? badge('Re-confirm · ' + r.ageMonths + ' mo old', 'red') : ''}${quoteSource(r)}</td>
               <td class="right nowrap"><button class="btn small" data-action="edit-quote" data-key="${esc(r.key)}">Edit</button> <button class="btn small" data-action="delete-quote" data-key="${esc(r.key)}">Remove</button></td></tr>`
               )
               .join('')}</tbody></table></div>`
@@ -1892,6 +1911,16 @@
   // Never touched counts as the longest since touch.
   const lastTouchCol = { get: (r) => r.last || '0000' };
   const SORT_COLUMNS = {
+    // Quoted rates (rows from quotedRateList, with building and address filled in).
+    quotes: {
+      building: { get: (r) => r.building || r.address },
+      address: { get: (r) => r.address },
+      quote: { get: (r) => L.parseNumber(r.rate), desc: true },
+      basis: { get: (r) => (r.basis === 'Full service' ? 'FSG' : 'NNN') },
+      opex: { get: (r) => L.parseNumber(r.opex), desc: true },
+      saved: { get: (r) => r.date, desc: true },
+      source: { get: (r) => (r.emailId ? 'Email' : 'Typed in') },
+    },
     companies: {
       score: { get: (r) => r.score, desc: true },
       name: { get: (r) => r.c.name },
@@ -4628,7 +4657,9 @@
           if (!r || !form) return;
           const el = form.elements;
           el.key.value = d.key;
-          el.building.value = r.building;
+          const named = quoteNameAndAddress(r);
+          el.building.value = named.building;
+          el.address.value = named.address;
           el.rate.value = r.rate;
           el.basis.value = r.basis || 'NNN';
           el.opex.value = r.opex || '';
@@ -4973,7 +5004,7 @@
       let rates = Object.assign({}, S.settings().buildingRates || {});
       // Editing a quote under a new building name moves it rather than leaving the old one behind.
       if (fd.get('key')) delete rates[fd.get('key')];
-      rates = L.rememberRate(rates, building, fd.get('rate'), fd.get('date') || L.todayISO(), fd.get('basis'), fd.get('opex'));
+      rates = L.rememberRate(rates, building, fd.get('rate'), fd.get('date') || L.todayISO(), fd.get('basis'), fd.get('opex'), String(fd.get('address') || '').trim());
       S.saveSettings({ buildingRates: rates });
       toast('Saved the quote for ' + building + '.');
       return render();
@@ -5363,7 +5394,7 @@
     (plan.merges || []).forEach((m) => S.get('companies', m.from) && S.get('companies', m.to) && S.mergeCompanies(m.from, m.to, true));
     // Rates brokers quoted by email go to Comps & Dates → Quoted rates.
     const st = S.settings();
-    const q = L.applyEmailQuotes(st.buildingRates, plan.quotes, st.quoteDismissed);
+    const q = L.applyEmailQuotes(st.buildingRates, plan.quotes, st.quoteDismissed, quoteDirectory());
     if (q.saved.length) S.saveSettings({ buildingRates: q.rates });
     plan.quotesSaved = q.saved;
     plan.surveysUpdated = updateSurveyRates(plan.quotes);
@@ -5382,7 +5413,7 @@
     const st = S.settings();
     const buildings = L.knownBuildings({ companies: S.all('companies'), comps: S.all('comps'), properties: S.all('properties'), buildingRates: st.buildingRates });
     const quotes = L.quotesFromStoredEmails(S.all('activities'), buildings);
-    const q = L.applyEmailQuotes(st.buildingRates, quotes, st.quoteDismissed);
+    const q = L.applyEmailQuotes(st.buildingRates, quotes, st.quoteDismissed, quoteDirectory());
     if (q.saved.length) S.saveSettings({ buildingRates: q.rates });
     const surveys = updateSurveyRates(quotes);
     const emails = S.all('activities').filter((a) => a.type === 'Email' && a.inbound && a.body).length;

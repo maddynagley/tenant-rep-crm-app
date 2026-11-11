@@ -2073,3 +2073,18 @@ test('typing "-" in a bracketed fill-in leaves that note out', () => {
   assert.equal(L.fillTemplate(t, ctx(', and recently closed a deal nearby', "I've connected with Jo Smith on your team and")), "Advisors, and recently closed a deal nearby.\n\nI've connected with Jo Smith on your team and would love to talk.");
   assert.equal(L.soloText('My partner {Partner} and I are corporate real estate advisors, helping companies.'), "I'm a corporate real estate advisor, helping companies.");
 });
+
+test('quoted rates keep a building name and an address, filled in from what the CRM knows', () => {
+  const dir = L.buildingDirectory({ comps: [{ building: 'Lakeview Center', address: '2325 Lakeview Pky' }], properties: [{ building: 'Royal Woods', address: '5238 Royal Woods Pkwy' }], companies: [] });
+  assert.deepEqual(dir.lookup('2325 Lakeview Pky'), { building: 'Lakeview Center', address: '2325 Lakeview Pky' });
+  assert.deepEqual(dir.lookup('Royal Woods'), { building: 'Royal Woods', address: '5238 Royal Woods Pkwy' });
+  assert.deepEqual(dir.lookup('100 Main Street'), { building: '', address: '100 Main Street' });
+  const q = (building) => [{ building, rate: 37, basis: 'Full service', date: '2026-11-11', emailId: 'hs-em-1' }];
+  const r = L.applyEmailQuotes({}, q('2325 Lakeview Pky'), [], dir).rates;
+  assert.deepEqual([r['lakeview center'].building, r['lakeview center'].address], ['Lakeview Center', '2325 Lakeview Pky']);
+  // An address with no known name stays the quote's name.
+  assert.equal(L.applyEmailQuotes({}, q('100 Main Street'), [], dir).rates['100 main street'].building, '100 Main Street');
+  // A quote saved under its name is found by its address too (e.g. a company that only has the address).
+  assert.equal(L.rememberedRate(r, '2325 Lakeview Pky', '2026-11-11').rate, 37);
+  assert.equal(L.quotedRateList(r, '', '2026-11-11')[0].short, '$37.00 FSG');
+});

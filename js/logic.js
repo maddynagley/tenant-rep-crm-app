@@ -2007,6 +2007,9 @@
 
   // How a quoted rate reads in an email: "$12.75 NNN", "$12.75 NNN plus $3.50 OpEx" or "$28.00 FSG".
   const QUOTE_BASES = ['NNN', 'NNN + OpEx', 'Full service'];
+  // How each type reads on screen and in emails (the saved value stays the same).
+  const QUOTE_BASIS_LABELS = { 'Full service': 'FSG' };
+  const QUOTE_BASIS_OPTIONS = QUOTE_BASES.map((v) => ({ value: v, label: QUOTE_BASIS_LABELS[v] || v }));
   function rateText(rate, basis, opex) {
     const $ = (n) => '$' + Number(n).toFixed(2);
     if (basis === 'Full service') return $(rate) + ' FSG';
@@ -2020,12 +2023,13 @@
   function buildingKey(name) {
     return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
-  function rememberRate(rates, building, rate, today, basis, opex) {
+  function rememberRate(rates, building, rate, today, basis, opex, address) {
     const out = Object.assign({}, rates);
     const key = buildingKey(building);
     const r = parseNumber(rate);
     if (!key || !r) return out;
     out[key] = { building: String(building).trim(), rate: r, date: today || todayISO() };
+    if (String(address || '').trim() && buildingKey(address) !== key) out[key].address = String(address).trim();
     if (basis && basis !== 'NNN') out[key].basis = basis;
     if (basis === 'NNN + OpEx' && parseNumber(opex)) out[key].opex = parseNumber(opex);
     return out;
@@ -2035,7 +2039,8 @@
     const key = buildingKey(building);
     if (!key) return null;
     const near = key.length >= 6 && Object.keys(rates).find((k) => k.length >= 6 && (key.includes(k) || k.includes(key)));
-    const hit = rates[key] || (near && rates[near]);
+    const byAddress = Object.keys(rates).find((k) => rates[k].address && buildingKey(rates[k].address) === key);
+    const hit = rates[key] || (byAddress && rates[byAddress]) || (near && rates[near]);
     if (!hit) return null;
     const age = Math.max(0, monthsUntil(today || todayISO(), hit.date) || 0);
     const stale = age >= RATE_STALE_MONTHS;
@@ -2126,15 +2131,18 @@
 
   // Quotes found in emails → the saved quotes. A newer quote for a building replaces an older one; one Maddy
   // removed (dismissed: ['key|emailId']) isn't saved again. Returns { rates, saved: [quotes] }.
-  function applyEmailQuotes(rates, quotes, dismissed) {
+  function applyEmailQuotes(rates, quotes, dismissed, directory) {
     const out = Object.assign({}, rates || {});
     const gone = new Set(dismissed || []);
     const saved = [];
-    (quotes || []).forEach((q) => {
+    (quotes || []).forEach((found) => {
+      // The building's name and address, when the CRM knows them (an email may give only one).
+      const info = directory ? directory.lookup(found.building) : { building: found.building, address: '' };
+      const q = Object.assign({}, found, { building: info.building || info.address || found.building, address: info.building ? info.address : '' });
       const key = buildingKey(q.building);
       const cur = out[key];
       if (!key || gone.has(key + '|' + q.emailId) || (cur && (cur.emailId === q.emailId || (cur.date || '') >= (q.date || '')))) return;
-      const next = rememberRate(out, q.building, q.rate, q.date, q.basis, q.opex);
+      const next = rememberRate(out, q.building, q.rate, q.date, q.basis, q.opex, q.address);
       next[key] = Object.assign(next[key], { emailId: q.emailId, from: q.from, subject: q.subject, basisStated: q.basisStated });
       Object.assign(out, next);
       saved.push(q);
@@ -2177,12 +2185,39 @@
     return quotes;
   }
 
+  // Building names and their street addresses, from companies, comps and market survey properties.
+  // lookup(text) → { building, address } for a name or an address the CRM knows.
+  function buildingDirectory(data) {
+    const rows = []
+      .concat(data.properties || [], data.comps || [], data.companies || [])
+      .map((r) => ({ building: String(r.building || '').trim(), address: String(r.address || '').trim() }))
+      .filter((r) => r.building || r.address);
+    const looksLikeAddress = (t) => /^\d{2,5}\s+\S/.test(String(t || '').trim());
+    return {
+      lookup(text) {
+        const k = buildingKey(text);
+        if (!k) return { building: '', address: '' };
+        const named = rows.filter((r) => r.building && buildingKey(r.building) === k);
+        const addressed = rows.filter((r) => r.address && buildingKey(r.address) === k);
+        const name = (named[0] && named[0].building) || (addressed.find((r) => r.building && !looksLikeAddress(r.building)) || {}).building || '';
+        const address = (named.find((r) => r.address) || {}).address || (addressed[0] && addressed[0].address) || (looksLikeAddress(text) ? String(text).trim() : '');
+        return { building: name || (looksLikeAddress(text) ? '' : String(text).trim()), address: address && buildingKey(address) !== buildingKey(name) ? address : '' };
+      },
+    };
+  }
+
   // Every saved building quote for the Quoted rates list, matching a search, by building name.
   function quotedRateList(rates, q, today) {
     q = String(q || '').trim().toLowerCase();
     return Object.keys(rates || {})
-      .map((key) => Object.assign({ key, text: rateText(rates[key].rate, rates[key].basis || 'NNN', rates[key].opex) }, rememberedRate(rates, rates[key].building, today), rates[key]))
-      .filter((r) => !q || (r.building + ' ' + r.text).toLowerCase().includes(q))
+      .map((key) => {
+        const r = rates[key];
+        const basis = r.basis || 'NNN';
+        // The quote column: the rate and its type; OpEx has its own column.
+        const short = '$' + Number(r.rate).toFixed(2) + ' ' + (basis === 'Full service' ? 'FSG' : 'NNN');
+        return Object.assign({ key, text: rateText(r.rate, basis, r.opex), short }, rememberedRate(rates, r.building, today), r);
+      })
+      .filter((r) => !q || (r.building + ' ' + (r.address || '') + ' ' + r.text).toLowerCase().includes(q))
       .sort((a, b) => a.building.localeCompare(b.building));
   }
 
@@ -2208,7 +2243,7 @@
   // [bracketed note]. In order of first appearance; `value` is the starting value.
   const FILL_IN_FIELDS = {
     Rate: { label: 'Quoted rate ($/SF/yr)', type: 'number' },
-    RateBasis: { label: 'Rate type', type: 'select', options: QUOTE_BASES },
+    RateBasis: { label: 'Rate type', type: 'select', options: QUOTE_BASIS_OPTIONS },
     OpEx: { label: 'OpEx ($/SF/yr)', type: 'number' },
     CompBuilding: { label: 'Comp building' },
     MeetingDay: { label: 'Meeting day(s)', type: 'date' },
@@ -4632,6 +4667,8 @@
     knownBuildings,
     quotesFromEmail,
     applyEmailQuotes,
+    buildingDirectory,
+    QUOTE_BASIS_OPTIONS,
     planSurveyRates,
     buildingKey,
     quotesFromStoredEmails,
