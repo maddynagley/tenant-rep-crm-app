@@ -1402,6 +1402,7 @@
       const inbound = p.hs_email_direction === 'INCOMING_EMAIL';
       const addrs = emails(inbound ? p.hs_email_from_email : p.hs_email_to_email);
       const id = 'hs-em-' + rec.id;
+      if (skip.has(id)) return; // deleted in the CRM
       // An email already in the CRM keeps its company even if HubSpot has no association for it.
       const companyId = resolve(rec, addrs) || (existing[id] && existing[id].companyId) || '';
       if (!companyId) return skipped++;
@@ -1458,6 +1459,7 @@
     (payload.notes || []).forEach((rec) => {
       const p = rec.properties || {};
       const id = 'hs-nt-' + rec.id;
+      if (skip.has(id)) return; // deleted in the CRM
       const companyId = resolve(rec, []) || (existing[id] && existing[id].companyId) || '';
       if (!companyId) return skipped++;
       const body = stripHtml(p.hs_note_body);
@@ -1473,6 +1475,7 @@
       if (!companyId) return skipped++;
       const date = hsDate(p.hs_meeting_start_time || p.hs_timestamp);
       const id = 'hs-mt-' + rec.id;
+      if (skip.has(id)) return; // deleted in the CRM
       if (!existing[id]) upserts.push({ id, type: 'Meeting', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, [], companyId), subject: p.hs_meeting_title || 'Meeting', notes: stripHtml(p.hs_meeting_body).slice(0, 400), source: 'HubSpot', done: true });
       if (date <= todayISO()) touch(companyId, date);
     });
@@ -1483,6 +1486,7 @@
       if (!companyId) return skipped++;
       const date = hsDate(p.hs_timestamp);
       const id = 'hs-cl-' + rec.id;
+      if (skip.has(id)) return; // deleted in the CRM
       const outcome = CALL_DISPOSITIONS[p.hs_call_disposition] || '';
       if (existing[id]) upserts.push({ id, outcome: existing[id].outcome || outcome });
       else upserts.push({ id, type: 'Call', date, companyId, dealId: dealFor(companyId, rec), contactId: contactFor(rec, [], companyId), subject: p.hs_call_title || 'Call', outcome, notes: stripHtml(p.hs_call_body).slice(0, 400), source: 'HubSpot', done: true });

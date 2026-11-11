@@ -531,7 +531,7 @@
       <div class="form-grid">
         <label class="wide">Note<textarea name="note" rows="7">${esc(entry)}</textarea></label>
       </div>
-      <footer><button type="button" class="btn danger-text" data-action="delete-my-note">Delete note</button><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Save</button></footer>
+      <footer><button type="button" class="btn danger" data-action="delete-my-note">Delete note</button><span class="spacer"></span><button type="button" class="btn" data-action="close-modal">Cancel</button><button type="submit" class="btn primary">Save</button></footer>
     </form>`;
     dlg.showModal();
     dlg.querySelector('textarea').focus();
@@ -3451,6 +3451,7 @@
       <div class="form-grid">${fields.map((f) => fieldHTML(f, rec)).join('')}</div>
       <footer>
         ${col === 'activities' && !existing && !task ? '<label class="check"><input type="checkbox" name="__another" /> Save & schedule next touch</label>' : ''}
+        ${existing ? `<button type="button" class="btn danger" data-action="delete" data-col="${col}" data-id="${esc(existing.id)}">Delete</button>` : ''}
         <span class="spacer"></span>
         <button type="button" class="btn" data-action="close-modal">Cancel</button>
         <button type="submit" class="btn primary">Save</button>
@@ -4354,7 +4355,16 @@
         case 'delete': {
           e.preventDefault();
           const rec = S.get(d.col, d.id);
-          const what = d.col === 'companies' ? `"${rec.name}" and all of its contacts, deals and activity` : d.col === 'contacts' ? contactName(rec) : 'this ' + LABELS[d.col].toLowerCase();
+          // An email's automatic follow-up task goes with it.
+          const autoTasks = d.col === 'activities' ? S.all('activities').filter((t) => t.workflowEmailId === rec.id && !t.done) : [];
+          const what =
+            d.col === 'companies'
+              ? `"${rec.name}" and all of its contacts, deals and activity`
+              : d.col === 'contacts'
+              ? contactName(rec)
+              : d.col === 'activities'
+              ? `"${rec.subject || rec.type}"${autoTasks.length ? ' and its automatic follow-up task' : ''}`
+              : 'this ' + LABELS[d.col].toLowerCase();
           const prefix = { companies: 'co', contacts: 'ct', deals: 'dl' }[d.col];
           const hs = prefix ? rec.hubspotId || (new RegExp('^hs-' + prefix + '-(\\d+)$').exec(rec.id) || [])[1] : '';
           const twoWay = S.settings().hubspotTwoWay;
@@ -4366,6 +4376,10 @@
             hs && twoWay && confirm(`Also delete ${label} from HubSpot?\n\nOK = delete it in HubSpot too (HubSpot keeps it in its recycling bin for 90 days).\nCancel = keep it in HubSpot.${d.col === 'companies' ? '\n\nIts contacts and deals in HubSpot are not deleted.' : ''}`);
           // Remembered so a HubSpot sync doesn't add it again.
           if (hs) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat(prefix + '-' + hs) });
+          // An email, note, meeting or call from HubSpot stays deleted too.
+          if (d.col === 'activities' && /^hs-(em|nt|mt|cl)-/.test(rec.id)) S.saveSettings({ hubspotSkip: (S.settings().hubspotSkip || []).concat(rec.id) });
+          autoTasks.forEach((t) => S.remove('activities', t.id, true));
+          if ($('#modal').open) $('#modal').close();
           if (alsoHubSpot) {
             S.saveSettings({ hubspotArchive: (S.settings().hubspotArchive || []).concat(prefix + '-' + hs) });
             setTimeout(() => archiveHubSpot(true), 0);

@@ -1990,3 +1990,9 @@ test('dailyPlan: outreach ranked by lease timing; under 6 months or expired go t
   assert.equal(plan.remaining.checkRenewal, 2);
   assert.ok(!plan.updates.some((u) => u.companyId === 'past'), 'not listed twice');
 });
+
+test('HubSpot sync: an email deleted in the CRM is not brought back', () => {
+  const data = { companies: [{ id: 'hs-co-1', name: 'Acme' }], contacts: [], deals: [], activities: [], hubspotSkip: ['hs-em-55'] };
+  const payload = { emails: [55, 56].map((id) => ({ id: String(id), companies: ['1'], properties: { hs_timestamp: '2026-10-29T12:00:00Z', hs_email_subject: 'Hello', hs_email_direction: 'EMAIL' } })) };
+  assert.deepEqual(L.planHubSpotSync(payload, data).activities.map((a) => a.id), ['hs-em-56']);
+});
