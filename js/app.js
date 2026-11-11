@@ -258,6 +258,7 @@
       { key: 'officeSF', label: 'Office SF in the space', type: 'number', asset: 'Industrial' },
       { key: 'askingRate', label: 'Asking rent ($/SF)', type: 'number', step: '0.01' },
       { key: 'rateBasis', label: 'Rent basis', type: 'select', options: L.RATE_BASES },
+      { key: 'opex', label: 'OpEx ($/SF/yr, for NNN)', type: 'number', step: '0.01' },
       { key: 'landlord', label: 'Landlord / listing broker' },
       { key: 'tiAllowance', label: 'TI offered ($/SF)', type: 'number', step: '0.01' },
       { key: 'freeRentMonths', label: 'Free rent (months)', type: 'number' },
@@ -1785,7 +1786,7 @@
         <span class="quote-form-buttons"><button type="submit" class="btn primary">Save quote</button><button type="button" class="btn" data-action="clear-quote" hidden>Cancel edit</button></span>
         <datalist id="quote-buildings">${buildings.map((b) => `<option value="${esc(b)}"></option>`).join('')}</datalist>
       </form>`;
-    return `<section class="card"><h2>Quoted rates</h2>
+    return `<section class="card"><h2>Quoted rates <button class="btn small more" data-action="find-past-quotes" title="Read the broker emails already in the CRM for quoted rates">Find quotes in past emails</button></h2>
       <p class="hint">What each building is quoting. Rates brokers quote in emails HubSpot logs are saved here automatically (when the email names the building and the rate). Add one here, or type a rate in the Draft email window and it's saved for that building. The next email to a tenant there starts with it. Quotes 6 months old or more are flagged to re-confirm; saving the rate again restarts the clock.</p>
       ${form}
       ${
@@ -2643,7 +2644,7 @@
               return `<tr class="${p.status === 'Rejected' ? 'dim' : ''}"><td><strong>${esc(p.building)}</strong><div class="sub">${esc([p.address, p.submarket].filter(Boolean).join(' · '))}</div>${p.notes ? `<div class="sub pre">${esc(p.notes)}</div>` : ''}</td>
                 <td>${badge(p.status, cls)}</td>
                 <td class="right">${esc(L.fmtNumber(p.availableSF))}${p.officeSF ? `<div class="sub">${esc(L.fmtNumber(p.officeSF))} office</div>` : ''}</td>
-                <td class="right nowrap">${p.askingRate ? '$' + esc(p.askingRate) + '<span class="sub"> ' + esc(rateUnit(p.rateBasis)) + '</span>' : ''}</td>
+                <td class="right nowrap">${p.askingRate ? '$' + esc(L.parseNumber(p.askingRate) !== null ? L.parseNumber(p.askingRate).toFixed(2) : p.askingRate) + '<span class="sub"> ' + esc(rateUnit(p.rateBasis)) + '</span>' : ''}${p.opex ? `<div class="sub">+ $${esc(p.opex)} OpEx</div>` : ''}${p.rateFromEmail ? `<div class="sub" title="Updated from a broker's email">From email ${esc(L.fmtDate(p.rateQuotedAt))}</div>` : ''}</td>
                 <td class="right">${yr1 ? L.fmtMoney(yr1) : ''}</td>
                 <td class="right">${p.tiAllowance ? '$' + esc(p.tiAllowance) : ''}</td>
                 <td class="right">${p.freeRentMonths ? esc(p.freeRentMonths) + ' mo' : ''}</td>
@@ -4640,6 +4641,8 @@
         }
         case 'clear-quote':
           return render();
+        case 'find-past-quotes':
+          return findQuotesInPastEmails();
         case 'delete-quote': {
           const rates = Object.assign({}, S.settings().buildingRates || {});
           const r = rates[d.key];
@@ -5323,7 +5326,7 @@
       const added = S.all('activities').length - before;
       const leadsNote = data.leadsError && S.settings().hubspotTwoWay ? '. Lead stages: ' + data.leadsError : '';
       const got = ['emails', 'meetings', 'calls'].map((k) => `${(data[k] || []).length} ${k}`).join(', ');
-      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '') + quotesNote(plan) + leadsNote;
+      hubspotStatus = `checked ${got} from HubSpot (${manual ? 'past 7 days' : 'since last sync'}): ${added} new, ${plan.activities.length - added} updated` + newRecordsNote(plan) + (plan.updatedFromHubSpot ? `, ${plan.updatedFromHubSpot} record${plan.updatedFromHubSpot > 1 ? 's' : ''} updated from HubSpot edits` : '') + (plan.merges && plan.merges.length ? `, ${plan.merges.length} duplicate compan${plan.merges.length > 1 ? 'ies' : 'y'} merged (as in HubSpot)` : '') + (plan.skipped ? `, ${plan.skipped} not matched to a CRM company` : '') + quotesNote(plan) + (plan.surveysUpdated ? `, ${plan.surveysUpdated} market survey rent${plan.surveysUpdated > 1 ? 's' : ''} updated` : '') + leadsNote;
       if (!manual && plan.quotesSaved && plan.quotesSaved.length) toast('Saved ' + quotesNote(plan).replace(/^, /, '') + '. See Comps & Dates → Quoted rates.');
       if (!manual && (plan.created.companies || plan.created.contacts || plan.created.deals)) toast('From HubSpot: ' + newRecordsNote(plan).replace(/^, /, '') + '.');
       S.saveSettings({ hubspotLastSync: data.now || Date.now() });
@@ -5363,6 +5366,28 @@
     const q = L.applyEmailQuotes(st.buildingRates, plan.quotes, st.quoteDismissed);
     if (q.saved.length) S.saveSettings({ buildingRates: q.rates });
     plan.quotesSaved = q.saved;
+    plan.surveysUpdated = updateSurveyRates(plan.quotes);
+  }
+  // Quotes from emails -> the asking rent on open deals' market surveys for the same building.
+  function updateSurveyRates(quotes) {
+    const dismissed = new Set(S.settings().quoteDismissed || []);
+    const keep = (quotes || []).filter((q) => !dismissed.has(L.buildingKey(q.building) + '|' + q.emailId));
+    const patches = L.planSurveyRates(S.all('properties'), S.all('deals'), keep);
+    patches.forEach((p) => S.upsert('properties', p, { silent: true, touch: false }));
+    if (patches.length) S.saveSettings({});
+    return patches.length;
+  }
+  // One time: read the broker emails already in the CRM for quotes (new ones are read as they sync).
+  function findQuotesInPastEmails() {
+    const st = S.settings();
+    const buildings = L.knownBuildings({ companies: S.all('companies'), comps: S.all('comps'), properties: S.all('properties'), buildingRates: st.buildingRates });
+    const quotes = L.quotesFromStoredEmails(S.all('activities'), buildings);
+    const q = L.applyEmailQuotes(st.buildingRates, quotes, st.quoteDismissed);
+    if (q.saved.length) S.saveSettings({ buildingRates: q.rates });
+    const surveys = updateSurveyRates(quotes);
+    const emails = S.all('activities').filter((a) => a.type === 'Email' && a.inbound && a.body).length;
+    toast(`Read ${emails} past emails: ${q.saved.length} quote${q.saved.length === 1 ? '' : 's'} saved${surveys ? `, ${surveys} market survey rent${surveys > 1 ? 's' : ''} updated` : ''}.`);
+    render();
   }
   // The HubSpot portal number, from any record linked to HubSpot (for record links).
   function hubspotPortal() {

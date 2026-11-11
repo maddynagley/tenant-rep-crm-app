@@ -2115,6 +2115,41 @@
     return { rates: out, saved };
   }
 
+  // Quotes from emails → market survey properties on open deals for the same building: the asking rent, its basis
+  // and OpEx, when the email is newer than the property's rent (one typed in later stays). Returns patches.
+  const QUOTE_TO_BASIS = { 'Full service': 'Full Service ($/SF/yr)', NNN: 'NNN ($/SF/yr)', 'NNN + OpEx': 'NNN ($/SF/yr)' };
+  function planSurveyRates(properties, deals, quotes) {
+    const open = new Set((deals || []).filter((d) => OPEN_STAGES.includes(d.stage)).map((d) => d.id));
+    const latest = {};
+    (quotes || []).forEach((q) => {
+      const k = buildingKey(q.building);
+      if (k && (!latest[k] || (q.date || '') > (latest[k].date || ''))) latest[k] = q;
+    });
+    const same = (a, b) => a && b && (a === b || (Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a))));
+    const out = [];
+    (properties || []).forEach((p) => {
+      if (!open.has(p.dealId)) return;
+      const keys = [buildingKey(p.building), buildingKey(p.address)].filter(Boolean);
+      const q = Object.keys(latest).filter((k) => keys.some((pk) => same(pk, k))).map((k) => latest[k])[0];
+      if (!q) return;
+      const since = p.rateQuotedAt || (p.askingRate ? String(p.updatedAt || '').slice(0, 10) : '');
+      if (since && (q.date || '') <= since) return;
+      const patch = { id: p.id, askingRate: q.rate, rateBasis: QUOTE_TO_BASIS[q.basis] || p.rateBasis || '', rateQuotedAt: q.date, rateFromEmail: q.emailId };
+      if (q.opex) patch.opex = q.opex;
+      out.push(patch);
+    });
+    return out;
+  }
+  // Inbound emails already in the CRM (with their text) → quotes, for a one-time look through past emails.
+  function quotesFromStoredEmails(activities, buildings, internalDomain) {
+    const quotes = [];
+    (activities || []).forEach((a) => {
+      if (a.type !== 'Email' || !a.inbound || !a.body) return;
+      quotesFromEmail({ subject: a.subject, body: a.body, date: a.date }, buildings).forEach((q) => quotes.push(Object.assign(q, { emailId: a.id, subject: String(a.subject || '').replace(/^Reply: /, '') })));
+    });
+    return quotes;
+  }
+
   // Every saved building quote for the Quoted rates list, matching a search, by building name.
   function quotedRateList(rates, q, today) {
     q = String(q || '').trim().toLowerCase();
@@ -4565,6 +4600,9 @@
     knownBuildings,
     quotesFromEmail,
     applyEmailQuotes,
+    planSurveyRates,
+    buildingKey,
+    quotesFromStoredEmails,
     dealContacts,
     toHubSpot,
     fromHubSpot,

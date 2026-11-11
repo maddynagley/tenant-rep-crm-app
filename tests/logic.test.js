@@ -2039,3 +2039,20 @@ test('HubSpot sync reads quotes from incoming emails, even ones not filed under 
   const plan = L.planHubSpotSync({ emails: [email('1', 'INCOMING_EMAIL', 'pat@landlord.test', 'Asking $35.00/RSF FS.'), email('2', 'EMAIL', 'me@myfirm.test', 'Is it still $35.00/RSF FS?'), email('3', 'INCOMING_EMAIL', 'sam@myfirm.test', 'They said $36.00/RSF FS.')] }, data);
   assert.deepEqual(plan.quotes.map((q) => [q.building, q.rate, q.emailId, q.from]), [['Uptown Tower', 35, 'hs-em-1', 'pat@landlord.test']]);
 });
+
+test('quotes from emails update the asking rent on open deals\' market surveys, unless typed in later', () => {
+  const deals = [{ id: 'd1', stage: 'Touring' }, { id: 'd2', stage: 'Closed Won' }];
+  const properties = [
+    { id: 'p1', dealId: 'd1', building: 'Uptown Tower' },
+    { id: 'p2', dealId: 'd1', building: 'Riverside', address: '100 Main Street', askingRate: 20, rateBasis: 'Full Service ($/SF/yr)', updatedAt: '2026-11-12T10:00:00Z' },
+    { id: 'p3', dealId: 'd2', building: 'Uptown Tower' },
+  ];
+  const quotes = [
+    { building: 'Uptown Tower', rate: 30, basis: 'NNN + OpEx', opex: 11, date: '2026-11-10', emailId: 'hs-em-1' },
+    { building: 'Uptown Tower', rate: 32, basis: 'Full service', date: '2026-11-11', emailId: 'hs-em-2' },
+    { building: '100 Main Street', rate: 25, basis: 'NNN', date: '2026-11-11', emailId: 'hs-em-3' },
+  ];
+  assert.deepEqual(L.planSurveyRates(properties, deals, quotes), [{ id: 'p1', askingRate: 32, rateBasis: 'Full Service ($/SF/yr)', rateQuotedAt: '2026-11-11', rateFromEmail: 'hs-em-2' }]);
+  const stored = [{ id: 'hs-em-9', type: 'Email', inbound: true, date: '2026-11-01', subject: 'Reply: Uptown Tower', body: 'Asking $31.00/RSF FS.' }, { id: 'x', type: 'Email', date: '2026-11-01', subject: 'Uptown Tower', body: 'Is it $31.00/RSF FS?' }];
+  assert.deepEqual(L.quotesFromStoredEmails(stored, ['Uptown Tower']).map((q) => [q.building, q.rate, q.emailId]), [['Uptown Tower', 31, 'hs-em-9']]);
+});
