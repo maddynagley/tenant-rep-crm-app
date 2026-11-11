@@ -1914,7 +1914,7 @@ test('HubSpot sync planning never changes the CRM records it is given', () => {
   assert.equal(co.hubspotId, undefined);
 });
 
-test('lease timing: 12–18 months first, then 19–24, 9–11, 25–36, 37–48; under 9 months is "check if renewed"', () => {
+test('lease timing: 12–18 months first, then 19–24, 9–11, 25–36, 6–8, 37–48; under 6 months is "check if renewed"', () => {
   const today = '2026-11-10';
   const rank = (lxd, asset) => L.leaseTiming(lxd, today, asset).rank;
   assert.equal(rank('2027-11-30'), 1, '12 months');
@@ -1925,10 +1925,13 @@ test('lease timing: 12–18 months first, then 19–24, 9–11, 25–36, 37–48
   assert.equal(rank('2027-10-31'), 3, '11 months');
   assert.equal(rank('2028-12-31'), 4, '25 months');
   assert.equal(rank('2029-11-30'), 4, '36 months');
-  assert.equal(rank('2030-11-30'), 5, '48 months');
-  assert.ok(rank('2027-11-30') < rank('2028-06-30') && rank('2028-06-30') < rank('2027-08-31') && rank('2027-08-31') < rank('2028-12-31') && rank('2028-12-31') < rank('2030-11-30'));
-  // Under 9 months or already passed: not callable, check whether they renewed.
-  for (const lxd of ['2027-01-31', '2027-07-31', '2026-09-30', '2026-11-09']) {
+  assert.equal(rank('2027-05-31'), 5, '6 months: late, still callable');
+  assert.equal(rank('2027-07-31'), 5, '8 months');
+  assert.equal(L.leaseTiming('2027-05-31', today).callable, true);
+  assert.equal(rank('2030-11-30'), 6, '48 months');
+  assert.ok(rank('2027-11-30') < rank('2028-06-30') && rank('2028-06-30') < rank('2027-08-31') && rank('2027-08-31') < rank('2028-12-31') && rank('2028-12-31') < rank('2027-07-31') && rank('2027-07-31') < rank('2030-11-30'));
+  // Under 6 months or already passed: not callable, check whether they renewed.
+  for (const lxd of ['2027-01-31', '2027-04-30', '2026-09-30', '2026-11-09']) {
     const t = L.leaseTiming(lxd, today);
     assert.equal(t.callable, false, lxd);
     assert.equal(t.checkRenewal, true, lxd);
@@ -1940,8 +1943,9 @@ test('lease timing: 12–18 months first, then 19–24, 9–11, 25–36, 37–48
   // Industrial: about 9–24 months, so 9–11 months is already the best window.
   assert.equal(rank('2027-08-31', 'Industrial'), 1);
   assert.equal(rank('2028-06-30', 'Industrial'), 2);
+  assert.equal(rank('2027-07-31', 'Industrial'), 3, 'industrial 6–8 months ranks ahead of 25–36');
   assert.equal(rank('2028-12-31', 'Industrial'), 4);
-  assert.equal(L.leaseTiming('2027-07-31', today, 'Industrial').callable, false);
+  assert.equal(L.leaseTiming('2027-04-30', today, 'Industrial').callable, false);
 });
 
 test('prospectScore: a lease 2 months out scores no timing points and is not callable', () => {
@@ -1959,12 +1963,13 @@ test('prospectScore: a lease 2 months out scores no timing points and is not cal
   assert.ok(ideal.callable && later.callable && nine.callable && far.callable);
 });
 
-test('dailyPlan: outreach ranked by lease timing; under 9 months or expired go to "check if renewed"', () => {
+test('dailyPlan: outreach ranked by lease timing; under 6 months or expired go to "check if renewed"', () => {
   const today = '2026-11-10';
   const companies = [
     { id: 'two', name: 'Acme Soon', leadStage: 'New', leaseExpiration: '2027-01-31' },
     { id: 'past', name: 'Acme Past', leadStage: 'Follow Up', leaseExpiration: '2026-08-31', lastContacted: '2026-09-01' },
     { id: 'far', name: 'Uptown Far', leadStage: 'New', leaseExpiration: '2030-06-30' },
+    { id: 'seven', name: 'Uptown Seven', leadStage: 'New', leaseExpiration: '2027-06-30' },
     { id: 'nine', name: 'Uptown Nine', leadStage: 'New', leaseExpiration: '2027-09-30' },
     { id: 'thirty', name: 'Uptown Thirty', leadStage: 'New', leaseExpiration: '2029-05-31' },
     { id: 'twenty', name: 'Uptown Twenty', leadStage: 'New', leaseExpiration: '2028-07-31' },
@@ -1975,10 +1980,10 @@ test('dailyPlan: outreach ranked by lease timing; under 9 months or expired go t
   ];
   const plan = L.dailyPlan({ companies, contacts: [], deals: [], activities: [], criticalDates: [] }, { today, outreachGoal: 20 });
   const ids = plan.outreach.map((o) => o.companyId);
-  assert.ok(!ids.includes('two') && !ids.includes('past'), 'under 9 months or expired is not on the call list');
+  assert.ok(!ids.includes('two') && !ids.includes('past'), 'under 6 months or expired is not on the call list');
   assert.ok(ids.includes('engaged'), 'an engaged conversation keeps its follow-up');
   const fresh = ids.filter((id) => id !== 'engaged');
-  assert.deepEqual(fresh, ['ind', 'fifteen', 'twenty', 'nine', 'thirty', 'far'], 'both best-window leases first (sooner first), then 19–24, 9–11, 25–36, then 37+');
+  assert.deepEqual(fresh, ['ind', 'fifteen', 'twenty', 'nine', 'thirty', 'seven', 'far'], 'both best-window leases first (sooner first), then 19–24, 9–11, 25–36, 6–8, then 37+');
   assert.deepEqual(plan.checkRenewal.map((x) => x.companyId), ['past', 'two'], 'the engaged lead is already in conversation; the dead lead is ignored');
   assert.match(plan.checkRenewal.find((x) => x.companyId === 'two').why, /check whether they renewed/i);
   assert.match(plan.checkRenewal.find((x) => x.companyId === 'past').why, /^Lease expired/);

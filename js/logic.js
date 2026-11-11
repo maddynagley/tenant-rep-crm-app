@@ -197,26 +197,27 @@
   // ---------- prospect scoring ----------
 
   // How useful the timing of a lease expiration (LXD) is for prospecting. Rank 1 is the best time to call.
-  // Office: 12–18 months out, then 19–24, then 9–11, then 25–36, then 37–48.
-  // Industrial moves faster, so its best window is about 9–24 months: 9–18, then 19–24, then 25–36, then 37–48.
-  // Under 9 months (or already passed) the decision is likely made: don't call, check whether they renewed.
+  // Office: 12–18 months out, then 19–24, then 9–11, then 25–36, then 6–8 (late), then 37–48.
+  // Industrial moves faster, so its best window is about 9–24 months: 9–18, then 19–24, then 6–8, then 25–36, then 37–48.
+  // Under 6 months (or already passed) the decision is likely made: don't call, check whether they renewed.
   function leaseTiming(leaseExpiration, today, assetClass) {
     const months = leaseExpiration ? monthsUntil(leaseExpiration, today || todayISO()) : null;
     const industrial = assetClass === 'Industrial';
     const t = (rank, points, label) => ({ months, rank, points, label, callable: true, checkRenewal: false });
-    if (months === null) return t(6, 8, 'Expiration unknown');
+    if (months === null) return t(7, 8, 'Expiration unknown');
     if (months < 0) return { months, rank: 9, points: 0, label: 'Lease expired: check if they renewed', callable: false, checkRenewal: true };
-    if (months < 9) return { months, rank: 9, points: 0, label: 'Under 9 months: check if they renewed', callable: false, checkRenewal: true };
+    if (months < 6) return { months, rank: 9, points: 0, label: 'Under 6 months: check if they renewed', callable: false, checkRenewal: true };
+    if (months <= 8) return industrial ? t(3, 30, '6–8 months (industrial)') : t(5, 18, '6–8 months: late, decision may be close');
     if (industrial && months <= 18) return t(1, 40, '9–18 months: best window (industrial)');
     if (months >= 12 && months <= 18) return t(1, 40, '12–18 months: best window');
     if (months >= 19 && months <= 24) return t(2, 36, '19–24 months');
     if (months <= 11) return t(3, 30, '9–11 months');
     if (months <= 36) return t(4, 24, '25–36 months');
-    if (months <= 48) return t(5, 12, '37–48 months');
-    return t(7, 5, 'More than 4 years out');
+    if (months <= 48) return t(6, 12, '37–48 months');
+    return t(8, 5, 'More than 4 years out');
   }
 
-  // 0-100 score used to rank who to call next. Leases under 9 months out or already expired score no
+  // 0-100 score used to rank who to call next. Leases under 6 months out or already expired score no
   // timing points and aren't `callable`: they belong on a "check if renewed" list instead.
   function prospectScore(company, opts) {
     opts = opts || {};
@@ -2853,8 +2854,8 @@
       .sort((a, b) => a.localeCompare(b))
       .map((value) => ({ value, asset: value.split('|')[0], name: value.split('|').slice(1).join('|'), n: subCounts[value] }));
     const dayGoal = opts.submarket ? Math.max(goal, 25) : goal;
-    // Ranked by how useful the lease timing is: 12–18 months out first, then 19–24, 9–11, 25–36, 37–48
-    // (industrial 9–24). Leases under 9 months out or already expired are likely decided: they go to
+    // Ranked by how useful the lease timing is: 12–18 months out first, then 19–24, 9–11, 25–36, 6–8, 37–48
+    // (industrial 9–24). Leases under 6 months out or already expired are likely decided: they go to
     // "check if renewed" instead of outreach, unless the conversation is already Engaged.
     const timingOf = (c) => leaseTiming(c.leaseExpiration, today, c.assetClass);
     const soon = (c) => timingOf(c).rank;
@@ -2972,7 +2973,7 @@
         updates.push({ kind: 'update', dealId: d.id, companyId: d.companyId, title: d.name, why: 'Closed won. Add the final SF and commission so your portfolio is complete.' });
     });
 
-    // Leases under 9 months out or already passed: not worth a prospecting call, but worth confirming
+    // Leases under 6 months out or already passed: not worth a prospecting call, but worth confirming
     // whether they renewed or moved, and updating the expiration. Soonest / most recent first.
     const checkRenewal = leads
       .filter((c) => inSub(c) && !workable(c) && timingOf(c).checkRenewal && leadStage(c) !== 'Dead Lead')
