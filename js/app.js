@@ -3364,10 +3364,10 @@
       box.innerHTML = '';
       return;
     }
-    box.innerHTML = `<p class="fill-ins-head">Fill-ins <span class="hint">Typing here rewrites the subject and body, so make other edits last.</span></p>
+    box.innerHTML = `<p class="fill-ins-head">Fill-ins <span class="hint">Typing here rewrites the subject and body, so make other edits last. Type "-" to leave a bracketed line out.</span></p>
       <div class="fill-ins-grid">${fields
         .map(
-          (f) => `<${f.solo ? 'div class="fill-in-field"' : 'label'}${f.bracket ? ' class="wide"' : ''}${f.key === 'OpEx' ? ' id="opex-field"' + (fields.some((x) => x.key === 'RateBasis' && x.value === 'NNN + OpEx') ? '' : ' hidden') : ''}>${esc(f.bracket ? L.fillTemplate(f.label, ctx) : f.label)}
+          (f) => `<${f.solo ? 'div class="fill-in-field"' : 'label'}${f.bracket ? ' class="wide"' : ''}${f.key === 'OpEx' ? ' id="opex-field"' + (fields.some((x) => x.key === 'RateBasis' && x.value === 'NNN + OpEx') ? '' : ' hidden') : ''}>${esc(f.bracket ? L.fillTemplate(f.label, ctx).replace(/^[\s,;]+/, '') : f.label)}
           <span class="fill-in-row">${
             f.type === 'select'
               ? `<select data-fill-in="${esc(f.key)}">${options(f.options, f.value)}</select>`

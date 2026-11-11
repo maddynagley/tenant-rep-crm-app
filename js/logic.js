@@ -1868,6 +1868,7 @@
   // "Solo") on the deal or company, or the "Working this alone" box in the draft, means solo.
   const SOLO_PARTNER = /^\s*(none|solo|n\/a|-+)\s*$/i;
   const SOLO_REWRITES = [
+    [/\b(?:My partner )?(?:\{Partner\}|[A-Z][\w'-]+ [A-Z][\w'-]+) and I are corporate real estate advisors\b/g, "I'm a corporate real estate advisor"],
     [/\bMy partner (?:\{Partner\}|[A-Z][\w'-]+ [A-Z][\w'-]+) and I are tenant rep brokers\b/g, "I'm a tenant rep broker"],
     [/\bMy partner and I are tenant rep brokers\b/g, "I'm a tenant rep broker"],
     [/\b[Mm]y partner (?:\{Partner\} |[A-Z][\w'-]+ [A-Z][\w'-]+ )?and I\b/g, 'I'],
@@ -1945,17 +1946,43 @@
       MonthlyRent: rent.monthly,
       AnnualRent: rent.annual,
       AnnualIncrease: rent.increase,
-    });
-    // A [bracketed note] in the template is replaced by what was typed for it.
+    }, priorQuote(inputs.PriorRate, rate));
+    // A [bracketed note] in the template is replaced by what was typed for it; "-" leaves it out.
+    let dropped = false;
     const slotted = bracketSlots(text).reduceRight((t, b) => {
       const v = String(inputs[b.raw] == null ? '' : inputs[b.raw]).trim();
-      return v ? t.slice(0, b.start) + v + t.slice(b.end) : t;
+      if (v === '-') dropped = true;
+      return v ? t.slice(0, b.start) + (v === '-' ? '' : v) + t.slice(b.end) : t;
     }, String(text || ''));
-    return slotted.replace(/\{(\w+)\}/g, (m, key) => {
+    const out = slotted.replace(/\{(\w+)\}/g, (m, key) => {
       if (!(key in values)) return m;
       const v = values[key];
       return v === undefined || v === null || String(v).trim() === '' ? '[' + key + ']' : String(v).trim();
     });
+    // Tidy what a left-out note leaves behind: doubled spaces, a space before punctuation, a lowercase sentence start.
+    return dropped
+      ? out
+          .replace(/[ \t]{2,}/g, ' ')
+          .replace(/ +([.,;:!?])/g, '$1')
+          .replace(/^ +| +$/gm, '')
+          .replace(/(^|[.!?] )([a-z])/gm, (m, pre, ch) => pre + ch.toUpperCase())
+      : out;
+  }
+
+  // Last year's quote at a building, a rate or a range ("32.50-34.00"), and the change to today's rate measured
+  // from the middle of the range: {PriorRate} "$32.50-34.00", {QuoteChange} "11%".
+  function priorQuote(prior, rate) {
+    const nums = String(prior || '')
+      .split(/\s*[-–]\s*|\s+to\s+/)
+      .map((x) => parseNumber(x))
+      .filter((n) => n);
+    if (!nums.length) return { PriorRate: '', QuoteChange: '' };
+    const $ = (n) => Number(n).toFixed(2);
+    const avg = nums.reduce((t, n) => t + n, 0) / nums.length;
+    return {
+      PriorRate: '$' + nums.map($).join('-'),
+      QuoteChange: rate ? Math.round(Math.abs(rate / avg - 1) * 100) + '%' : '',
+    };
   }
 
   // Rent at a quoted rate, and how much more that is than 5 years ago given the market's rent growth
@@ -1978,11 +2005,11 @@
     };
   }
 
-  // How a quoted rate reads in an email: "$12.75 NNN", "$12.75 NNN plus $3.50 OpEx" or "$28.00 full service".
+  // How a quoted rate reads in an email: "$12.75 NNN", "$12.75 NNN plus $3.50 OpEx" or "$28.00 FSG".
   const QUOTE_BASES = ['NNN', 'NNN + OpEx', 'Full service'];
   function rateText(rate, basis, opex) {
     const $ = (n) => '$' + Number(n).toFixed(2);
-    if (basis === 'Full service') return $(rate) + ' full service';
+    if (basis === 'Full service') return $(rate) + ' FSG';
     if (basis === 'NNN + OpEx') return $(rate) + ' NNN plus ' + (parseNumber(opex) ? $(parseNumber(opex)) : '[OpEx]') + ' OpEx';
     return $(rate) + ' NNN';
   }
@@ -2188,6 +2215,7 @@
     SF: { label: 'SF', type: 'number', saveTo: 'sfOccupied' },
     Partner: { label: 'Partner', saveTo: 'partner', solo: true },
     RentGrowth: { label: 'Rent growth over 5 years (%)', type: 'number' },
+    PriorRate: { label: 'Quote 12 months ago ($/SF, or a range like 32.50-34.00)' },
   };
   const RENT_KEYS = ['MonthlyRent', 'AnnualRent', 'AnnualIncrease'];
   function templateFillIns(text, ctx) {
@@ -2207,7 +2235,10 @@
     while ((m = re.exec(text))) {
       const key = m[1];
       if (slots.some((b) => m.index > b.start && m.index < b.end)) continue; // part of a [bracketed note]
-      if (RENT_KEYS.includes(key)) {
+      if (key === 'QuoteChange' || key === 'PriorRate') {
+        add('Rate', m.index);
+        add('PriorRate', m.index);
+      } else if (RENT_KEYS.includes(key)) {
         add('Rate', m.index);
         add('SF', m.index);
         if (key === 'AnnualIncrease') add('RentGrowth', m.index);
@@ -4507,6 +4538,7 @@
     TEMPLATE_STEPS,
     fillTemplate,
     rentMath,
+    priorQuote,
     rateText,
     quotedRateList,
     QUOTE_BASES,

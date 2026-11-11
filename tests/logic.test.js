@@ -1324,7 +1324,7 @@ test('quoted rates can be NNN, NNN plus OpEx, or full service', () => {
   assert.equal(L.fillTemplate(t, ctx({})), 'Quoting $12.75 NNN, 17,000 SF runs $18,000 a month, $80,000 more a year.');
   assert.equal(L.fillTemplate(t, ctx({ RateBasis: 'NNN + OpEx', OpEx: '3.50' })), 'Quoting $12.75 NNN plus $3.50 OpEx, 17,000 SF runs $23,000 a month, $80,000 more a year.');
   assert.equal(L.fillTemplate('{Rate}', ctx({ RateBasis: 'NNN + OpEx' })), '$12.75 NNN plus [OpEx] OpEx');
-  assert.equal(L.fillTemplate('{Rate}', ctx({ Rate: '28', RateBasis: 'Full service' })), '$28.00 full service');
+  assert.equal(L.fillTemplate('{Rate}', ctx({ Rate: '28', RateBasis: 'Full service' })), '$28.00 FSG');
   const rates = L.rememberRate({}, 'Uptown Park', '12.75', '2026-10-27', 'NNN + OpEx', '3.5');
   assert.deepEqual(rates['uptown park'], { building: 'Uptown Park', rate: 12.75, date: '2026-10-27', basis: 'NNN + OpEx', opex: 3.5 });
   assert.equal(L.rememberedRate(rates, 'Uptown Park', '2026-11-01').note, 'Saved for Uptown Park on Oct 27, 2026: $12.75 NNN plus $3.50 OpEx.');
@@ -1336,7 +1336,7 @@ test('quotedRateList lists saved quotes with their age', () => {
   let rates = L.rememberRate({}, 'Uptown Park', '12.75', '2026-03-01');
   rates = L.rememberRate(rates, 'Acme Tower', '28', '2026-10-01', 'Full service');
   const all = L.quotedRateList(rates, '', '2026-10-27');
-  assert.deepEqual(all.map((r) => [r.building, r.text, r.stale]), [['Acme Tower', '$28.00 full service', false], ['Uptown Park', '$12.75 NNN', true]]);
+  assert.deepEqual(all.map((r) => [r.building, r.text, r.stale]), [['Acme Tower', '$28.00 FSG', false], ['Uptown Park', '$12.75 NNN', true]]);
   assert.deepEqual(L.quotedRateList(rates, 'uptown', '2026-10-27').map((r) => r.key), ['uptown park']);
 });
 
@@ -2055,4 +2055,21 @@ test('quotes from emails update the asking rent on open deals\' market surveys, 
   assert.deepEqual(L.planSurveyRates(properties, deals, quotes), [{ id: 'p1', askingRate: 32, rateBasis: 'Full Service ($/SF/yr)', rateQuotedAt: '2026-11-11', rateFromEmail: 'hs-em-2' }]);
   const stored = [{ id: 'hs-em-9', type: 'Email', inbound: true, date: '2026-11-01', subject: 'Reply: Uptown Tower', body: 'Asking $31.00/RSF FS.' }, { id: 'x', type: 'Email', date: '2026-11-01', subject: 'Uptown Tower', body: 'Is it $31.00/RSF FS?' }];
   assert.deepEqual(L.quotesFromStoredEmails(stored, ['Uptown Tower']).map((q) => [q.building, q.rate, q.emailId]), [['Uptown Tower', 31, 'hs-em-9']]);
+});
+
+test('last year\'s quote and the change to today\'s rate, from the middle of a range', () => {
+  assert.deepEqual(L.priorQuote('32.50-34.00', 37), { PriorRate: '$32.50-34.00', QuoteChange: '11%' });
+  assert.deepEqual(L.priorQuote('$32.50', 37), { PriorRate: '$32.50', QuoteChange: '14%' });
+  assert.deepEqual(L.priorQuote('', 37), { PriorRate: '', QuoteChange: '' });
+  const t = 'Quoting {Rate}, up {QuoteChange} from {PriorRate} 12 months ago.';
+  assert.equal(L.fillTemplate(t, { inputs: { Rate: '37', RateBasis: 'Full service', PriorRate: '32.50-34.00' } }), 'Quoting $37.00 FSG, up 11% from $32.50-34.00 12 months ago.');
+  assert.deepEqual(L.templateFillIns(t, {}).map((f) => f.key), ['Rate', 'RateBasis', 'OpEx', 'PriorRate']);
+});
+
+test('typing "-" in a bracketed fill-in leaves that note out', () => {
+  const t = 'Advisors[, and recently closed a deal nearby].\n\n[I\'ve connected with NAME on your team and] would love to talk.';
+  const ctx = (a, b) => ({ inputs: { '[, and recently closed a deal nearby]': a, "[I've connected with NAME on your team and]": b } });
+  assert.equal(L.fillTemplate(t, ctx('-', '-')), 'Advisors.\n\nWould love to talk.');
+  assert.equal(L.fillTemplate(t, ctx(', and recently closed a deal nearby', "I've connected with Jo Smith on your team and")), "Advisors, and recently closed a deal nearby.\n\nI've connected with Jo Smith on your team and would love to talk.");
+  assert.equal(L.soloText('My partner {Partner} and I are corporate real estate advisors, helping companies.'), "I'm a corporate real estate advisor, helping companies.");
 });
