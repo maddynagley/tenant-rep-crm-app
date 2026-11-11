@@ -2095,3 +2095,14 @@ test('buildingDirectory: saved names and street-word spellings (Pky = Pkwy = Par
   assert.deepEqual(dir.lookup('5238 Royal Woods Parkway'), { building: 'Royal Woods Business Center', address: '5238 Royal Woods Pkwy' });
   assert.deepEqual(dir.lookup('Royal Woods Business Center'), { building: 'Royal Woods Business Center', address: '5238 Royal Woods Pkwy' });
 });
+
+test('portfolio sheet: CRM deal notes are never written to the sheet; sheet Notes are kept apart', () => {
+  const rec = L.dealToSheetRecord({ id: 'd1', stage: 'Closed Won', notes: 'Oct 20: toured Uptown', totalLeaseValue: 1000 }, 'Acme');
+  assert.equal(rec.notes, undefined);
+  assert.equal(rec.totalLeaseValue, 1000);
+  const deal = L.sheetRecordToDeal({ company: 'Acme', notes: 'Rescinded', commissionEarned: 5 });
+  assert.equal(deal.sheetNotes, 'Rescinded');
+  assert.equal(deal.notes, undefined);
+  assert.equal(deal.stage, 'Closed Lost');
+  assert.ok(L.isRescinded(deal));
+});

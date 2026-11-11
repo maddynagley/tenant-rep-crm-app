@@ -4195,7 +4195,10 @@
   const SHEET_NUMBER_FIELDS = ['actualSF', 'totalLeaseValue', 'firmCommission', 'commissionEarned'];
   const SHEET_DATE_FIELDS = ['rmsDate', 'closedDate', 'leaseCommencement', 'bookedDate', 'cash1Date', 'cash2Date'];
   // Fields the CRM writes back to the sheet. Admin columns (PT #, booked, cash received, OTT) are left to the sheet.
-  const SHEET_PUSH_FIELDS = ['company', 'representation', 'dealTypeRaw', 'voucher', 'building', 'submarket', 'vertical', 'actualSF', 'outsideBroker', 'outsideBrokerCompany', 'totalLeaseValue', 'firmCommission', 'commissionEarned', 'closedDate', 'leaseCommencement', 'notes', 'crmId'];
+  // The sheet tracks money only, so the CRM never writes its deal notes there (the sheet's own Notes column is read, as sheetNotes).
+  const SHEET_PUSH_FIELDS = ['company', 'representation', 'dealTypeRaw', 'voucher', 'building', 'submarket', 'vertical', 'actualSF', 'outsideBroker', 'outsideBrokerCompany', 'totalLeaseValue', 'firmCommission', 'commissionEarned', 'closedDate', 'leaseCommencement', 'crmId'];
+  // Fingerprinted sheet fields: the pushed ones plus the sheet's Notes, so a note typed in the sheet is still picked up.
+  const SHEET_HASH_FIELDS = SHEET_PUSH_FIELDS.filter((f) => f !== 'crmId').concat('notes');
 
   function mapSheetHeaders(headers) {
     const map = {};
@@ -4235,7 +4238,7 @@
   }
 
   function isRescinded(rec) {
-    return /rescind|write-?off|cancel+ed|terminated|fell through|dead deal/i.test(rec.notes || '');
+    return /rescind|write-?off|cancel+ed|terminated|fell through|dead deal/i.test((rec.sheetNotes || '') + ' ' + (rec.notes || ''));
   }
 
   function quarterEnd(year, quarter) {
@@ -4256,16 +4259,18 @@
       closedDate: rec.closedDate || rec.rmsDate || (stage ? quarterEnd(rec.year, rec.quarter) : ''),
       lostReason: stage === 'Closed Lost' ? rec.notes || '' : '',
     };
-    ['representation', 'voucher', 'building', 'submarket', 'vertical', 'actualSF', 'outsideBroker', 'outsideBrokerCompany', 'totalLeaseValue', 'firmCommission', 'commissionEarned', 'leaseCommencement', 'rmsDate', 'bookedDate', 'cash1Date', 'cash2Date', 'ptNumber', 'trxId', 'ottCheck', 'notes', 'dealTypeRaw'].forEach((k) => {
+    ['representation', 'voucher', 'building', 'submarket', 'vertical', 'actualSF', 'outsideBroker', 'outsideBrokerCompany', 'totalLeaseValue', 'firmCommission', 'commissionEarned', 'leaseCommencement', 'rmsDate', 'bookedDate', 'cash1Date', 'cash2Date', 'ptNumber', 'trxId', 'ottCheck', 'dealTypeRaw'].forEach((k) => {
       if (rec[k] !== undefined) deal[k] = rec[k];
     });
+    // The sheet's Notes stay separate from the CRM's own deal notes.
+    if (rec.notes !== undefined) deal.sheetNotes = rec.notes;
     if (deal.actualSF !== undefined) deal.estSF = deal.actualSF;
     return deal;
   }
 
   // Short stable fingerprint of the synced values, used to tell which side changed since the last sync.
   function recordHash(rec) {
-    const s = SHEET_PUSH_FIELDS.filter((f) => f !== 'crmId')
+    const s = SHEET_HASH_FIELDS
       .map((f) => (rec[f] === undefined ? '' : String(rec[f])))
       .join('␟');
     let h = 5381;
@@ -4276,7 +4281,7 @@
   // Deal -> sheet record (the inverse of sheetRecordToDeal for the pushed fields).
   function dealToSheetRecord(deal, companyName) {
     const rec = { company: companyName, crmId: deal.id };
-    ['representation', 'voucher', 'building', 'submarket', 'vertical', 'outsideBroker', 'outsideBrokerCompany', 'notes', 'leaseCommencement'].forEach((k) => {
+    ['representation', 'voucher', 'building', 'submarket', 'vertical', 'outsideBroker', 'outsideBrokerCompany', 'leaseCommencement'].forEach((k) => {
       if (!blankish(deal[k])) rec[k] = deal[k];
     });
     rec.dealTypeRaw = deal.dealTypeRaw || (deal.dealType === 'New Lease' ? 'New' : deal.dealType || '');
