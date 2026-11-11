@@ -5486,9 +5486,8 @@
     }
   }
 
-  setInterval(() => {
-    if (!document.hidden) syncHubSpot(false);
-  }, 5 * 60000);
+  // Every 5 minutes, also while the tab is in the background (browsers still allow a timer this slow there).
+  setInterval(() => syncHubSpot(false), 5 * 60000);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && Date.now() - (S.settings().hubspotLastSync || 0) > 5 * 60000) syncHubSpot(false);
   });
