@@ -196,21 +196,35 @@
 
   // ---------- prospect scoring ----------
 
-  // 0-100 score used to rank who to call next.
+  // How useful the timing of a lease expiration (LXD) is for prospecting. Rank 1 is the best time to call.
+  // Office: 12–18 months out, then 19–24, then 9–11, then 25–36, then 37–48.
+  // Industrial moves faster, so its best window is about 9–24 months: 9–18, then 19–24, then 25–36, then 37–48.
+  // Under 9 months (or already passed) the decision is likely made: don't call, check whether they renewed.
+  function leaseTiming(leaseExpiration, today, assetClass) {
+    const months = leaseExpiration ? monthsUntil(leaseExpiration, today || todayISO()) : null;
+    const industrial = assetClass === 'Industrial';
+    const t = (rank, points, label) => ({ months, rank, points, label, callable: true, checkRenewal: false });
+    if (months === null) return t(6, 8, 'Expiration unknown');
+    if (months < 0) return { months, rank: 9, points: 0, label: 'Lease expired: check if they renewed', callable: false, checkRenewal: true };
+    if (months < 9) return { months, rank: 9, points: 0, label: 'Under 9 months: check if they renewed', callable: false, checkRenewal: true };
+    if (industrial && months <= 18) return t(1, 40, '9–18 months: best window (industrial)');
+    if (months >= 12 && months <= 18) return t(1, 40, '12–18 months: best window');
+    if (months >= 19 && months <= 24) return t(2, 36, '19–24 months');
+    if (months <= 11) return t(3, 30, '9–11 months');
+    if (months <= 36) return t(4, 24, '25–36 months');
+    if (months <= 48) return t(5, 12, '37–48 months');
+    return t(7, 5, 'More than 4 years out');
+  }
+
+  // 0-100 score used to rank who to call next. Leases under 9 months out or already expired score no
+  // timing points and aren't `callable`: they belong on a "check if renewed" list instead.
   function prospectScore(company, opts) {
     opts = opts || {};
     const today = opts.today || todayISO();
     const breakdown = {};
 
-    const m = monthsUntil(company.leaseExpiration, today);
-    if (m === null) breakdown.timing = 8;
-    else if (m < 0) breakdown.timing = 20;
-    else if (m <= 6) breakdown.timing = 25;
-    else if (m <= 12) breakdown.timing = 32;
-    else if (m <= 24) breakdown.timing = 40;
-    else if (m <= 36) breakdown.timing = 32;
-    else if (m <= 48) breakdown.timing = 15;
-    else breakdown.timing = 5;
+    const timing = leaseTiming(company.leaseExpiration, today, company.assetClass);
+    breakdown.timing = timing.points;
 
     const sf = parseNumber(company.sfOccupied);
     if (sf === null) breakdown.size = 5;
@@ -232,9 +246,10 @@
     else if (sinceTouch > 45) breakdown.coverage = 6;
     else breakdown.coverage = 2;
 
-    if (company.status === 'Not a Fit') return { score: 0, breakdown };
+    const extra = { timing, callable: timing.callable, checkRenewal: timing.checkRenewal };
+    if (company.status === 'Not a Fit') return Object.assign({ score: 0, breakdown }, extra);
     const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
-    return { score: Math.min(100, score), breakdown };
+    return Object.assign({ score: Math.min(100, score), breakdown }, extra);
   }
 
   // ---------- commissions ----------
@@ -2838,11 +2853,12 @@
       .sort((a, b) => a.localeCompare(b))
       .map((value) => ({ value, asset: value.split('|')[0], name: value.split('|').slice(1).join('|'), n: subCounts[value] }));
     const dayGoal = opts.submarket ? Math.max(goal, 25) : goal;
-    // Leases expiring within two years come first: those tenants need to start planning.
-    const soon = (c) => {
-      const m = c.leaseExpiration ? monthsUntil(c.leaseExpiration, today) : null;
-      return m !== null && m >= 0 && m <= 24 ? 0 : 1;
-    };
+    // Ranked by how useful the lease timing is: 12–18 months out first, then 19–24, 9–11, 25–36, 37–48
+    // (industrial 9–24). Leases under 9 months out or already expired are likely decided: they go to
+    // "check if renewed" instead of outreach, unless the conversation is already Engaged.
+    const timingOf = (c) => leaseTiming(c.leaseExpiration, today, c.assetClass);
+    const soon = (c) => timingOf(c).rank;
+    const workable = (c) => timingOf(c).callable || leadStage(c) === 'Engaged';
     const leaseNote = (c) => {
       const m = c.leaseExpiration ? monthsUntil(c.leaseExpiration, today) : null;
       return m === null ? '' : m < 0 ? ` · lease expired ${fmtDate(c.leaseExpiration)}` : ` · lease expires in ${fmtMonths(m)}`;
@@ -2876,7 +2892,7 @@
 
     const followUps = leads
       .filter((c) => {
-        if (openedIds.has(c.id) || !inSub(c)) return false;
+        if (openedIds.has(c.id) || !inSub(c) || !workable(c)) return false;
         const wait = FOLLOW_UP_DAYS[leadStage(c)];
         const since = sinceTouch(c.id);
         return wait && (since === null || since >= wait);
@@ -2894,7 +2910,7 @@
       });
 
     const fresh = leads
-      .filter((c) => leadStage(c) === 'New' && inSub(c) && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 30))
+      .filter((c) => leadStage(c) === 'New' && inSub(c) && timingOf(c).callable && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 30))
       .map((c) => ({ c, score: prospectScore(c, { today, lastActivityDate: touches[c.id] }).score }))
       .sort((a, b) => soon(a.c) - soon(b.c) || b.score - a.score || expiry(a.c).localeCompare(expiry(b.c)))
       .map(({ c }) => {
@@ -2915,7 +2931,7 @@
         return m ? toISODate(new Date(2000 + Number(m[2]), Number(m[1]) * 3, 0)) : '';
       };
       leads
-        .filter((c) => inSub(c) && touches[c.id] && sinceTouch(c.id) >= 14 && !openedIds.has(c.id) && !inToday.has(c.id) && leadStage(c) !== 'Dead Lead')
+        .filter((c) => inSub(c) && workable(c) && touches[c.id] && sinceTouch(c.id) >= 14 && !openedIds.has(c.id) && !inToday.has(c.id) && leadStage(c) !== 'Dead Lead')
         .forEach((c) => {
           const m = marketStatFor(opts.marketStats, c, opts.marketReports);
           if (!m) return;
@@ -2955,14 +2971,29 @@
       if (d.stage === 'Closed Won' && !d.partnerDeal && (!parseNumber(d.actualSF) || !parseNumber(d.commissionEarned)))
         updates.push({ kind: 'update', dealId: d.id, companyId: d.companyId, title: d.name, why: 'Closed won. Add the final SF and commission so your portfolio is complete.' });
     });
-    leads.forEach((c) => {
-      const m = monthsUntil(c.leaseExpiration, today);
-      if (m !== null && m < 0 && c.leaseExpiration >= addDays(today, -183) && leadStage(c) !== 'Dead Lead')
-        updates.push({ kind: 'update', companyId: c.id, title: c.name, why: `Lease expired ${fmtDate(c.leaseExpiration)}. Confirm whether they renewed or moved, and update the expiration.` });
-    });
+
+    // Leases under 9 months out or already passed: not worth a prospecting call, but worth confirming
+    // whether they renewed or moved, and updating the expiration. Soonest / most recent first.
+    const checkRenewal = leads
+      .filter((c) => inSub(c) && !workable(c) && timingOf(c).checkRenewal && leadStage(c) !== 'Dead Lead')
+      .map((c) => {
+        const m = timingOf(c).months;
+        return {
+          kind: 'renewal',
+          companyId: c.id,
+          title: c.name,
+          months: m,
+          leaseExpiration: c.leaseExpiration,
+          why:
+            m < 0
+              ? `Lease expired ${fmtDate(c.leaseExpiration)}. Check whether they renewed or moved, and update the expiration.`
+              : `Lease expires ${fmtDate(c.leaseExpiration)} (${m === 0 ? 'this month' : 'in ' + fmtMonths(m)}), likely already decided. Check whether they renewed, and update the expiration.`,
+        };
+      })
+      .sort((a, b) => Math.abs(a.months) - Math.abs(b.months) || a.title.localeCompare(b.title));
 
     // Door knocking: un-engaged leads sharing an address, so one trip covers several.
-    const knockable = leads.filter((c) => ['New', 'Initial Outreach', 'Follow Up'].includes(leadStage(c)) && c.address && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 7));
+    const knockable = leads.filter((c) => ['New', 'Initial Outreach', 'Follow Up'].includes(leadStage(c)) && timingOf(c).callable && c.address && !(sinceTouch(c.id) !== null && sinceTouch(c.id) < 7));
     const groups = {};
     knockable.forEach((c) => {
       const key = normalizeAddress(c.address);
@@ -2984,8 +3015,9 @@
       statsShare: statsShare.slice(0, opts.submarket ? 25 : 10),
       submarkets,
       updates: updates.slice(0, 8),
+      checkRenewal: checkRenewal.slice(0, opts.submarket ? 25 : 10),
       doorKnock,
-      remaining: { followUps: followUps.length, fresh: fresh.length, updates: updates.length, statsShare: statsShare.length },
+      remaining: { followUps: followUps.length, fresh: fresh.length, updates: updates.length, statsShare: statsShare.length, checkRenewal: checkRenewal.length },
     };
   }
 
@@ -4392,6 +4424,7 @@
     expirationWindow,
     recommendedLeadTimeMonths,
     prospectScore,
+    leaseTiming,
     aggregateLeaseValue,
     estimatedCommission,
     stageProbability,

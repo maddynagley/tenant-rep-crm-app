@@ -828,11 +828,18 @@
     const overdue = followUps.filter((a) => activityDue(a) < today);
     const dueSoon = followUps.filter((a) => activityDue(a) <= L.addDays(today, 7));
 
-    const topProspects = companies
-      .filter((c) => !['Active Client', 'Not a Fit'].includes(c.status))
-      .map((c) => ({ c, score: scoreOf(c, touches) }))
-      .sort((a, b) => b.score - a.score)
+    // Ranked by score, which weighs lease timing most (12–18 months out is best). Leases under 9 months
+    // out or already expired are likely decided, so they get a "check if renewed" hint instead.
+    const ranked = companies
+      .filter((c) => !['Active Client', 'Not a Fit'].includes(c.status) && !L.doNotContact(c))
+      .map((c) => ({ c, ...L.prospectScore(c, { lastActivityDate: touches[c.id] }) }));
+    const topProspects = ranked
+      .filter((x) => x.callable)
+      .sort((a, b) => b.score - a.score || a.timing.rank - b.timing.rank)
       .slice(0, 8);
+    const checkRenewal = ranked
+      .filter((x) => x.checkRenewal && L.leadStage(x.c) !== 'Engaged' && L.leadStage(x.c) !== 'Dead Lead')
+      .sort((a, b) => Math.abs(a.timing.months) - Math.abs(b.timing.months));
 
     const stale = prospects
       .filter((c) => {
@@ -880,6 +887,14 @@
                   )
                   .join('')}</tbody></table>`
               : emptyState('No prospects yet.')
+          }
+          ${
+            checkRenewal.length
+              ? `<p class="hint check-renewal"><strong>Check if renewed:</strong> ${checkRenewal.length} lease${checkRenewal.length > 1 ? 's' : ''} under 9 months out or already expired, likely decided, so they're left off this list. ${checkRenewal
+                  .slice(0, 4)
+                  .map(({ c }) => `<a href="#/company/${esc(c.id)}">${esc(c.name)}</a> (${esc(L.fmtDate(c.leaseExpiration))})`)
+                  .join(', ')}${checkRenewal.length > 4 ? ` and ${checkRenewal.length - 4} more on <a href="#/today">Today</a>` : ''}.</p>`
+              : ''
           }
         </section>
       </div>
@@ -1184,6 +1199,11 @@
       return `<li><div class="fu-body"><div><a href="${item.dealId ? '#/deal/' + esc(item.dealId) : '#/company/' + esc(item.companyId)}"><strong>${esc(item.title)}</strong></a></div><div class="sub">${esc(item.why)}</div></div><div class="todo-actions">${action}</div></li>`;
     });
 
+    const renewalItems = plan.checkRenewal.map(
+      (item) => `<li><div class="fu-body"><div><a href="#/company/${esc(item.companyId)}"><strong>${esc(item.title)}</strong></a></div><div class="sub">${esc(item.why)}</div></div>
+        <div class="todo-actions"><button class="btn small" data-action="edit" data-col="companies" data-id="${esc(item.companyId)}">Update expiration</button></div></li>`
+    );
+
     const knock = plan.doorKnock.map((g) => {
       const maps = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(g.address);
       return `<div class="knock">
@@ -1218,13 +1238,14 @@
         'Reach out today' + (state.today.sub ? ' · ' + esc(subLabel) : '') + subPicker,
         outreach,
         state.today.sub ? 'No one in ' + esc(subLabel) + ' to reach out to today.' : 'No one to reach out to today. Add leads or check back tomorrow.',
-        `<p class="hint">Tenants whose leases expire within two years come first, then follow-ups (hot first) and the best brand-new leads.${state.today.sub ? ' Showing ' + esc(subLabel) + ' only; pick All submarkets to go back.' : ' Pick a submarket to prospect one area at a time.'} Tap ✓ when done; it logs the touch and drops off the list.</p>`
+        `<p class="hint">Ranked by lease timing: 12–18 months out first, then 19–24, 9–11, 25–36 and 37–48 (industrial 9–24 months first). Leases under 9 months out are likely decided, so they're under "Check if renewed" instead.${state.today.sub ? ' Showing ' + esc(subLabel) + ' only; pick All submarkets to go back.' : ' Pick a submarket to prospect one area at a time.'} Tap ✓ when done; it logs the touch and drops off the list.</p>`
       )}
       ${openedItems.length ? section('Opened your email: follow up while it\'s warm', openedItems, '', '<p class="hint">They opened it but haven\'t replied. Call or send a short follow-up, and connect on LinkedIn if you aren\'t already.</p>') : ''}
       ${statsItems.length ? section('Share the latest market stats', statsItems, '', `<p class="hint">Prospects you've reached before who haven't had this quarter's numbers for their submarket. Each draft quotes the latest stats from the Research page${state.today.sub ? ' (' + esc(subLabel) + ' only)' : ''}. Leases expiring soonest come first.</p>`) : ''}
       ${careItems.length ? section('Client care & critical dates', careItems, '', '<p class="hint">Clients you closed: see how the space is working, and stay ahead of their lease deadlines.</p>') : ''}
       ${dealItems.length ? section('Deals to move forward', dealItems, '', plan.deals.length > dealItems.length ? `<p class="hint">Top ${dealItems.length} of ${plan.deals.length} by probability. Log an update on each and the next ones appear.</p>` : '') : ''}
       ${marketingItems.length ? section('Marketing', marketingItems, '') : ''}
+      ${renewalItems.length ? section('Check if renewed', renewalItems, '', `<p class="hint">Leases under 9 months out or already expired. The decision is probably made, so these aren't on today's call list. Confirm whether they renewed or moved, and update the expiration.${plan.remaining.checkRenewal > renewalItems.length ? ' Showing ' + renewalItems.length + ' of ' + plan.remaining.checkRenewal + '.' : ''}</p>`) : ''}
       ${updateItems.length ? section('Records to update', updateItems, '', plan.remaining.updates > updateItems.length ? `<p class="hint">Showing ${updateItems.length} of ${plan.remaining.updates}.</p>` : '') : ''}
       ${
         knock.length
