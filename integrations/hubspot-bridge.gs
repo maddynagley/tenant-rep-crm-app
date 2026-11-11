@@ -24,6 +24,7 @@
  *   5. In the CRM: Import / Settings → HubSpot live sync → paste the URL and the sync key.
  *
  * rotateKey() issues a new sync key (paste it into the CRM again).
+ * installLeadTimer() (run once) gives companies added to HubSpot a lead every 15 minutes, CRM open or not.
  */
 
 const PAGE_SIZE = 100;
@@ -354,6 +355,13 @@ function pushType_(type, items, companyIds) {
   batchWrite_(type, 'update', updates, results);
   batchWrite_(type, 'create', creates, results);
   if (leadWrites.length) writeLeads_(leadWrites, results);
+  // Companies the CRM sent that aren't leads (clients, landlords…): the lead timer leaves them alone.
+  if (type === 'companies') {
+    const notLeads = creates
+      .filter(function (row) { return results[row.i].hubspotId && !norm_(LEAD_PROP, (items[row.i].props || {})[LEAD_PROP]); })
+      .map(function (row) { return results[row.i].hubspotId; });
+    if (notLeads.length) rememberNotLeads_(notLeads);
+  }
   // 3. Link new (or moved) contacts and deals to their company.
   if (type !== 'companies') {
     const links = [];
@@ -451,6 +459,69 @@ function addLeadStages_(companies, since) {
     // The company counts as changed when its lead did.
     if (new Date(leads[id].modified) > new Date(p.hs_lastmodifieddate || 0)) p.hs_lastmodifieddate = leads[id].modified;
   });
+}
+
+// ---------- every 15 minutes, even with the CRM closed ----------
+// Run installLeadTimer() once from the Apps Script editor. Every 15 minutes, ensureLeads() gives each company
+// added to HubSpot since the last run a lead at "New" if it has none (the CRM then keeps its stage in step).
+// removeLeadTimer() turns it off.
+function installLeadTimer() {
+  removeLeadTimer();
+  ScriptApp.newTrigger('ensureLeads').timeBased().everyMinutes(15).create();
+  PropertiesService.getScriptProperties().setProperty('LEADS_CHECKED', String(Date.now() - 864e5));
+  ensureLeads();
+  Logger.log('Lead timer on: new HubSpot companies get a lead every 15 minutes.');
+}
+
+function removeLeadTimer() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'ensureLeads') ScriptApp.deleteTrigger(t);
+  });
+}
+
+function rememberNotLeads_(ids) {
+  const props = PropertiesService.getScriptProperties();
+  const list = (props.getProperty('NOT_LEADS') || '').split(',').filter(Boolean).concat(ids);
+  props.setProperty('NOT_LEADS', list.slice(-800).join(','));
+}
+
+function ensureLeads() {
+  const props = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return;
+  try {
+    const started = Date.now();
+    // A little overlap, so a company added during the last run isn't missed.
+    const since = Number(props.getProperty('LEADS_CHECKED')) - 10 * 60000 || Date.now() - 864e5;
+    const fresh = [];
+    let after;
+    do {
+      const body = { filterGroups: [{ filters: [{ propertyName: 'createdate', operator: 'GTE', value: String(since) }] }], properties: ['name'], limit: 100 };
+      if (after) body.after = after;
+      const page = hubspot_('post', '/crm/v3/objects/companies/search', body);
+      (page.results || []).forEach(function (r) { fresh.push({ id: String(r.id), name: (r.properties || {}).name }); });
+      after = page.paging && page.paging.next && page.paging.next.after;
+    } while (after && fresh.length < 500);
+    let made = 0;
+    if (fresh.length) {
+      attachAssociations_('companies', fresh, 'leads');
+      const stages = leadStages_();
+      const st = stages.byLabel.new;
+      const notLeads = (props.getProperty('NOT_LEADS') || '').split(',');
+      fresh.filter(function (c) { return !(c.leads || []).length && notLeads.indexOf(c.id) < 0; }).forEach(function (c) {
+        if (!st) return;
+        hubspot_('post', '/crm/v3/objects/leads', {
+          properties: { hs_lead_name: c.name || 'Lead', hs_pipeline: st.pipeline, hs_pipeline_stage: st.id },
+          associations: [{ to: { id: c.id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: LEAD_TO_COMPANY }] }],
+        });
+        made++;
+      });
+    }
+    props.setProperty('LEADS_CHECKED', String(started));
+    if (made) Logger.log('Created ' + made + ' lead' + (made > 1 ? 's' : '') + ' for new companies.');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Lead stage changes from the CRM: update the company's lead, or create one linked to the company.
