@@ -524,3 +524,8 @@ dialog:has(.wide-dialog) { width: min(920px, calc(100vw - 24px)); }
 .expired-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 28px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
 .expired-head h2 { margin: 0; }
 .expired-head .btn { margin-left: auto; }
+
+/* Quoted rates: the Office / Industrial picker stays narrow, with "Guess" on its own line under it */
+td.quote-asset { width: 9rem; }
+td.quote-asset select.inline.quiet { width: 7.5em; min-width: 0; }
+td.quote-asset .sub { white-space: nowrap; }
