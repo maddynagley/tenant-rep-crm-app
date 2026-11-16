@@ -30,7 +30,7 @@
       today: { sub: '' },
       contacts: { q: '' },
       marketing: { tab: 'collateral', q: '' },
-      comps: { tab: 'dates', q: '', asset: 'All' },
+      comps: { tab: 'dates', q: '', asset: 'All', sort: 'signed', dir: '' },
       coach: { open: false },
       pipeline: { view: 'board', asset: 'All', showClosed: false },
       activities: { tab: 'open', q: '' },
@@ -1840,10 +1840,16 @@
     const tp = L.clientTouchpoints(S.all('deals'), { today, touches: lastTouchMap(), horizonDays: 730, criticalDates: S.all('criticalDates') });
     const rights = S.all('criticalDates');
     const q = f.q.trim().toLowerCase();
-    const comps = S.all('comps')
-      .filter((c) => !q || [c.building, c.address, c.city, c.submarket, c.tenant, c.landlord, c.notes].join(' ').toLowerCase().includes(q))
-      .filter((c) => matchesAsset(c.assetClass, f.asset))
-      .sort((a, b) => (b.signedDate || b.commencement || '').localeCompare(a.signedDate || a.commencement || ''));
+    const newestFirst = (a, b) => (b.signedDate || b.commencement || '').localeCompare(a.signedDate || a.commencement || '');
+    const comps = L.sortRows(
+      S.all('comps')
+        .filter((c) => !q || [c.building, c.address, c.city, c.submarket, c.tenant, c.landlord, c.notes].join(' ').toLowerCase().includes(q))
+        .filter((c) => matchesAsset(c.assetClass, f.asset)),
+      SORT_COLUMNS.comps,
+      SORT_COLUMNS.comps[f.sort] ? f.sort : 'signed',
+      f.dir,
+      newestFirst
+    );
     const head = '<thead><tr><th>Date</th><th>What</th><th>Client</th><th></th></tr></thead>';
     const dates = `
       <section class="card"><h2>Due now</h2><p class="hint">Check-ins with clients you closed (30 days after move-in, 6 months, then every year) and lease deadlines coming up. Logging a touch with the client clears a check-in; marking a right Exercised or Waived clears its reminder.</p>
@@ -1856,7 +1862,7 @@
     // OpEx gets its own column once any comp has it.
     const showOpex = comps.some((c) => L.parseNumber(c.opex));
     const compTable = comps.length
-      ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Building</th><th>Tenant</th><th>Asset</th><th>Type</th><th class="right">RSF</th><th>Signed</th><th class="right">Term</th><th class="right">Rent</th><th class="right">Esc.</th><th class="right">Free</th><th class="right">TI</th>${showOpex ? '<th class="right">OpEx</th>' : ''}<th>LXD</th><th>Source</th></tr></thead><tbody>${comps
+      ? `<div class="table-wrap"><table class="tbl"><thead><tr>${sortHead('comps', 'building', 'Building')}${sortHead('comps', 'tenant', 'Tenant')}${sortHead('comps', 'asset', 'Asset')}${sortHead('comps', 'type', 'Type')}${sortHead('comps', 'sf', 'RSF', 'right')}${sortHead('comps', 'signed', 'Signed')}${sortHead('comps', 'term', 'Term', 'right')}${sortHead('comps', 'rent', 'Rent', 'right')}${sortHead('comps', 'esc', 'Esc.', 'right')}${sortHead('comps', 'free', 'Free', 'right')}${sortHead('comps', 'ti', 'TI', 'right')}${showOpex ? sortHead('comps', 'opex', 'OpEx', 'right') : ''}${sortHead('comps', 'lxd', 'LXD')}${sortHead('comps', 'source', 'Source')}</tr></thead><tbody>${comps
           .map(
             (c) => `<tr class="clickable" data-action="edit" data-col="comps" data-id="${esc(c.id)}">
             <td><strong>${esc(c.building)}</strong>${c.confidential ? ' ' + badge('Confidential', 'red') : ''}<div class="sub">${esc([c.address, c.city, c.submarket].filter(Boolean).join(' · '))}</div>${c.clearHeight || c.yearBuilt || c.landlord ? `<div class="sub">${esc([c.clearHeight ? c.clearHeight + "' clear" : '', c.yearBuilt ? 'Built ' + c.yearBuilt : '', c.landlord ? 'LL: ' + c.landlord : ''].filter(Boolean).join(' · '))}</div>` : ''}</td>
@@ -1924,6 +1930,23 @@
   // Never touched counts as the longest since touch.
   const lastTouchCol = { get: (r) => r.last || '0000' };
   const SORT_COLUMNS = {
+    // Comps table: click a header to sort (newest signed first by default).
+    comps: {
+      building: { get: (c) => c.building || c.address },
+      tenant: { get: (c) => c.tenant },
+      asset: { get: (c) => c.assetClass },
+      type: { get: (c) => c.dealType },
+      sf: { get: (c) => L.parseNumber(c.sf), desc: true },
+      signed: { get: (c) => c.signedDate || c.commencement, desc: true },
+      term: { get: (c) => L.parseNumber(c.termMonths), desc: true },
+      rent: { get: (c) => L.parseNumber(c.startingRent), desc: true },
+      esc: { get: (c) => L.parseNumber(c.escalationPct), desc: true },
+      free: { get: (c) => L.parseNumber(c.freeRentMonths), desc: true },
+      ti: { get: (c) => L.parseNumber(c.tiAllowance), desc: true },
+      opex: { get: (c) => L.parseNumber(c.opex), desc: true },
+      lxd: { get: (c) => (L.compLXD(c) || {}).date },
+      source: { get: (c) => c.source },
+    },
     // Quoted rates (rows from quotedRateList, with building and address filled in).
     quotes: {
       building: { get: (r) => r.building || r.address },
