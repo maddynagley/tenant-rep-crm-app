@@ -5298,7 +5298,7 @@
     if (parseRoute().name === 'portfolio') maybeAutoSync();
     window.scrollTo(0, 0);
   });
-  // Reminders and post ideas the CRM creates on its own: quarterly research/one-pager tasks and
+  // Reminders and post ideas the CRM creates on its own: quarterly research/one-pager tasks, year-end client gifts and
   // move-in posts for deals you closed. Each is created once; deleting it won't bring it back.
   function ensureGenerated() {
     const s = S.settings();
@@ -5310,6 +5310,16 @@
     L.quarterlyTasks(today).forEach((t) => {
       if (!made.has(t.id) && !S.get('activities', t.id)) fresh.push(['activities', Object.assign({ done: false }, t)]);
     });
+    // Year-end client gifts, with this year's secured clients listed in the task.
+    const giftTasks = L.yearlyTasks(today, '');
+    if (giftTasks.some((t) => !made.has(t.id) && !S.get('activities', t.id))) {
+      const list = L.giftClients({ companies: S.all('companies'), deals: S.all('deals'), contacts: S.all('contacts') }, myEmailDomain())
+        .map(({ company, contact }) => '- ' + company.name + (contact ? ' (' + contactName(contact) + ')' : ''))
+        .join('\n');
+      L.yearlyTasks(today, list).forEach((t) => {
+        if (!made.has(t.id) && !S.get('activities', t.id)) fresh.push(['activities', Object.assign({ done: false }, t)]);
+      });
+    }
     L.moveInPostIdeas(S.all('deals'), companies, today).forEach((m) => {
       if (!made.has(m.id) && !S.get('marketing', m.id)) fresh.push(['marketing', m]);
     });

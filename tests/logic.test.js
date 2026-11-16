@@ -2117,3 +2117,22 @@ test('quoteAsset: saved, then known building, then a guess from the rate', () =>
   const rates = L.rememberRate({ 'cedar park': { building: 'Cedar Park', rate: 9, asset: 'Industrial' } }, 'Cedar Park', 9.5, '2026-11-11');
   assert.equal(rates['cedar park'].asset, 'Industrial');
 });
+
+test('year-end client gifts: order by Nov 15, send by Dec 10, for secured clients', () => {
+  const t = L.yearlyTasks('2026-11-16', '- Acme');
+  assert.deepEqual(t.map((x) => [x.id, x.date]), [['y-gifts-order-2026', '2026-11-15'], ['y-gifts-send-2026', '2026-12-10']]);
+  assert.match(t[0].notes, /- Acme/);
+  const list = L.giftClients({
+    companies: [
+      { id: 'a', name: 'Acme', status: 'Active Client' },
+      { id: 'b', name: 'Uptown', status: 'Engaged', leadStage: 'Secured Lead' },
+      { id: 'c', name: 'Cedar', status: 'Target' },
+      { id: 'd', name: 'Dune', status: 'Engaged' },
+      { id: 'e', name: 'Riverside', status: 'Not a Fit' },
+    ],
+    deals: [{ id: 'x', companyId: 'd', stage: 'Closed Won' }, { id: 'y', companyId: 'e', stage: 'Closed Won' }],
+    contacts: [{ id: 'p', companyId: 'a', firstName: 'Pat', lastName: 'Lee' }],
+  });
+  assert.deepEqual(list.map((r) => r.company.name), ['Acme', 'Dune', 'Uptown']);
+  assert.equal(list[0].contact.firstName, 'Pat');
+});

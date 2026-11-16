@@ -641,6 +641,43 @@
     return out;
   }
 
+  // Secured clients for the year-end gift list: Active and Past Clients, Secured Leads, and any company
+  // with a Closed Won deal (Not a Fit and do-not-contact companies left out). Each with its best contact.
+  function giftClients(data, internalDomain) {
+    const won = new Set((data.deals || []).filter((d) => d.stage === 'Closed Won').map((d) => d.companyId));
+    const people = {};
+    (data.contacts || []).forEach((p) => !isColleague(p, internalDomain) && (people[p.companyId] = people[p.companyId] || []).push(p));
+    return (data.companies || [])
+      .filter((c) => c.status !== 'Not a Fit' && !doNotContact(c))
+      .filter((c) => ['Active Client', 'Past Client'].includes(c.status) || leadStage(c) === 'Secured Lead' || won.has(c.id))
+      .map((c) => ({ company: c, contact: (people[c.id] || []).slice().sort((x, y) => contactRank(y) - contactRank(x))[0] || null }))
+      .sort((x, y) => x.company.name.localeCompare(y.company.name));
+  }
+
+  // Each year: pick and order client gifts by Nov 15, send them by Dec 10. clientList is the notes text.
+  function yearlyTasks(today, clientList) {
+    const y = parseISODate(today || todayISO()).getFullYear();
+    const list = clientList ? '\n\nSecured clients:\n' + clientList : '';
+    return [
+      {
+        id: 'y-gifts-order-' + y,
+        type: 'Task',
+        date: y + '-11-15',
+        followUpDate: y + '-11-15',
+        subject: `Pick and order ${y} year-end client gifts`,
+        notes: 'Choose this year\'s gift, confirm addresses and order for every secured client (full list: Companies, status Active Client / Past Client, or Leads at Secured Lead).' + list,
+      },
+      {
+        id: 'y-gifts-send-' + y,
+        type: 'Task',
+        date: y + '-12-10',
+        followUpDate: y + '-12-10',
+        subject: `Send ${y} year-end client gifts and cards`,
+        notes: 'Send or drop off the gifts with a handwritten card, then log each one on the client\'s page.' + list,
+      },
+    ];
+  }
+
   // Lease rights and options you track for any tenant, client or prospect.
   const CRITICAL_DATE_KINDS = ['Renewal option', 'Termination option', 'Expansion option', 'Contraction option', 'ROFO', 'ROFR', 'Purchase option', 'Landlord relocation right', 'Rent abatement / step', 'Lease expiration', 'Other'];
   const CRITICAL_DATE_STATUSES = ['Open', 'Exercised', 'Waived', 'Expired'];
@@ -4590,6 +4627,8 @@
     dealBudgetLabel,
     quarterEndOf,
     quarterlyTasks,
+    yearlyTasks,
+    giftClients,
     clientTouchpoints,
     RELATIONSHIPS,
     isProspect,
